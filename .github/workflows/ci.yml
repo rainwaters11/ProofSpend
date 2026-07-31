@@ -40,6 +40,14 @@ jobs:
       - name: Install dependencies
         run: bun install
 
+      - name: Upload generated lockfile
+        uses: actions/upload-artifact@v4
+        with:
+          name: bun-lock-${{ github.sha }}
+          path: bun.lock
+          if-no-files-found: error
+          retention-days: 1
+
       - name: Lint
         run: bun run lint
 
