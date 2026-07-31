@@ -8,9 +8,9 @@ describe("environment validation", () => {
   });
 
   it("accepts explicit credential-free mock mode", () => {
-    expect(
-      parseEnvironment({ PROOFSPEND_ADAPTER_MODE: "mock" }),
-    ).toEqual({ PROOFSPEND_ADAPTER_MODE: "mock" });
+    expect(parseEnvironment({ PROOFSPEND_ADAPTER_MODE: "mock" })).toEqual({
+      PROOFSPEND_ADAPTER_MODE: "mock",
+    });
   });
 
   it("treats empty optional credentials as absent in mock mode", () => {
@@ -36,9 +36,7 @@ describe("environment validation", () => {
   });
 
   it("rejects an empty adapter mode", () => {
-    expect(() =>
-      parseEnvironment({ PROOFSPEND_ADAPTER_MODE: "" }),
-    ).toThrow();
+    expect(() => parseEnvironment({ PROOFSPEND_ADAPTER_MODE: "" })).toThrow();
   });
 
   it("rejects an unsupported adapter mode", () => {
