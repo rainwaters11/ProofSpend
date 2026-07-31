@@ -1,14 +1,20 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { GET } from "./route";
 
+const originalAdapterMode = process.env.PROOFSPEND_ADAPTER_MODE;
+
 describe("GET /api/health", () => {
   beforeEach(() => {
-    vi.stubEnv("PROOFSPEND_ADAPTER_MODE", "mock");
+    process.env.PROOFSPEND_ADAPTER_MODE = "mock";
   });
 
   afterEach(() => {
-    vi.unstubAllEnvs();
+    if (originalAdapterMode === undefined) {
+      delete process.env.PROOFSPEND_ADAPTER_MODE;
+    } else {
+      process.env.PROOFSPEND_ADAPTER_MODE = originalAdapterMode;
+    }
   });
 
   it("returns only safe application health details", async () => {
@@ -23,7 +29,7 @@ describe("GET /api/health", () => {
   });
 
   it("cannot report healthy mock status when adapter mode is missing", () => {
-    vi.unstubAllEnvs();
+    delete process.env.PROOFSPEND_ADAPTER_MODE;
 
     expect(() => GET()).toThrow();
   });
