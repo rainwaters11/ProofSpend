@@ -19,7 +19,7 @@ describe("Home", () => {
   });
 
   it("makes mock-only demo behavior unmistakable", () => {
-    const markup = renderToStaticMarkup(<Home />);
+    const markup = renderToStaticMarkup(Home());
 
     expect(markup).toContain("Fund the vision. Prove the progress. Unlock what comes next.");
     expect(markup).toContain("DEMO MODE");
@@ -30,6 +30,6 @@ describe("Home", () => {
   it("fails closed when adapter mode is missing", () => {
     delete process.env.PROOFSPEND_ADAPTER_MODE;
 
-    expect(() => renderToStaticMarkup(<Home />)).toThrow();
+    expect(() => renderToStaticMarkup(Home())).toThrow();
   });
 });
