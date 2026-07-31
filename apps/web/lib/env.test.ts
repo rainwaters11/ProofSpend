@@ -3,10 +3,14 @@ import { describe, expect, it } from "vitest";
 import { parseEnvironment } from "./env";
 
 describe("environment validation", () => {
-  it("uses credential-free mock mode when no configuration is supplied", () => {
-    expect(parseEnvironment({})).toEqual({
-      PROOFSPEND_ADAPTER_MODE: "mock",
-    });
+  it("rejects a missing adapter mode", () => {
+    expect(() => parseEnvironment({})).toThrow();
+  });
+
+  it("accepts explicit credential-free mock mode", () => {
+    expect(
+      parseEnvironment({ PROOFSPEND_ADAPTER_MODE: "mock" }),
+    ).toEqual({ PROOFSPEND_ADAPTER_MODE: "mock" });
   });
 
   it("treats empty optional credentials as absent in mock mode", () => {
@@ -29,6 +33,12 @@ describe("environment validation", () => {
       CIRCLE_CHAIN: "ARC-TESTNET",
       PROOFSPEND_ADAPTER_MODE: "mock",
     });
+  });
+
+  it("rejects an empty adapter mode", () => {
+    expect(() =>
+      parseEnvironment({ PROOFSPEND_ADAPTER_MODE: "" }),
+    ).toThrow();
   });
 
   it("rejects an unsupported adapter mode", () => {
