@@ -1,3 +1,5 @@
-export default {
+const postcssConfig = {
   plugins: {},
 };
+
+export default postcssConfig;
