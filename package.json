@@ -1,0 +1,20 @@
+{
+  "name": "proofspend",
+  "private": true,
+  "version": "0.1.0",
+  "packageManager": "bun@1.2.14",
+  "engines": {
+    "node": ">=20.18.2",
+    "bun": ">=1.2.0"
+  },
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "lint": "bun --filter '*' lint",
+    "typecheck": "bun --filter '*' typecheck",
+    "test": "bun --filter '*' test",
+    "build": "bun --filter '*' build"
+  }
+}
