@@ -7,11 +7,11 @@ Evidence-aware programmable capital for Arc Testnet.
 Issue 1 establishes a Bun workspace, a minimal Next.js application, and typed wallet integration boundaries. It runs in explicit mock mode without credentials and does not move real funds.
 
 ```bash
-bun install
+bun install --frozen-lockfile
 cp apps/web/.env.example apps/web/.env.local
 bun run lint
 bun run typecheck
-bun test
+bun run test
 bun run build
 bun --filter @proofspend/web dev
 ```
