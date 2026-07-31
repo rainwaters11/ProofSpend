@@ -11,7 +11,7 @@ const environmentSchema = z.object({
   OPENAI_API_KEY: optionalNonEmptyString,
   LLM_MODEL: optionalNonEmptyString,
   CIRCLE_CHAIN: z.literal("ARC-TESTNET").optional(),
-  PROOFSPEND_ADAPTER_MODE: z.literal("mock").default("mock"),
+  PROOFSPEND_ADAPTER_MODE: z.literal("mock"),
 });
 
 export type ServerEnvironment = z.infer<typeof environmentSchema>;
