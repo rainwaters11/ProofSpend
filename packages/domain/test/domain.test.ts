@@ -3,13 +3,14 @@ import {
   addMoney, AgenticJobRefSchema, AgenticJobStatusSchema, AgentIdentityRefSchema, AgentReputationRefSchema,
   AllocationOperationRecordSchema, ApprovalRecordSchema, ArcTransactionRefSchema, compareMoney,
   createPawPovAiSeed, EvidenceItemSchema, filterBackerDisclosure, IdempotencyConflictError, InMemoryAuditRepository,
-  InMemoryIdempotencyRepository, InMemoryRepository, InvalidTransitionError, mapAgenticJobToApplication,
+  InMemoryIdempotencyRepository, InMemoryRepository, InvalidTransitionError, LaunchVaultSchema, mapAgenticJobToApplication,
   MockAgenticJobAdapter, MockIdentityAdapter, MockWalletReferenceAdapter, money, MoneyAmountSchema, MoneyError,
   RecoveryOperationRecordSchema, SettlementRecordSchema, SubmissionOperationRecordSchema, subtractMoney,
-  TransactionRecordSchema, transitionAgenticJob, transitionApplication,
+  TransactionRecordSchema, transitionAgenticJob, transitionApplication, UnauthorizedTransitionActorError,
 } from "../src";
 
 const context = { aggregateType: "milestone", aggregateId: "m1", eventId: "event:1", occurredAt: "2026-01-01T00:00:00.000Z", actor: { actorId: "system", actorType: "SYSTEM" as const } };
+const evaluatorContext = { ...context, actor: { actorId: "evaluator:1", actorType: "EVALUATOR" as const }, authorizedEvaluatorId: "evaluator:1" };
 
 describe("atomic money", () => {
   it.each(["1.0", "01", "-1", "1e6", " 1", ""])("rejects non-canonical atomic units %j", (atomicUnits: string) => {
@@ -44,6 +45,14 @@ describe("separate state machines", () => {
     expect(mapAgenticJobToApplication("OPEN")).toBeNull();
     expect(mapAgenticJobToApplication("COMPLETED")).toBe("CONFIRMED");
   });
+  it("allows only the exact authorized evaluator to finalize a submitted job", () => {
+    expect(transitionAgenticJob("SUBMITTED", "COMPLETED", evaluatorContext).status).toBe("COMPLETED");
+    expect(transitionAgenticJob("SUBMITTED", "REJECTED", evaluatorContext).status).toBe("REJECTED");
+    expect(() => transitionAgenticJob("SUBMITTED", "COMPLETED", { ...context, actor: { actorId: "ai:1", actorType: "AI" as const }, authorizedEvaluatorId: "ai:1" })).toThrow(UnauthorizedTransitionActorError);
+    expect(() => transitionAgenticJob("SUBMITTED", "COMPLETED", { ...context, actor: { actorId: "founder:1", actorType: "FOUNDER" as const }, authorizedEvaluatorId: "founder:1" })).toThrow(UnauthorizedTransitionActorError);
+    expect(() => transitionAgenticJob("SUBMITTED", "COMPLETED", { ...context, actor: { actorId: "evaluator:2", actorType: "EVALUATOR" as const }, authorizedEvaluatorId: "evaluator:1" })).toThrow(UnauthorizedTransitionActorError);
+    expect(() => transitionAgenticJob("SUBMITTED", "COMPLETED", { ...context, actor: { actorId: "evaluator:1", actorType: "EVALUATOR" as const } })).toThrow(UnauthorizedTransitionActorError);
+  });
 });
 
 describe("repositories and idempotency", () => {
@@ -68,6 +77,11 @@ describe("repositories and idempotency", () => {
     expect(executions).toBe(1);
     expect(() => repository.execute("release", "key", "different", action)).toThrow(IdempotencyConflictError);
   });
+  it("avoids scope and key tuple collisions", () => {
+    const repository = new InMemoryIdempotencyRepository();
+    expect(repository.execute("a:b", "c", "fingerprint:1", () => ({ id: "first" }))).toEqual({ id: "first" });
+    expect(repository.execute("a", "b:c", "fingerprint:2", () => ({ id: "second" }))).toEqual({ id: "second" });
+  });
   it.each([
     ["allocation", AllocationOperationRecordSchema, { id: "allocation:1", reserveId: "reserve:1", idempotencyKey: "allocation:key", amount: money("USDC", "1"), createdAt: context.occurredAt }],
     ["approval", ApprovalRecordSchema, { id: "approval:1", actionType: "RELEASE", exactIntentHash: `sha256:${"a".repeat(64)}`, idempotencyKey: "approval:key", decision: "PENDING", approver: null, expiresAt: context.occurredAt, decidedAt: null }],
@@ -89,9 +103,17 @@ describe("protocol-safe mocks and privacy", () => {
   it("does not permit case-insensitive owner-written reputation", () => {
     expect(() => AgentReputationRefSchema.parse({ standard: "ERC-8004", network: "mock:network", chainId: "mock:chain", registryAddress: "mock:registry", agentId: "mock:agent", writerAddress: "mock:Writer", agentOwnerAddress: "MOCK:writer", eventReference: "mock:event", score: 1, tag: null, recordedAt: null, isMock: true })).toThrow();
   });
-  it("rejects confirmed transaction state without a hash", () => {
-    const transaction = { network: "ARC_TESTNET" as const, chainId: "synthetic:chain", transactionHash: null, status: "CONFIRMED" as const, blockNumber: null, blockHash: null, explorerUrl: null, operationType: "SETTLEMENT" as const, isMock: true };
-    expect(() => ArcTransactionRefSchema.parse(transaction)).toThrow();
+  it("rejects live self-authored reputation after canonical EVM normalization", () => {
+    expect(() => AgentReputationRefSchema.parse({ standard: "ERC-8004", network: "arc-testnet", chainId: "84532", registryAddress: "0xregistry", agentId: "agent-1", writerAddress: "0xAbCdEf0000000000000000000000000000001234", agentOwnerAddress: "0xaBcDeF0000000000000000000000000000001234", eventReference: "event-1", score: 1, tag: null, recordedAt: context.occurredAt, isMock: false })).toThrow();
+  });
+  it("accepts synthetic mock reputation identifiers without EVM-address validation", () => {
+    expect(AgentReputationRefSchema.parse({ standard: "ERC-8004", network: "mock:network", chainId: "mock:chain", registryAddress: "mock:registry", agentId: "mock:agent", writerAddress: "mock:writer", agentOwnerAddress: "mock:owner", eventReference: "mock:event", score: 1, tag: null, recordedAt: null, isMock: true })).toMatchObject({ isMock: true, writerAddress: "mock:writer" });
+  });
+  it("requires truthful transaction lifecycle evidence for submitted, prepared, and confirmed states", () => {
+    expect(() => ArcTransactionRefSchema.parse({ network: "ARC_TESTNET", chainId: "synthetic:chain", transactionHash: null, status: "SUBMITTED", blockNumber: null, blockHash: null, explorerUrl: null, operationType: "SETTLEMENT", isMock: true })).toThrow();
+    expect(() => ArcTransactionRefSchema.parse({ network: "ARC_TESTNET", chainId: "synthetic:chain", transactionHash: null, status: "CONFIRMED", blockNumber: "1", blockHash: "synthetic:block", explorerUrl: null, operationType: "SETTLEMENT", isMock: true })).toThrow();
+    expect(() => ArcTransactionRefSchema.parse({ network: "ARC_TESTNET", chainId: "synthetic:chain", transactionHash: null, status: "PREPARED", blockNumber: "1", blockHash: "synthetic:block", explorerUrl: null, operationType: "SETTLEMENT", isMock: true })).toThrow();
+    expect(() => ArcTransactionRefSchema.parse({ network: "ARC_TESTNET", chainId: "synthetic:chain", transactionHash: "synthetic:tx", status: "FAILED", blockNumber: "1", blockHash: "synthetic:block", explorerUrl: null, operationType: "SETTLEMENT", isMock: true })).toThrow();
     expect(() => TransactionRecordSchema.parse({ id: "tx:1", intentId: "intent:1", idempotencyKey: "tx:key", amount: money("USDC", "1"), operationState: "CONFIRMED", arcTransaction: null, createdAt: context.occurredAt, updatedAt: context.occurredAt })).toThrow();
   });
   it("rejects registered identity without its registration reference", () => {
@@ -118,6 +140,25 @@ describe("protocol-safe mocks and privacy", () => {
     expect(() => AgentReputationRefSchema.parse({ standard: "ERC-8004", network: "mock:network", chainId: "mock:chain", registryAddress: "mock:registry", agentId: "mock:agent", writerAddress: "mock:writer", agentOwnerAddress: "mock:owner", eventReference: "mock:event", score: null, tag: null, recordedAt: null, isMock: true })).toThrow();
     expect(() => ArcTransactionRefSchema.parse({ network: "ARC_TESTNET", chainId: "synthetic:chain", transactionHash: null, status: "PREPARED", blockNumber: null, blockHash: null, explorerUrl: null, isMock: true })).toThrow();
     expect(() => AgenticJobRefSchema.parse({ standard: "ERC-8183", network: "mock:network", chainId: "mock:chain", contractAddress: "mock:contract", jobId: "mock:job", clientAddress: "mock:client", providerAddress: "mock:provider", evaluatorAddress: "mock:evaluator", status: "OPEN", transaction: null, isMock: true })).toThrow();
+  });
+});
+
+describe("approval and vault invariants", () => {
+  it("requires authorized human actors and decided timestamps for approved and rejected decisions", () => {
+    const base = { id: "approval:1", actionType: "RELEASE", exactIntentHash: `sha256:${"a".repeat(64)}`, idempotencyKey: "approval:key", expiresAt: context.occurredAt };
+    expect(ApprovalRecordSchema.parse({ ...base, decision: "APPROVED", approver: { actorId: "founder:1", actorType: "FOUNDER" }, decidedAt: context.occurredAt })).toMatchObject({ decision: "APPROVED" });
+    expect(ApprovalRecordSchema.parse({ ...base, decision: "REJECTED", approver: { actorId: "evaluator:1", actorType: "EVALUATOR" }, decidedAt: context.occurredAt })).toMatchObject({ decision: "REJECTED" });
+    expect(() => ApprovalRecordSchema.parse({ ...base, decision: "APPROVED", approver: { actorId: "ai:1", actorType: "AI" }, decidedAt: context.occurredAt })).toThrow();
+    expect(() => ApprovalRecordSchema.parse({ ...base, decision: "REJECTED", approver: null, decidedAt: context.occurredAt })).toThrow();
+    expect(() => ApprovalRecordSchema.parse({ ...base, decision: "APPROVED", approver: { actorId: "founder:1", actorType: "FOUNDER" }, decidedAt: null })).toThrow();
+  });
+  it("prevents pending approvals from masquerading as decided", () => {
+    const base = { id: "approval:2", actionType: "RELEASE", exactIntentHash: `sha256:${"b".repeat(64)}`, idempotencyKey: "approval:key:2", expiresAt: context.occurredAt };
+    expect(() => ApprovalRecordSchema.parse({ ...base, decision: "PENDING", approver: { actorId: "founder:1", actorType: "FOUNDER" }, decidedAt: null })).toThrow();
+    expect(() => ApprovalRecordSchema.parse({ ...base, decision: "PENDING", approver: null, decidedAt: context.occurredAt })).toThrow();
+  });
+  it("requires vault and total-capital assets to match", () => {
+    expect(() => LaunchVaultSchema.parse({ id: "vault:1", projectId: "project:1", asset: "USDC", totalCapital: money("EURC", "1"), mode: "MOCK", createdAt: context.occurredAt })).toThrow();
   });
 });
 

@@ -17,10 +17,15 @@ export class InMemoryAuditRepository {
 }
 interface IdempotentEntry<T> { fingerprint: string; result: T }
 export class InMemoryIdempotencyRepository {
-  readonly #entries = new Map<string, IdempotentEntry<unknown>>();
+  readonly #entries = new Map<string, Map<string, IdempotentEntry<unknown>>>();
   execute<T>(scope: string, key: string, fingerprint: string, action: () => T): T {
-    const composite = `${scope}:${key}`; const existing = this.#entries.get(composite);
+    const scopedEntries = this.#entries.get(scope);
+    const existing = scopedEntries?.get(key);
     if (existing) { if (existing.fingerprint !== fingerprint) throw new IdempotencyConflictError(key); return clone(existing.result as T); }
-    const result = action(); this.#entries.set(composite, { fingerprint, result: clone(result) }); return clone(result);
+    const result = action();
+    const nextScopedEntries = scopedEntries ?? new Map<string, IdempotentEntry<unknown>>();
+    nextScopedEntries.set(key, { fingerprint, result: clone(result) });
+    if (!scopedEntries) this.#entries.set(scope, nextScopedEntries);
+    return clone(result);
   }
 }

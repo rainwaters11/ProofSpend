@@ -5,6 +5,11 @@ export class InvalidTransitionError extends Error {
     super(`Invalid ${machine} transition from ${from} to ${to}.`); this.name = "InvalidTransitionError";
   }
 }
+export class UnauthorizedTransitionActorError extends Error {
+  constructor(readonly machine: string, readonly from: string, readonly to: string) {
+    super(`Unauthorized actor for ${machine} transition from ${from} to ${to}.`); this.name = "UnauthorizedTransitionActorError";
+  }
+}
 export type ProofSpendApplicationState = "INCOMPLETE" | "NEEDS_REVIEW" | "ELIGIBLE" | "APPROVAL_PENDING" | "APPROVED" | "PREPARED" | "SUBMITTED" | "CONFIRMED" | "REJECTED" | "FAILED" | "RECONCILED";
 const applicationTransitions: Record<ProofSpendApplicationState, readonly ProofSpendApplicationState[]> = {
   INCOMPLETE: ["NEEDS_REVIEW"], NEEDS_REVIEW: ["INCOMPLETE", "ELIGIBLE", "REJECTED"], ELIGIBLE: ["APPROVAL_PENDING"],
@@ -15,7 +20,7 @@ const jobTransitions: Record<AgenticJobStatus, readonly AgenticJobStatus[]> = {
   OPEN: ["FUNDED", "EXPIRED"], FUNDED: ["SUBMITTED", "EXPIRED"], SUBMITTED: ["COMPLETED", "REJECTED", "EXPIRED"],
   COMPLETED: [], REJECTED: [], EXPIRED: [],
 };
-export interface TransitionContext { aggregateType: string; aggregateId: string; eventId: string; occurredAt: string; actor: Actor; idempotencyKey?: string }
+export interface TransitionContext { aggregateType: string; aggregateId: string; eventId: string; occurredAt: string; actor: Actor; idempotencyKey?: string; authorizedEvaluatorId?: string }
 function event(context: TransitionContext, from: string, to: string): AuditEvent {
   return { id: context.eventId, aggregateType: context.aggregateType, aggregateId: context.aggregateId, eventType: "STATE_TRANSITIONED", actor: context.actor, idempotencyKey: context.idempotencyKey ?? null, occurredAt: context.occurredAt, details: { from, to } };
 }
@@ -25,6 +30,11 @@ export function transitionApplication(from: ProofSpendApplicationState, to: Proo
 }
 export function transitionAgenticJob(from: AgenticJobStatus, to: AgenticJobStatus, context: TransitionContext) {
   if (!jobTransitions[from].includes(to)) throw new InvalidTransitionError("agentic job", from, to);
+  if (from === "SUBMITTED" && (to === "COMPLETED" || to === "REJECTED")) {
+    if (context.actor.actorType !== "EVALUATOR" || context.authorizedEvaluatorId !== context.actor.actorId) {
+      throw new UnauthorizedTransitionActorError("agentic job", from, to);
+    }
+  }
   return { status: to, auditEvent: event(context, from, to) } as const;
 }
 export function mapAgenticJobToApplication(status: AgenticJobStatus): ProofSpendApplicationState | null {

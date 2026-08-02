@@ -5,6 +5,8 @@ const Id = z.string().min(1);
 const Time = z.string().datetime();
 const Hash = z.string().regex(/^sha256:[a-f0-9]{64}$/);
 const isSynthetic = (value: string) => /^(mock:|synthetic:)/.test(value);
+const LiveEvmAddress = /^0x[a-fA-F0-9]{40}$/;
+const normalizeIdentifier = (value: string) => value.trim().toLowerCase();
 export const VisibilitySchema = z.enum(["FOUNDER_PRIVATE", "BACKER_SHARED", "ONCHAIN_PUBLIC"]);
 export const ActorSchema = z.object({ actorId: Id, actorType: z.enum(["SYSTEM", "AI", "FOUNDER", "BACKER", "EVALUATOR", "ADAPTER"]) });
 export type Actor = z.infer<typeof ActorSchema>;
@@ -26,20 +28,27 @@ export const AgentReputationRefSchema = z.object({
   writerAddress: z.string().min(1), agentOwnerAddress: z.string().min(1), eventReference: z.string().min(1),
   score: z.number().finite().nullable(), tag: z.string().min(1).nullable(), recordedAt: Time.nullable(), isMock: z.boolean(),
 }).refine((value) => value.score !== null || value.tag !== null, "Reputation requires an explicit score or tag.").refine(
-  (value) => value.writerAddress.trim().toLowerCase() !== value.agentOwnerAddress.trim().toLowerCase(),
+  (value) => normalizeIdentifier(value.writerAddress) !== normalizeIdentifier(value.agentOwnerAddress),
   "Agent owner cannot write its own reputation.",
 ).superRefine((value, context) => {
   if (value.isMock && [value.network, value.chainId, value.registryAddress, value.agentId, value.writerAddress, value.agentOwnerAddress, value.eventReference].some((item) => !isSynthetic(item))) context.addIssue({ code: "custom", message: "Every mock reputation reference must be visibly synthetic." });
+  if (!value.isMock && !LiveEvmAddress.test(value.writerAddress)) context.addIssue({ code: "custom", message: "Live reputation writerAddress must be a canonical EVM-style address." });
+  if (!value.isMock && !LiveEvmAddress.test(value.agentOwnerAddress)) context.addIssue({ code: "custom", message: "Live reputation agentOwnerAddress must be a canonical EVM-style address." });
   if (!value.isMock && [value.network, value.chainId, value.registryAddress, value.agentId, value.eventReference].some(isSynthetic)) context.addIssue({ code: "custom", message: "Synthetic reputation references cannot be marked live." });
 });
 export type AgentReputationRef = z.infer<typeof AgentReputationRefSchema>;
-export const ArcTransactionRefSchema = z.object({
-  network: z.literal("ARC_TESTNET"), chainId: z.string().min(1), transactionHash: z.string().min(1).nullable(),
-  status: z.enum(["NONE", "PREPARED", "SUBMITTED", "CONFIRMED", "FAILED"]), blockNumber: z.string().regex(/^\d+$/).nullable(),
-  blockHash: z.string().min(1).nullable(), explorerUrl: z.string().url().nullable(),
+const ArcTransactionRefBase = {
+  network: z.literal("ARC_TESTNET"), chainId: z.string().min(1), explorerUrl: z.string().url().nullable(),
   operationType: z.enum(["IDENTITY_REGISTRATION", "REPUTATION_WRITE", "JOB_CREATE", "JOB_FUND", "JOB_SUBMIT", "JOB_EVALUATE", "SETTLEMENT", "REFUND"]), isMock: z.boolean(),
-}).superRefine((value, context) => {
-  if (value.status === "CONFIRMED" && value.transactionHash === null) context.addIssue({ code: "custom", message: "Confirmed transaction requires a transaction hash." });
+};
+export const ArcTransactionRefSchema = z.discriminatedUnion("status", [
+  z.object({ ...ArcTransactionRefBase, status: z.literal("NONE"), transactionHash: z.null(), blockNumber: z.null(), blockHash: z.null(), explorerUrl: z.null() }),
+  z.object({ ...ArcTransactionRefBase, status: z.literal("PREPARED"), transactionHash: z.null(), blockNumber: z.null(), blockHash: z.null(), explorerUrl: z.null() }),
+  z.object({ ...ArcTransactionRefBase, status: z.literal("SUBMITTED"), transactionHash: z.string().min(1), blockNumber: z.null(), blockHash: z.null() }),
+  z.object({ ...ArcTransactionRefBase, status: z.literal("CONFIRMED"), transactionHash: z.string().min(1), blockNumber: z.string().regex(/^\d+$/), blockHash: z.string().min(1) }),
+  z.object({ ...ArcTransactionRefBase, status: z.literal("FAILED"), transactionHash: z.string().min(1).nullable(), blockNumber: z.null(), blockHash: z.null() }),
+]).superRefine((value, context) => {
+  if (value.explorerUrl !== null && value.transactionHash === null) context.addIssue({ code: "custom", message: "Explorer URLs require a transaction hash." });
   const references = [value.chainId, value.transactionHash, value.blockHash].filter((item): item is string => item !== null);
   if (value.isMock && references.some((item) => !isSynthetic(item))) context.addIssue({ code: "custom", message: "Every mock transaction reference must be visibly synthetic." });
   if (value.isMock && value.explorerUrl !== null) context.addIssue({ code: "custom", message: "Mock transactions cannot have a live explorer URL." });
@@ -63,7 +72,10 @@ export const ProjectSchema = z.object({ id: Id, name: z.string().min(1), founder
 export type Project = z.infer<typeof ProjectSchema>;
 export const BackerSchema = z.object({ id: Id, projectId: Id, displayName: z.string().min(1), createdAt: Time });
 export type Backer = z.infer<typeof BackerSchema>;
-export const LaunchVaultSchema = z.object({ id: Id, projectId: Id, asset: z.string().min(1), totalCapital: MoneyAmountSchema, mode: z.enum(["MOCK", "ARC_TESTNET"]), createdAt: Time });
+export const LaunchVaultSchema = z.object({ id: Id, projectId: Id, asset: z.string().min(1), totalCapital: MoneyAmountSchema, mode: z.enum(["MOCK", "ARC_TESTNET"]), createdAt: Time }).refine(
+  (value) => value.asset === value.totalCapital.asset,
+  "LaunchVault asset must match total capital asset.",
+);
 export type LaunchVault = z.infer<typeof LaunchVaultSchema>;
 export const ReserveSchema = z.object({ id: Id, vaultId: Id, name: z.string().min(1), allocated: MoneyAmountSchema, status: z.enum(["PROPOSED", "ACTIVE", "CLOSED"]) });
 export type Reserve = z.infer<typeof ReserveSchema>;
@@ -73,7 +85,16 @@ export const LedgerEntrySchema = z.object({ id: Id, vaultId: Id, reserveId: Id.n
 export type LedgerEntry = z.infer<typeof LedgerEntrySchema>;
 export const TransactionRecordSchema = z.object({ id: Id, intentId: Id, idempotencyKey: Id, amount: MoneyAmountSchema, operationState: z.enum(["INTENT_PERSISTED", "PREPARED", "SUBMITTED", "CONFIRMED", "FAILED", "RECONCILED"]), arcTransaction: ArcTransactionRefSchema.nullable(), createdAt: Time, updatedAt: Time }).refine((value) => value.operationState !== "CONFIRMED" || value.arcTransaction?.status === "CONFIRMED", "Confirmed transaction record requires a confirmed transaction reference.");
 export type TransactionRecord = z.infer<typeof TransactionRecordSchema>;
-export const ApprovalRecordSchema = z.object({ id: Id, actionType: z.string().min(1), exactIntentHash: Hash, idempotencyKey: Id, decision: z.enum(["PENDING", "APPROVED", "REJECTED"]), approver: ActorSchema.nullable(), expiresAt: Time, decidedAt: Time.nullable() });
+const ApprovalRecordBaseSchema = z.object({ id: Id, actionType: z.string().min(1), exactIntentHash: Hash, idempotencyKey: Id, expiresAt: Time });
+const AuthorizedApprovalActorSchema = ActorSchema.refine(
+  (actor) => actor.actorType === "FOUNDER" || actor.actorType === "EVALUATOR",
+  "Approval decisions require an authorized human actor.",
+);
+export const ApprovalRecordSchema = z.discriminatedUnion("decision", [
+  ApprovalRecordBaseSchema.extend({ decision: z.literal("PENDING"), approver: z.null(), decidedAt: z.null() }),
+  ApprovalRecordBaseSchema.extend({ decision: z.literal("APPROVED"), approver: AuthorizedApprovalActorSchema, decidedAt: Time }),
+  ApprovalRecordBaseSchema.extend({ decision: z.literal("REJECTED"), approver: AuthorizedApprovalActorSchema, decidedAt: Time }),
+]);
 export type ApprovalRecord = z.infer<typeof ApprovalRecordSchema>;
 export const AuditEventSchema = z.object({ id: Id, aggregateType: z.string().min(1), aggregateId: Id, eventType: z.string().min(1), actor: ActorSchema, idempotencyKey: Id.nullable(), occurredAt: Time, details: z.record(z.string(), z.union([z.string(), z.boolean(), z.null()])) });
 export type AuditEvent = z.infer<typeof AuditEventSchema>;
