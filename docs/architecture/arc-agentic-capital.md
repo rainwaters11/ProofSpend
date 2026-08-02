@@ -50,6 +50,8 @@ For an ERC-8183 job, provider delivery and evaluator completion/rejection occur 
 
 The eventual domain schema must bind applicable chain, contract/interface, job, method, roles, asset, amount, destination, calldata or commitment, state expectation, idempotency key, and expiry. Before submission, revalidate the stored approval and all mutable prerequisites. Persist intent before execution and results after execution. Do not retry mutations automatically unless protocol-safe idempotency is proven.
 
+ERC-8004 registration, ERC-8183 job creation, USDC allowance, ERC-8183 funding, provider deliverable submission, evaluator completion/rejection, refund claims, and reputation writes are independent protocol writes. Each requires its own exact persisted intent, approval by the authorized role, server-side preparation, immediate pre-submit revalidation, submission, confirmation, and reconciliation. Authorization for one write never authorizes another, and registration, creation, allowance, or funding must not occur before the corresponding approval is persisted and revalidated.
+
 ## Circle boundary
 
 Issue #7 selects the execution architecture by ADR after #2/#3/#4. Earlier research does not select it. Selectively reuse verified patterns from Circle `packages/circle-tools` and `kits/openai-agents`; exclude `packages/agent-cli`, terminal UI, unrelated kits, autonomous payments, and unverified non-Arc assumptions.
