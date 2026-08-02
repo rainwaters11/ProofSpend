@@ -22,19 +22,27 @@ The AI never calculates final balances, finalizes milestone state, approves or s
 
 ## Canonical Arc flow
 
-1. Issue #13 registers and verifies the ProofSpend Verification Agent through ERC-8004.
-2. Issue #8 creates and funds an ERC-8183 milestone job after its dependencies are complete.
-3. The founder submits receipts, deliverables, and business context offchain.
-4. AI produces structured evidence candidates, mappings, and explanations.
-5. Deterministic policy produces `PASS`, `REVIEW`, or `FAIL` outcomes and internal eligibility.
-6. An authorized human/evaluator approves an exact action.
-7. The server prepares the transaction without submitting it.
-8. Immediately before submission, the server revalidates intent, authorization, current state, expiry, balance, roles, and idempotency.
-9. The provider submits the approved Proof-of-Progress deliverable hash.
-10. The authorized evaluator completes or rejects the ERC-8183 job.
-11. USDC settles or refunds through the job lifecycle.
-12. The application confirms and reconciles the Arc result.
-13. An independent address may record an ERC-8004 reputation result afterward.
+Every protocol write below requires its own exact persisted intent, approval by the authorized role, server-side preparation, immediate pre-submit revalidation, submission, confirmation, and reconciliation. Approval is action-specific and non-transferable: approval for registration does not approve job creation, and approval for job creation does not approve allowance or funding.
+
+1. Issue #13 prepares an exact ERC-8004 registration intent for the ProofSpend Verification Agent.
+2. The authorized agent owner reviews and approves that exact registration intent.
+3. The server prepares, immediately revalidates, submits, confirms, and reconciles the ERC-8004 registration before the identity is treated as registered.
+4. After Issue #8 dependencies are complete, Issue #8 prepares an exact ERC-8183 job-creation intent.
+5. The authorized client reviews and approves that exact job-creation intent.
+6. The server prepares, immediately revalidates, submits, confirms, and reconciles job creation before the job is treated as created.
+7. Any USDC allowance and ERC-8183 funding operations are prepared as separate exact intents.
+8. The authorized client/funder separately approves each allowance or funding intent.
+9. The server separately prepares, immediately revalidates, submits, confirms, and reconciles each approved allowance or funding write before escrow is treated as funded.
+10. The founder submits receipts, deliverables, and business context offchain.
+11. AI produces structured evidence candidates, mappings, and explanations.
+12. Deterministic policy produces `PASS`, `REVIEW`, or `FAIL` outcomes and internal eligibility.
+13. The provider's deliverable-hash submission is represented by its own exact intent and approved by the authorized provider role.
+14. The server prepares, immediately revalidates, submits, confirms, and reconciles the approved deliverable submission.
+15. Completion or rejection is represented by a separate exact evaluator intent and approved by the authorized evaluator.
+16. The server prepares, immediately revalidates, submits, confirms, and reconciles the approved evaluator action.
+17. USDC settles or becomes refundable only through the confirmed ERC-8183 lifecycle; any refund claim is a separate authorized protocol write.
+18. The application reconciles settlement or refund results before updating confirmed balances.
+19. Any ERC-8004 reputation write is a separate exact intent approved and submitted by an independent reputation writer after the result; the agent owner may not write its own reputation.
 
 ERC-8004 registration identifies an agent; it does not prove trustworthiness, correctness, auditing, or financial authority. The agent owner may not write reputation for its own agent. Internal `ELIGIBLE` and ERC-8183 `COMPLETED` are different states.
 
