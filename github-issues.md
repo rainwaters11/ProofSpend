@@ -1,266 +1,100 @@
-# ProofSpend LaunchVault GitHub Issues
+# ProofSpend LaunchVault issue index
 
-## Solo workflow
+Live GitHub issues and acceptance criteria are authoritative. This file is a synchronized roadmap aid; use one issue, branch, and pull request at a time. See [`docs/roadmap.md`](docs/roadmap.md) and [`docs/dependency-map.md`](docs/dependency-map.md).
 
-One issue → one branch → one pull request → merge to `main`.
+## Issue #1 — Foundation (complete)
 
-## Labels
+PR #11 established the Bun workspace, minimal Next.js application, Zod environment validation, explicit credential-free mock mode, typed wallet boundary, safe health endpoint, lockfile, and CI checks. It did not implement product features or live transfers.
 
-- `priority:p0`
-- `priority:p1`
-- `priority:p2`
-- `type:feature`
-- `type:bug`
-- `type:test`
-- `type:docs`
-- `area:foundation`
-- `area:vault`
-- `area:milestones`
-- `area:evidence`
-- `area:agents`
-- `area:circle`
-- `area:backer-view`
-- `area:frontend`
-- `area:security`
-- `codex-ready`
-- `blocked`
+## Issue #2 — Domain, state machines, and mock data
 
-## Milestones
+Create Zod schemas, integer-atomic-unit money types, explicit state machines, mock repositories/adapters, seeded fictional data, and append-only audit events. Invalid transitions must not mutate state.
 
-1. Foundation
-2. Fund and Allocate
-3. Prove and Unlock
-4. Arc and Demo
+## Issue #3 — Treasury and Smart Reserves
 
----
+Build deterministic project capital allocation, founder-approved activation, ledger-based reversals, deterministic rounding, and duplicate-allocation protection.
 
-## Issue 1 — Audit Circle starter and scaffold LaunchVault
+## Issue #4 — Deterministic Milestone Engine
 
-**Priority:** P0  
-**Milestone:** Foundation
+Evaluate requirements as `PASS`, `REVIEW`, or `FAIL`, return reason codes/next actions, calculate internal eligibility without an LLM, and prevent invalid or duplicate release transitions.
 
-### Goal
+## Issue #5 — Evidence Engine and Proof Recovery
 
-Create the LaunchVault application foundation while preserving only the needed Circle Agent Stack pieces.
+Validate untrusted evidence, preserve original versus AI-derived fields, hash evidence, record corrections, map evidence to requirements, and complete one recovery flow. Raw/private evidence remains offchain.
 
-### Acceptance criteria
+## Issue #6 — Proof-of-Progress and Backer View
 
-- Circle starter structure is documented.
-- `packages/circle-tools` and `kits/openai-agents` are evaluated for reuse.
-- Other framework kits are not imported.
-- `apps/web` runs as a Next.js App Router app.
-- strict TypeScript and Zod environment validation exist.
-- mock mode works without credentials.
-- safe health endpoint exists.
-- lint, typecheck, test, and build scripts pass.
-- no product features from later issues are implemented.
+Generate structured proof records from deterministic outcomes and implement founder-controlled disclosure. Backer View hides raw receipts and private notes by default.
 
----
+## Issue #7 — Circle execution architecture ADR and adapter
 
-## Issue 2 — Implement LaunchVault domain, state machines, and mock data
+**Dependencies:** Issues #2, #3, and #4.
 
-**Priority:** P0  
-**Milestone:** Foundation
+First decide the supported Circle execution architecture through an ADR using current official sources. Only after approval, implement typed server-side boundaries for reads, preparation, submission, confirmation, and reconciliation. Require explicit mock/Arc selection, exact approvals, immediate pre-submit revalidation, Arc Testnet, USDC, role/address/amount/balance validation, and idempotency.
 
-### Goal
+Selectively consider `packages/circle-tools` and `kits/openai-agents`. Exclude `packages/agent-cli`, terminal UI, unrelated framework kits, Base/Polygon assumptions, and autonomous payment behavior. Preliminary research may occur earlier; implementation may not.
 
-Create typed domain models and deterministic mock infrastructure.
+## Issue #8 — ERC-8183 milestone-job lifecycle and settlement
 
-### Acceptance criteria
+**Dependencies:** Issues #4, #5, #6, #7, and #13.
 
-- schemas exist for project, backer, vault, reserve, ledger entry, milestone, requirement, evidence item, transaction, proof record, release request, payment record, proof gap, disclosure preference, and audit event;
-- money uses atomic units;
-- state transitions are explicit;
-- mock repositories and wallet adapter exist;
-- PawPOVAI seeded scenario exists;
-- every successful transition creates an audit event;
-- invalid transitions are tested.
+Implement ERC-8183 job creation/funding, provider Proof-of-Progress deliverable-hash submission, authorized evaluator completion/rejection, USDC settlement/refund, confirmation, and reconciliation. Consume the registered identity from Issue #13 without absorbing its identity or reputation scope. Keep evidence offchain and internal `ELIGIBLE` distinct from ERC-8183 `COMPLETED`. ERC-8183 is the default MVP settlement primitive.
 
----
+## Issue #9 — Guided founder and backer demo
 
-## Issue 3 — Build LaunchVault Treasury and Smart Reserves
+Deliver the truthful three-minute Fund → Prove → Unlock flow using only implemented behavior. Distinguish mock, Arc Testnet, approval, prepared, submitted, confirmed, rejected, refunded, and reconciled states; never present fake identifiers as live.
 
-**Priority:** P0  
-**Milestone:** Fund and Allocate
+## Issue #10 — Security, deployment, and submission
 
-### Goal
+Complete security/privacy review, reproducible setup/reset, validation, deployment, demo evidence, pitches, and limitations without claims of auditing, investment performance, production readiness, or guaranteed fraud prevention.
 
-Receive or seed project capital and allocate it across approved reserves.
+## Issue #13 — ERC-8004 Verification Agent identity and reputation governance
 
-### Acceptance criteria
+**Dependencies:** Issues #2 and #7.
 
-- create a project vault;
-- allocate 1,000 USDC across five reserves;
-- percentage totals cannot exceed 100%;
-- rounding is deterministic;
-- activation requires founder approval;
-- duplicate allocation is prevented;
-- reversals create ledger entries instead of deleting history;
-- dashboard shows allocated, available, and remaining funds.
+Register and verify the ProofSpend Verification Agent's ERC-8004 identity. Define ownership and independent reputation governance. Registration does not prove trustworthiness, correctness, auditing, or authority. The agent owner may not write reputation for its own agent.
 
----
+Issue #13 does not implement ERC-8183 or the complete OpenAI Agents SDK runtime.
 
-## Issue 4 — Build Milestone Engine
+## Issue #14 — Frontend delivery in four phases
 
-**Priority:** P0  
-**Milestone:** Fund and Allocate
+### Phase A
 
-### Goal
+- semantic design tokens;
+- shadcn foundation;
+- responsive application shell;
+- navigation;
+- `ModeBadge` and `RoleBadge`;
+- UI source and license documentation.
 
-Define milestone conditions and calculate release eligibility deterministically.
+### Phase B
 
-### Acceptance criteria
+- truthful landing page;
+- Fund → Prove → Unlock;
+- product architecture and governance;
+- prototype and Arc Testnet disclaimers.
 
-- milestones contain requirements, spend limit, release amount, due date, and status;
-- requirement types include deliverable, receipt, transaction match, business purpose, and confirmation;
-- engine returns incomplete, review, eligible, approved, released, or rejected;
-- no LLM sets final status;
-- duplicate release is impossible;
-- reason codes and next actions are returned;
-- unit tests cover boundaries.
+### Phase C
 
----
+Founder, treasury, milestone, evidence, evaluator, Backer View, and activity compositions as corresponding domain contracts become available. Do not fabricate unavailable behavior.
 
-## Issue 5 — Build Evidence Engine and Proof Recovery
+### Phase D
 
-**Priority:** P0  
-**Milestone:** Prove and Unlock
+- accessibility;
+- mobile and tablet hardening;
+- reduced motion;
+- Playwright;
+- visual regression where feasible;
+- performance and bundle review.
 
-### Goal
+## Issue #16 — Synchronize repository architecture and roadmap
 
-Capture receipts, deliverables, and context and map them to milestone requirements.
+Align design, instructions, agent boundaries, issue index, prompts, roadmap, decision records, architecture, and executable skills without changing application behavior or dependencies.
 
-### Acceptance criteria
+## Backlog gap — complete Verification Agent runtime
 
-- image, screenshot, document, and natural-language inputs are supported in mock mode;
-- file type, signature, and size are validated;
-- extraction uses a strict schema;
-- extracted and inferred fields are distinct;
-- evidence receives a hash;
-- user corrections create audit events;
-- one missing-proof workflow is complete;
-- uploaded content cannot override agent instructions.
+A dedicated future issue must cover complete orchestration unless the live backlog explicitly assigns it elsewhere: controlled OpenAI Agents SDK tool loop, structured evidence-service calls, deterministic-policy explanation, human-interruption request, transaction-proposal preparation, and prohibition against direct submission. This work is not silently part of Issue #13 or #8.
 
----
+## Deferred/non-default work
 
-## Issue 6 — Generate Proof-of-Progress records and Backer View
-
-**Priority:** P0  
-**Milestone:** Prove and Unlock
-
-### Goal
-
-Create trustworthy milestone proof while protecting founder privacy.
-
-### Acceptance criteria
-
-- eligible milestone creates a structured proof record;
-- proof includes evidence hashes, verified spend, requirement outcomes, and proposed release;
-- founder controls which fields are shareable;
-- Backer View shows only approved information;
-- raw receipts and private notes are hidden by default;
-- disclosure filtering is tested;
-- printable or shareable summary exists.
-
----
-
-## Issue 7 — Integrate Circle Agent Wallet on Arc Testnet
-
-**Priority:** P0  
-**Milestone:** Arc and Demo
-
-### Goal
-
-Display wallet status and execute one approved USDC tranche release safely.
-
-### Acceptance criteria
-
-- typed WalletProvider exists;
-- mock and Circle adapters implement the same interface;
-- adapter selection is explicit;
-- server-only credentials;
-- chain, asset, address, amount, balance, approval, and idempotency are validated;
-- Arc Testnet transaction status is persisted;
-- UI shows mock/testnet mode;
-- no silent fallback;
-- official current setup instructions are documented.
-
----
-
-## Issue 8 — Add optional signed proof or minimal LaunchVault contract
-
-**Priority:** P1  
-**Milestone:** Arc and Demo
-
-### Goal
-
-Add one credible onchain proof or conditional-release enhancement after Issue 7 works.
-
-### Decision gate
-
-Codex must first compare:
-
-1. wallet-signed structured Proof-of-Progress;
-2. minimal LaunchVault contract.
-
-Choose the lower-risk option that adds the clearest judging value.
-
-### Acceptance criteria
-
-- threat model documented;
-- no proxy or token;
-- no duplicate release;
-- role and approval model explicit;
-- Arc Testnet interaction demonstrated;
-- tests and deployment evidence included;
-- application remains functional if this feature is disabled.
-
----
-
-## Issue 9 — Build guided founder and backer demo
-
-**Priority:** P0  
-**Milestone:** Arc and Demo
-
-### Goal
-
-Deliver a polished three-minute experience.
-
-### Acceptance criteria
-
-- landing page explains Fund → Prove → Unlock;
-- founder creates PawPOVAI vault;
-- reserves allocate;
-- milestone appears;
-- evidence is submitted and matched;
-- milestone becomes eligible;
-- founder approves release;
-- testnet or mock tranche executes;
-- Backer View updates;
-- one proof gap is resolved;
-- mobile, loading, empty, review, blocked, success, and error states work;
-- Playwright covers happy and failure paths.
-
----
-
-## Issue 10 — Security, deployment, and submission package
-
-**Priority:** P0  
-**Milestone:** Arc and Demo
-
-### Goal
-
-Prepare the Arc submission, Swarm Village demo, and InvestFest preview.
-
-### Acceptance criteria
-
-- lint, typecheck, tests, and build pass;
-- threat model and security notes exist;
-- Vercel deployment succeeds;
-- setup and reset instructions are reproducible;
-- README explains Circle and Arc usage honestly;
-- three-minute Arc pitch exists;
-- Swarm Village agent walkthrough exists;
-- InvestFest 30-second customer pitch exists;
-- known limitations are disclosed;
-- no claims of auditing, investment performance, or production readiness.
+Custom LaunchVault contracts, signed proof, x402, nanopayments, generalized crowdfunding, production KYC, multi-chain routing, autonomous spending, and full BillBack require separate approval and are not on the default MVP path.
