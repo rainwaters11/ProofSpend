@@ -1,31 +1,29 @@
-# ProofSpend LaunchVault Skills Catalog
+# ProofSpend LaunchVault skills catalog
 
-Codex does not treat a root `skills.md` file as an executable skill. Repository-local skills live under `.agents/skills/<name>/SKILL.md`.
+Executable repository skills live under `.agents/skills/<name>/SKILL.md`. Durable product rules belong in `design.md`; repository constraints belong in `AGENTS.md`; decisions and ordering belong in `docs/`.
 
 ## Included skills
 
-### launchvault-issue-builder
+### `launchvault-issue-builder`
 
-Use for one numbered GitHub issue. It enforces inspection, scoped planning, implementation, testing, security review, and completion reporting.
+Implements one numbered issue after checking live scope, dependencies, architecture records, tests, and security boundaries.
 
-### launchvault-release-review
+### `launchvault-release-review`
 
-Use before a checkpoint, Arc demonstration, Swarm Village demo, InvestFest preview, deployment, or final submission.
+Audits a checkpoint or release for demo truthfulness, security, privacy, protocol evidence, and reproducibility.
 
-## Future skills
+### `arc-standards-integration`
 
-Add only after repeated need is demonstrated:
+Required for Circle, Arc transaction, ERC-8004, ERC-8183, or reputation work. It verifies official sources, roles, identity/reputation governance, job lifecycle, exact intent, and transaction-state separation.
 
-- synthetic evidence fixture builder;
-- Circle adapter verifier;
-- demo reset runner;
-- contract threat-model reviewer;
-- backer disclosure reviewer.
+### `launchvault-ui-quality`
+
+Required for perceptible frontend work and financial/protocol-state presentation. It enforces the approved Issue #14 Phase A–D scope, accessibility, privacy, and truthful states.
 
 ## Skill rules
 
 - one workflow per skill;
-- durable product rules belong in `design.md`;
-- repository constraints belong in `AGENTS.md`;
-- financial approvals may never be bypassed by a skill;
-- successful completion requires evidence.
+- read `docs/roadmap.md`, `docs/dependency-map.md`, `docs/decision-log.md`, and applicable architecture records;
+- no skill may bypass deterministic policy or financial approval;
+- successful completion requires evidence;
+- a custom-contract review skill is not on the default MVP path.

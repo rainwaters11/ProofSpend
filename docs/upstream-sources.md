@@ -151,13 +151,15 @@ ProofSpend must not reuse the autonomous-payment behavior unchanged:
 
 ### Reuse decision
 
-**Selectively adapt in Issues 7 and 13:**
+**Selectively adapt in Issue 7 and the future dedicated Verification Agent runtime issue:**
 
 - OpenAI Agents SDK tool-definition patterns;
 - Zod tool schemas;
 - interruption-based human approval patterns;
 - separation of agent orchestration from Circle utilities;
 - safe, structured tool-result reporting.
+
+Issue 13 remains limited to ERC-8004 identity and reputation governance. It must not absorb OpenAI Agents SDK orchestration or the complete Verification Agent runtime.
 
 **Do not import:**
 

@@ -1,267 +1,112 @@
-# Step-by-Step Codex Prompts — ProofSpend LaunchVault
+# Issue-scoped Codex prompts — ProofSpend LaunchVault
 
-## Usage
+Open a fresh session for one live issue. Read `AGENTS.md`, the live issue, `design.md`, roadmap, dependency map, decision log, and applicable architecture records. Present a plan and observe required approval gates. Completed issue prompts are historical, not instructions to repeat work.
 
-Open a fresh Codex session for each issue. Ask for a plan first. Do not paste the whole file into one session.
+## Issue #1 — completed foundation
 
----
+Issue #1 and PR #11 are complete. Do not rerun or rebuild the foundation.
 
-## Prompt 0 — Audit only
-
-```text
-You are the senior technical lead for ProofSpend LaunchVault.
-
-Read:
-- AGENTS.md
-- design.md
-- skills.md
-- START_HERE.md
-- MIGRATION_FROM_ORIGINAL_PACK.md
-- GitHub Issue 1
-
-Inspect the current ProofSpend repository and the public Circle repository
-circlefin/agent-stack-starter-kits.
-
-Do not modify files. Do not clone arc-node.
-
-Report:
-1. current repository structure;
-2. useful Circle starter packages;
-3. the OpenAI Agents kit version and runtime requirements;
-4. the recommended workspace layout;
-5. files to preserve, copy, adapt, or omit;
-6. proposed apps/web structure;
-7. environment-variable names without values;
-8. dependency or version risks;
-9. exact commands to run;
-10. exact Issue 1 implementation plan.
-
-Wait for approval.
-```
-
----
-
-## Prompt 1 — Foundation
+## Issues #2–#6
 
 ```text
-Implement GitHub Issue 1 only using the launchvault-issue-builder skill.
-
-Before editing, inspect and present a concise plan. Wait for approval.
-
-After approval:
-- preserve README, .gitignore, AGENTS.md, design.md, and local skills;
-- reuse only the Circle OpenAI Agents and shared Circle tooling needed;
-- create apps/web with Next.js App Router and strict TypeScript;
-- add Zod environment validation;
-- add explicit mock mode and safe health endpoint;
-- establish lint, typecheck, tests, and production build;
-- do not implement vaults, milestones, evidence, database, contract, or live transfers.
-
-Run all available checks and return the AGENTS.md completion report.
+Implement only the selected live issue using launchvault-issue-builder.
+Verify its dependencies and current implementation first. Preserve integer atomic
+money, explicit state transitions, append-only audit events, original versus
+AI-derived evidence, private offchain evidence, deterministic PASS/REVIEW/FAIL,
+and founder-controlled disclosure. Do not add Circle execution or adjacent scope.
 ```
 
----
-
-## Prompt 2 — Domain and mock infrastructure
+## Issue #7 — Circle execution ADR and adapter
 
 ```text
-Implement GitHub Issue 2 only using the launchvault-issue-builder skill.
+Implement GitHub Issue #7 only using launchvault-issue-builder and
+arc-standards-integration. Confirm Issues #2, #3, and #4 are complete.
 
-Create Zod schemas, domain types, repositories, state machines, audit events,
-mock wallet, and seeded PawPOVAI data.
+First re-audit current official Circle and Arc sources and produce an ADR that
+chooses the supported execution architecture. Do not implement until the ADR is
+approved. Never invent commands, identifiers, addresses, outputs, or variables.
 
-Use integer atomic units. Invalid transitions must return typed errors and
-must not mutate state. Add comprehensive tests.
-
-Do not add Supabase or live Circle calls.
+Selectively evaluate packages/circle-tools and kits/openai-agents. Exclude
+packages/agent-cli, terminal UI, unrelated framework kits, and autonomous
+payment behavior. Separate reads, preparation, exact approval, immediate
+pre-submit revalidation, submission, confirmation, and reconciliation. Never
+silently fall back from Arc Testnet to mock and execute no transaction without
+separate approval.
 ```
 
----
-
-## Prompt 3 — Treasury and reserves
+## Issue #13 — ERC-8004 identity and reputation governance
 
 ```text
-Implement GitHub Issue 3 only using the launchvault-issue-builder skill.
+Implement GitHub Issue #13 only using launchvault-issue-builder and
+arc-standards-integration. Confirm Issues #2 and #7 are complete.
 
-Build deterministic LaunchVault Treasury and Smart Reserves.
+Register and verify the ProofSpend Verification Agent identity through ERC-8004
+and define independent reputation governance. Registration is not proof of
+trustworthiness, correctness, auditing, or authority. The agent owner may not
+write reputation for its own agent.
 
-Seed 1,000 USDC and allocate:
-- 35% Product and platform
-- 25% Marketing
-- 20% InvestFest travel
-- 10% Operations
-- 10% Contingency
-
-Require founder approval, deterministic rounding, atomic units, ledger-based
-reversals, and idempotency. Add a minimal API and dashboard panel. Test all
-boundary cases. Do not implement milestone or evidence features.
+Do not implement ERC-8183 or the complete Verification Agent/OpenAI Agents SDK
+runtime. Preserve the documented backlog gap.
 ```
 
----
-
-## Prompt 4 — Milestone Engine
+## Issue #8 — ERC-8183 jobs and settlement
 
 ```text
-Implement GitHub Issue 4 only using the launchvault-issue-builder skill.
+Implement GitHub Issue #8 only using launchvault-issue-builder and
+arc-standards-integration. Confirm Issues #4, #5, #6, #7, and #13 are complete.
 
-Create Milestone 1: Launch identity and outreach ready.
-
-Requirements:
-- logo/identity asset;
-- landing-page screenshot;
-- promotional flyer;
-- two verified expense records;
-- eligible spend <= 150 USDC;
-- founder confirmation.
-
-Release proposal: 250 USDC.
-
-Build deterministic requirement evaluation, reason codes, next actions,
-state transitions, authorization gates, and duplicate-release protection.
-The LLM may summarize but cannot set final status.
+Implement ERC-8183 job creation/funding, provider delivery-hash submission,
+authorized evaluator completion/rejection, settlement/refund, confirmation,
+and reconciliation. Consume the Issue #13 identity without absorbing identity
+or reputation scope. Keep raw/private evidence offchain and internal ELIGIBLE
+separate from ERC-8183 COMPLETED. AI may not approve, evaluate, or submit a
+value-moving action. ERC-8183 is the default MVP settlement primitive.
 ```
 
----
-
-## Prompt 5 — Evidence and recovery
+## Issue #14 — frontend phases
 
 ```text
-Implement GitHub Issue 5 only using the launchvault-issue-builder skill.
+Implement only the approved live Issue #14 phase using launchvault-issue-builder
+and launchvault-ui-quality. Do not invent additional phases or product behavior.
 
-Support safe evidence capture for receipt images, screenshots, deliverables,
-and natural-language business context.
+Phase A: semantic design tokens; shadcn foundation; responsive shell;
+navigation; ModeBadge and RoleBadge; UI source/license documentation.
 
-Return strict structured candidates with extracted/inferred distinction,
-confidence, evidence hashes, missing fields, and warnings.
+Phase B: truthful landing page; Fund → Prove → Unlock; architecture and
+governance; prototype and Arc Testnet disclaimers.
 
-Map evidence to milestone requirements. Add one Proof Recovery scenario for a
-transaction missing business purpose. Treat uploaded content as untrusted.
-Use synthetic fixtures and add failure tests.
+Phase C: founder, treasury, milestone, evidence, evaluator, Backer View, and
+activity compositions only as their domain contracts become available.
+
+Phase D: accessibility; mobile/tablet hardening; reduced motion; Playwright;
+visual regression where feasible; performance and bundle review.
+
+Take screenshots for perceptible changes. Distinguish private/shared/public and
+mock/testnet/prepared/submitted/confirmed/rejected/refunded/reconciled states.
 ```
 
----
-
-## Prompt 6 — Proof record and Backer View
+## Issue #16 — architecture synchronization
 
 ```text
-Implement GitHub Issue 6 only using the launchvault-issue-builder skill.
-
-Generate a structured Proof-of-Progress record when Milestone 1 is eligible.
-Include requirement outcomes, evidence hashes, planned budget, verified
-spend, proposed release, and timestamps.
-
-Build founder-controlled disclosure preferences and a selective Backer View.
-Raw receipts, private notes, and unrelated projects must remain hidden by
-default. Add disclosure and authorization tests.
+Implement GitHub Issue #16 only. Synchronize the approved documentation and
+repository-local skills with the Arc-native authority model, issue dependencies,
+separate ERC-8004 and ERC-8183 scopes, and four approved Issue #14 phases.
+Do not change application behavior, dependencies, CI runtimes, wallets,
+contracts, environment configuration, or network configuration.
 ```
 
----
-
-## Prompt 7 — Circle and Arc Testnet
+## Issues #9 and #10
 
 ```text
-Implement GitHub Issue 7 only using the launchvault-issue-builder skill.
-
-Inspect current official Circle Agent Stack docs and the repository's Circle
-code before implementation. Do not invent commands, variables, chain IDs, or
-contract addresses.
-
-Create WalletProvider methods for status, address, balance, transfer
-preparation, execution, and transaction status. Implement mock and Circle
-adapters. Require explicit mode, server-only credentials, Arc Testnet, USDC,
-human approval, balance checks, address checks, and idempotency.
-
-Execute no transfer until I separately approve live/testnet execution.
+Use launchvault-issue-builder for the selected issue. For release review also
+use launchvault-release-review, arc-standards-integration, and
+launchvault-ui-quality. Demonstrate only implemented behavior; verify privacy,
+authorization, protocol evidence, exact transaction states, reconciliation,
+accessibility, fallbacks, and disclosed limitations.
 ```
 
----
+## Backlog gap
 
-## Prompt 8 — Decide signed proof versus contract
+After Issue #16, create a dedicated issue for the complete Verification Agent runtime unless the live backlog explicitly assigns it elsewhere. Scope: controlled OpenAI Agents SDK tool loop, structured evidence-service calls, deterministic-policy explanation, human interruption, transaction-proposal preparation, and direct-submission prohibition.
 
-```text
-Implement the decision phase of GitHub Issue 8 only.
-
-Compare:
-A. EIP-712 or wallet-signed Proof-of-Progress record;
-B. minimal LaunchVault smart contract for milestone tranche release.
-
-Evaluate judging value, implementation time, attack surface, Circle support,
-Arc Testnet reliability, demo clarity, and fallback behavior.
-
-Recommend one. Present architecture, security assumptions, files, tests, and
-exact implementation sequence. Wait for approval before coding or deploying.
-```
-
-### RemixAI prompt if a contract is approved
-
-```text
-Act as a senior Solidity security engineer.
-
-Create the smallest non-upgradeable LaunchVault contract needed to fund a
-project and release milestone tranches on Arc Testnet.
-
-Use Solidity ^0.8.24 and audited OpenZeppelin components. No platform token,
-no proxy, no investment return logic, and no autonomous release.
-
-Required protections:
-- SafeERC20;
-- role-based authorization;
-- pausable;
-- reentrancy protection;
-- custom errors;
-- idempotent vault and milestone IDs;
-- no duplicate release;
-- no release without approval;
-- refund rule;
-- events;
-- complete tests.
-
-First state the purpose, roles, trust assumptions, attacks, and why a contract
-is superior to a signed proof for this MVP. Wait for approval before final code.
-```
-
----
-
-## Prompt 9 — Guided demo
-
-```text
-Implement GitHub Issue 9 only using the launchvault-issue-builder skill.
-
-Build a polished guided founder and backer demo:
-1. create PawPOVAI LaunchVault;
-2. receive/seed 1,000 USDC;
-3. allocate reserves;
-4. show Milestone 1;
-5. submit evidence;
-6. resolve missing business purpose;
-7. calculate eligibility;
-8. approve 250 USDC release;
-9. execute mock or configured Arc Testnet tranche;
-10. update the Backer View.
-
-Include clear mock/testnet labels, accessible mobile UI, all states, demo
-reset, and Playwright tests. Never label a fake hash as live.
-```
-
----
-
-## Prompt 10 — Release review
-
-```text
-Use the launchvault-release-review skill.
-
-Audit ProofSpend LaunchVault for the Arc submission, Swarm Village demo, and
-InvestFest preview. Do not add new scope until the audit is complete.
-
-Run all available checks, complete the seeded demo, review security and
-privacy boundaries, verify transaction evidence, and return a release
-decision with exact remediation order.
-
-Also produce:
-- Arc three-minute script;
-- Swarm Village agent walkthrough;
-- InvestFest 30-second customer pitch;
-- screenshots/evidence checklist;
-- safe fallback plan;
-- final README corrections.
-```
+Custom contracts, signed proof, x402, and nanopayments are not default prompts or MVP dependencies.

@@ -1,435 +1,125 @@
-# ProofSpend LaunchVault — Product and Technical Design
+# ProofSpend LaunchVault — product and technical design
 
-## 1. Product identity
+## Product identity
 
-**Product:** ProofSpend LaunchVault  
 **Tagline:** Fund the vision. Prove the progress. Unlock what comes next.  
-**Category:** Evidence-aware programmable capital  
-**Primary users:** founders, solopreneurs, consultants, creators, accelerators, grant programs, sponsors, and small-business backers  
+**Category:** evidence-aware programmable capital
 **Network:** Arc Testnet  
-**Settlement asset:** USDC  
+**Settlement asset:** USDC
 
-## 2. Problem
+LaunchVault helps founders organize project capital, submit evidence of progress, and participate in explicitly authorized milestone settlement while preserving privacy and an append-only history. It is a testnet prototype, not an investment product, auditor, tax service, or guarantee against fraud.
 
-Small founders often receive money with a plan but manage it through one bank balance, scattered receipts, manual spreadsheets, and informal progress updates. This creates two connected problems:
-
-### Founder pain
+## Canonical authority model
 
-- capital is accidentally spent outside its intended purpose;
-- receipts and business-purpose notes are lost;
-- progress reporting consumes valuable build time;
-- future funding is delayed because evidence is incomplete;
-- project, tax, travel, and operations money are mixed together.
+The system has four separate layers:
 
-### Backer pain
+1. **AI assistance:** extract, match, summarize, and explain evidence.
+2. **Deterministic policy:** validate schemas and atomic-unit money, produce requirement outcomes `PASS`, `REVIEW`, or `FAIL`, and calculate internal eligibility.
+3. **Explicit authority:** an authorized human or evaluator approves an exact action.
+4. **Arc execution:** a typed server-side adapter separately prepares, submits, confirms, and reconciles the transaction.
 
-- use-of-funds reporting arrives late;
-- milestones are difficult to verify;
-- founders are micromanaged through meetings and spreadsheets;
-- funding is released without reliable evidence or delayed by paperwork.
+The AI never calculates final balances, finalizes milestone state, approves or submits a value-moving action, completes/rejects a job, or writes reputation.
 
-## 3. Product promise
+## Canonical Arc flow
 
-LaunchVault connects capital, budgets, evidence, progress, and settlement in one transparent workflow:
+Every protocol write below requires its own exact persisted intent, approval by the authorized role, server-side preparation, immediate pre-submit revalidation, submission, confirmation, and reconciliation. Approval is action-specific and non-transferable: approval for registration does not approve job creation, and approval for job creation does not approve allowance or funding.
 
-```text
-Capital received
-      ↓
-Purpose-based reserves created
-      ↓
-Milestone and release conditions agreed
-      ↓
-Founder completes work and submits evidence
-      ↓
-AI extracts and explains evidence
-      ↓
-Deterministic rules verify the milestone
-      ↓
-Human approval authorizes the next release
-      ↓
-USDC tranche is released on Arc
-      ↓
-Proof-of-Progress record updates the Backer View
-```
+1. Issue #13 prepares an exact ERC-8004 registration intent for the ProofSpend Verification Agent.
+2. The authorized agent owner reviews and approves that exact registration intent.
+3. The server prepares, immediately revalidates, submits, confirms, and reconciles the ERC-8004 registration before the identity is treated as registered.
+4. After Issue #8 dependencies are complete, Issue #8 prepares an exact ERC-8183 job-creation intent.
+5. The authorized client reviews and approves that exact job-creation intent.
+6. The server prepares, immediately revalidates, submits, confirms, and reconciles job creation before the job is treated as created.
+7. Any USDC allowance and ERC-8183 funding operations are prepared as separate exact intents.
+8. The authorized client/funder separately approves each allowance or funding intent.
+9. The server separately prepares, immediately revalidates, submits, confirms, and reconciles each approved allowance or funding write before escrow is treated as funded.
+10. The founder submits receipts, deliverables, and business context offchain.
+11. AI produces structured evidence candidates, mappings, and explanations.
+12. Deterministic policy produces `PASS`, `REVIEW`, or `FAIL` outcomes and internal eligibility.
+13. The provider's deliverable-hash submission is represented by its own exact intent and approved by the authorized provider role.
+14. The server prepares, immediately revalidates, submits, confirms, and reconciles the approved deliverable submission.
+15. Completion or rejection is represented by a separate exact evaluator intent and approved by the authorized evaluator.
+16. The server prepares, immediately revalidates, submits, confirms, and reconciles the approved evaluator action.
+17. USDC settles or becomes refundable only through the confirmed ERC-8183 lifecycle; any refund claim is a separate authorized protocol write.
+18. The application reconciles settlement or refund results before updating confirmed balances.
+19. Any ERC-8004 reputation write is a separate exact intent approved and submitted by an independent reputation writer after the result; the agent owner may not write its own reputation.
 
-The AI helps interpret and organize. Deterministic services and explicit approvals govern money.
+ERC-8004 registration identifies an agent; it does not prove trustworthiness, correctness, auditing, or financial authority. The agent owner may not write reputation for its own agent. Internal `ELIGIBLE` and ERC-8183 `COMPLETED` are different states.
 
-## 4. Differentiation
+## MVP scenario
 
-LaunchVault is not merely:
+The fictional PawPOVAI InvestFest Soft Launch starts with 1,000 test USDC allocated in integer atomic units across Product and platform (350), Marketing (250), InvestFest travel (200), Operations (100), and Contingency (100).
 
-- a receipt scanner;
-- a savings-pocket app;
-- a grant dashboard;
-- an expense reimbursement tool;
-- an investor data room.
+Milestone 1, “Launch identity and outreach ready,” requires a visual identity asset, landing-page screenshot, promotional flyer, two expense records, eligible spend no greater than 150 USDC, and founder confirmation. The proposed next amount is 250 test USDC. The demo must show evidence review, deterministic outcomes, exact approval, and truthful mock or Arc lifecycle states without implying that preparation, submission, or internal eligibility equals settlement.
 
-Its differentiator is **evidence-gated programmable capital**: verified receipts, transactions, deliverables, and business context change the state of project funds and determine whether the next tranche is eligible for release.
+## Core modules
 
-## 5. MVP demonstration
+### LaunchVault Treasury
 
-### Project
+Maintains project capital and purpose reserves using integer atomic units and append-only ledger entries. It shows allocated, available, committed, settled/refunded, and remaining amounts; prevents duplicate allocation; and records reversals rather than deleting history.
 
-**PawPOVAI InvestFest Soft Launch**
+### Deterministic Milestone Engine
 
-### Initial capital
+Stores milestone requirements, spend limit, due date, proposed amount, and application status. Each requirement produces `PASS`, `REVIEW`, or `FAIL` with reason codes and next actions. Application states may include incomplete, needs review, eligible, approved intent, prepared, submitted, confirmed, released/refunded, and rejected, but must not reuse ERC-8183 terms inaccurately.
 
-```text
-1,000 USDC
+### Evidence Engine and Proof Recovery
 
-Product and platform       350
-Marketing                  250
-InvestFest travel          200
-Operations                 100
-Contingency                100
-```
+Captures receipt images, screenshots, transactions, invoices, deliverables, business-purpose statements, and confirmations. Original evidence stays separate from AI-derived fields. Raw receipts and founder-private evidence remain offchain. Recovery identifies the highest-priority gap and asks one question at a time.
 
-### Milestone 1
+### Proof-of-Progress record
 
-**Launch identity and outreach ready**
+Creates an append-only, versioned application record containing requirement outcomes, approved evidence hashes, planned budget, deterministically verified spend, proposed amount, approval, timestamps, ERC-8183 job reference, deliverable commitment, and transaction lifecycle references as available. It is not automatically public or onchain, and a signed proof is not on the default path.
 
-Required evidence:
-
-- logo or visual identity asset;
-- landing-page screenshot;
-- promotional flyer;
-- two verified expense records;
-- total eligible spend at or below 150 USDC;
-- founder confirmation.
+### Backer View
 
-### Demo flow
+Shows only founder-approved information: capital summaries, reserve allocation, requirement outcomes, milestone progress, disclosed settlement/refund state, proof records, and disclosed risks. It hides raw receipts, private notes, unrelated activity, and credentials.
 
-1. Create the PawPOVAI LaunchVault.
-2. Seed or receive 1,000 test USDC.
-3. Allocate funds across reserves.
-4. Display Milestone 1 and its release conditions.
-5. Upload a printing receipt and attach a promotional flyer.
-6. Add the business purpose conversationally.
-7. Match the receipt to a transaction.
-8. Verify evidence through deterministic rules.
-9. Create a Proof-of-Progress record.
-10. Human approves the next 250 USDC tranche.
-11. Execute a mock or Arc Testnet release.
-12. Update the founder dashboard and selective Backer View.
-13. Resolve one missing-proof item.
+### Arc standards layer
 
-## 6. Core modules
+- **Issue #13 / ERC-8004:** agent identity registration/verification and independent reputation governance only.
+- **Issue #8 / ERC-8183:** job creation/funding, provider delivery, evaluator completion/rejection, settlement/refund, confirmation, and reconciliation only.
 
-### 6.1 LaunchVault Treasury
-
-Creates project-specific capital vaults with purpose-based reserves.
+Issue #8 consumes the registered identity but does not absorb Issue #13.
 
-Capabilities:
+## Agent architecture
 
-- receive or seed USDC;
-- define reserve percentages or fixed amounts;
-- show allocated, available, committed, released, and remaining balances;
-- use integer atomic units;
-- prevent duplicate allocation;
-- preserve every adjustment as a ledger entry.
+The Founder Copilot routes and explains; Evidence Agent creates structured candidates; Milestone Agent explains deterministic results; Recovery Agent finds gaps; Backer Brief Agent summarizes approved disclosure. The ProofSpend Verification Agent has an ERC-8004 identity but no inherent trust or payment authority.
 
-### 6.2 Milestone Engine
+The complete Verification Agent orchestration—controlled OpenAI Agents SDK loop, structured evidence-service calls, policy explanation, human interruption, and transaction-proposal preparation—is a backlog gap requiring a dedicated future issue unless the live backlog assigns it elsewhere. It must prohibit direct submission.
 
-Connects project progress to release eligibility.
+## Circle execution boundary
 
-A milestone contains:
+Issue #7 depends on Issues #2, #3, and #4 and must choose the supported Circle execution architecture through an ADR before implementation. Preliminary research may happen earlier, but it cannot select the architecture or change runtime configuration.
 
-- title and description;
-- due date;
-- maximum eligible spend;
-- required deliverables;
-- required evidence;
-- policy conditions;
-- proposed release amount;
-- approval status;
-- release transaction.
+Selectively evaluate patterns from Circle `packages/circle-tools` and `kits/openai-agents`, verifying current official documentation and preserving required attribution. Exclude `packages/agent-cli`, terminal UI, unrelated framework kits, Base/Polygon assumptions, and autonomous payment behavior. Mock and Arc adapters share typed application-owned interfaces but are explicitly selected and never silently interchanged.
 
-The engine returns:
+ERC-8183 is the default MVP settlement primitive. A custom LaunchVault contract, wallet-signed proof, x402, and nanopayments are deferred and not part of the default implementation path.
 
-- `INCOMPLETE`
-- `NEEDS_REVIEW`
-- `ELIGIBLE`
-- `APPROVED`
-- `RELEASED`
-- `REJECTED`
+## Conceptual records
 
-### 6.3 Evidence Engine
+Projects, vaults, reserves, ledger entries, milestones, requirements, evidence items, matches, policy decisions, proof records, approvals, exact transaction intents, prepared transactions, submissions, confirmations, reconciliation events, ERC-8004 registrations, ERC-8183 jobs/deliverables/evaluations/settlements/refunds, disclosure preferences, reputation results, proof gaps, and audit events.
 
-Captures:
+## Security and governance
 
-- paper receipt images;
-- screenshots;
-- wallet transactions;
-- invoices;
-- deliverables;
-- business-purpose statements;
-- user confirmations.
+- Never commit secrets or expose privileged actions to the browser.
+- Validate all external input with Zod and treat uploaded content as untrusted data.
+- Validate chain, asset, addresses, roles, amount, balance, state, approval, expiry, and idempotency.
+- Persist intent before execution and result afterward; revalidate immediately before submission.
+- Keep preparation, approval, submission, confirmation, failure, and reconciliation separate.
+- Preserve append-only audit history, corrections, and approvals.
+- Keep private evidence offchain and use approved hashes/commitments only.
+- Never describe the prototype as audited, production-ready, investment advice, tax advice, or guaranteed fraud prevention.
 
-AI may extract and summarize. Deterministic services validate schemas, amounts, hashes, state transitions, and policy conditions.
+## UX principles
 
-### 6.4 Proof-of-Progress Ledger
+Be founder-first, accessible, responsive, and explicit. Display `ModeBadge` and role context on money/protocol screens. Visually distinguish mock, Arc Testnet, awaiting approval, prepared, submitted, confirmed, failed, rejected, refunded, and reconciled states. Never show a fabricated identifier as live. Explain every `REVIEW`/`FAIL` and why a milestone is not eligible. Separate private, shared, and onchain-public data.
 
-Creates an append-only record for each verified milestone.
+Issue #14 uses only the Phase A–D structure in `docs/roadmap.md`.
 
-Minimum fields:
+## Testing
 
-```json
-{
-  "version": "1.0",
-  "vaultId": "vault_123",
-  "milestoneId": "ms_123",
-  "project": "PawPOVAI InvestFest Soft Launch",
-  "plannedBudgetAtomic": "150000000",
-  "verifiedSpendAtomic": "118000000",
-  "evidenceHashes": ["sha256:..."],
-  "policyDecision": "ELIGIBLE",
-  "releaseAmountAtomic": "250000000",
-  "approvedBy": "founder",
-  "releaseTransactionId": null,
-  "createdAt": "2026-08-01T18:00:00Z"
-}
-```
+Test atomic arithmetic, allocation/rounding, deterministic policy, malformed agent output, duplicate evidence, invalid transitions, disclosure filtering, exact approvals, stale-intent rejection, idempotency, preparation/submission separation, ERC-8183 completion/rejection and settlement/refund, owner self-reputation prohibition, confirmation/reconciliation, and truthful UI states.
 
-A later version may be signed using the project wallet.
+## Definition of done
 
-### 6.5 Backer View
-
-Shows only founder-approved information:
-
-- capital received;
-- reserve allocation;
-- verified spend;
-- milestone status;
-- released tranches;
-- remaining capital;
-- proof records;
-- disclosed risks or delays.
-
-It must not expose full receipts, private notes, or unrelated business activity by default.
-
-### 6.6 Proof Recovery
-
-Identifies gaps such as:
-
-- transaction without receipt;
-- receipt without transaction;
-- deliverable missing;
-- business purpose missing;
-- possible duplicate;
-- milestone condition incomplete.
-
-It asks one best next question at a time.
-
-### 6.7 BillBack
-
-BillBack remains a future or P2 module for client-reimbursable expenses. It is not required for the first LaunchVault release.
-
-## 7. Agent architecture
-
-Use a bounded coordinator with specialist agents.
-
-### Founder Copilot
-
-Owns the conversation, explains vault status, and delegates tasks. It cannot release funds.
-
-### Evidence Agent
-
-Extracts structured receipt and deliverable evidence. It cannot verify its own output as final.
-
-### Milestone Agent
-
-Summarizes progress and prepares an eligibility proposal. Deterministic rules produce the status.
-
-### Recovery Agent
-
-Finds missing evidence and asks one contextual question.
-
-### Backer Brief Agent
-
-Produces a selective progress summary from approved records. It cannot expose non-approved evidence.
-
-### Deterministic services
-
-The following remain code-owned:
-
-- money arithmetic;
-- reserve allocation;
-- evidence hashes;
-- duplicate detection;
-- policy evaluation;
-- milestone state transitions;
-- release authorization;
-- transaction idempotency;
-- audit events.
-
-## 8. Technical stack
-
-- Bun workspace
-- Node.js version compatible with the pinned Circle starter and OpenAI Agents SDK; prefer Node 22 LTS unless the audited starter requires otherwise
-- Next.js App Router
-- TypeScript strict mode
-- React
-- Tailwind CSS
-- shadcn/ui
-- OpenAI Agents SDK
-- Zod
-- Supabase Postgres after mock-first foundation
-- Circle Agent Stack
-- Circle Agent Wallets
-- Arc Testnet
-- USDC
-- Vitest
-- React Testing Library
-- Playwright
-- Vercel
-- RemixAI for an optional minimal Solidity contract after the app flow works
-
-## 9. Circle and Arc use
-
-### Required for MVP
-
-- Circle Agent Wallet on `ARC-TESTNET`;
-- wallet address and balance display;
-- test USDC transfer for one approved tranche;
-- transaction status and explorer reference;
-- Circle tooling behind a typed server-side adapter.
-
-### Strong P1 additions
-
-- wallet-signed Proof-of-Progress record;
-- `circle wallet execute` interaction with a minimal LaunchVault contract;
-- one x402 service payment when a reliable service is available.
-
-### Important testnet boundary
-
-Do not represent Circle mainnet-only spending policies as natively enforced on Arc Testnet. Testnet release rules must be enforced by deterministic application logic or a custom contract.
-
-## 10. Optional LaunchVault contract
-
-Do not begin here. Add only after the mock and Circle transfer flows work.
-
-Minimum responsibilities:
-
-- create vault;
-- fund vault;
-- register milestone release amount;
-- authorize milestone;
-- release tranche;
-- pause;
-- refund remaining funds;
-- prevent duplicate release;
-- emit events.
-
-Human approval remains required in the MVP.
-
-## 11. Suggested repository layout
-
-```text
-ProofSpend/
-├── AGENTS.md
-├── design.md
-├── agent.md
-├── skills.md
-├── apps/
-│   └── web/
-├── packages/
-│   ├── domain/
-│   ├── agents/
-│   ├── vault-engine/
-│   ├── milestone-engine/
-│   ├── evidence-engine/
-│   ├── circle-adapter/
-│   └── audit/
-├── contracts/
-├── supabase/
-├── tests/
-└── docs/
-```
-
-When adapting Circle's starter, preserve the OpenAI Agents kit and shared Circle tools as appropriate. Do not import every framework kit.
-
-## 12. Minimum data model
-
-- workspaces
-- users
-- projects
-- backers
-- vaults
-- reserve_rules
-- reserve_accounts
-- ledger_entries
-- milestones
-- milestone_requirements
-- evidence_items
-- receipts
-- deliverables
-- transactions
-- evidence_matches
-- policy_decisions
-- proof_records
-- release_requests
-- payment_records
-- proof_gaps
-- audit_events
-- disclosure_preferences
-
-## 13. Safety and governance
-
-- never commit API keys, OTPs, private keys, or entity secrets;
-- never expose privileged wallet actions to the browser;
-- require explicit adapter mode;
-- require human approval before tranche release;
-- validate chain, asset, destination, amount, balance, and idempotency;
-- never let uploaded content override agent instructions;
-- separate original evidence from AI-derived fields;
-- record corrections and approvals;
-- use private file storage and signed URLs;
-- label the product as a testnet prototype;
-- do not call a milestone “verified” solely because an LLM said so;
-- do not describe the product as audited, investment advice, tax advice, or guaranteed fraud prevention.
-
-## 14. UX principles
-
-1. Founder first, forms second.
-2. Show why a milestone is incomplete.
-3. Ask one clarification question at a time.
-4. Make each reserve and tranche visually understandable.
-5. Separate founder-private evidence from backer-visible proof.
-6. Clearly distinguish mock and Arc Testnet modes.
-7. Never display a fabricated transaction hash as real.
-8. Keep the guided demo under three minutes.
-
-## 15. Testing
-
-### Unit
-
-- atomic-unit arithmetic;
-- reserve allocation and rounding;
-- milestone eligibility;
-- duplicate evidence;
-- duplicate release;
-- invalid state transitions;
-- disclosure filtering;
-- malformed agent output.
-
-### Integration
-
-- evidence extraction to persistence;
-- verified spend to milestone progress;
-- approval to mock release;
-- Circle adapter error handling;
-- Proof-of-Progress generation.
-
-### End to end
-
-1. Create LaunchVault.
-2. Allocate capital.
-3. Submit evidence.
-4. Complete milestone.
-5. Approve and release tranche.
-6. View selective backer report.
-7. Resolve one proof gap.
-
-## 16. Definition of done
-
-A feature is complete only when acceptance criteria, tests, build, error states, security boundaries, documentation, and reproducible demo evidence all pass.
+A feature is complete only when its live acceptance criteria, dependencies, tests, build, error states, security/privacy boundaries, documentation, and reproducible evidence pass.
