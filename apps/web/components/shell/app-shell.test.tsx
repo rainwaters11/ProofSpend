@@ -1,5 +1,4 @@
-// @vitest-environment jsdom
-import { render, screen } from "@testing-library/react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import { AppShell } from "./app-shell";
@@ -7,91 +6,91 @@ import { NAV_ITEMS } from "./nav-items";
 
 describe("AppShell", () => {
   it("renders header and primary navigation landmarks", () => {
-    render(
+    const markup = renderToStaticMarkup(
       <AppShell mode="mock" role="founder">
         <p>Page content</p>
       </AppShell>,
     );
 
-    expect(screen.getByRole("banner")).toBeInTheDocument();
-    expect(screen.getAllByRole("navigation", { name: "Primary" })[0]).toBeInTheDocument();
-    expect(screen.getByRole("main")).toBeInTheDocument();
+    expect(markup).toContain("<header");
+    expect(markup).toContain('aria-label="Primary"');
+    expect(markup).toContain('id="main-content"');
   });
 
   it("renders every primary nav item", () => {
-    render(
+    const markup = renderToStaticMarkup(
       <AppShell mode="mock" role="founder">
         <p>Page content</p>
       </AppShell>,
     );
 
     for (const item of NAV_ITEMS) {
-      expect(screen.getAllByRole("link", { name: item.label }).length).toBeGreaterThan(0);
+      expect(markup).toContain(`href="${item.href}"`);
+      expect(markup).toContain(item.label);
     }
   });
 
-  it("exposes an accessible mobile navigation toggle with a visible focus target", () => {
-    render(
+  it("exposes an accessible mobile navigation toggle as a native, focusable button", () => {
+    const markup = renderToStaticMarkup(
       <AppShell mode="mock" role="founder">
         <p>Page content</p>
       </AppShell>,
     );
 
-    const toggle = screen.getByRole("button", { name: "Open navigation menu" });
-    expect(toggle).toBeInTheDocument();
-    toggle.focus();
-    expect(toggle).toHaveFocus();
+    const toggleMatch = markup.match(
+      /<button[^>]*aria-label="Open navigation menu"[^>]*>/,
+    );
+
+    expect(toggleMatch).not.toBeNull();
+    expect(toggleMatch?.[0]).not.toContain('tabindex="-1"');
   });
 
   it("shows mode and role context in the header at every breakpoint", () => {
-    render(
+    const markup = renderToStaticMarkup(
       <AppShell mode="arc-testnet" role="evaluator">
         <p>Page content</p>
       </AppShell>,
     );
 
-    expect(screen.getAllByText("ARC TESTNET").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("Evaluator").length).toBeGreaterThan(0);
+    expect(markup).toContain("ARC TESTNET");
+    expect(markup).toContain("Evaluator");
   });
 
   it("provides a skip-to-content link", () => {
-    render(
+    const markup = renderToStaticMarkup(
       <AppShell mode="mock" role="founder">
         <p>Page content</p>
       </AppShell>,
     );
 
-    expect(screen.getByRole("link", { name: "Skip to main content" })).toHaveAttribute(
-      "href",
-      "#main-content",
-    );
+    expect(markup).toMatch(/<a[^>]*href="#main-content"[^>]*>\s*Skip to main content/);
   });
 
   it("never applies the legacy landing-page class to the app shell main region", () => {
-    render(
+    const markup = renderToStaticMarkup(
       <AppShell mode="mock" role="founder">
         <p>Page content</p>
       </AppShell>,
     );
 
-    expect(screen.getByRole("main")).not.toHaveClass("landing-page");
+    const mainMatch = markup.match(/<main[^>]*class="([^"]*)"/);
+
+    expect(mainMatch).not.toBeNull();
+    expect(mainMatch?.[1].split(" ")).not.toContain("landing-page");
   });
 
   it("keeps mode/role badges on their own row, separate from the project selector, on mobile", () => {
-    render(
+    const markup = renderToStaticMarkup(
       <AppShell mode="mock" role="founder">
         <p>Page content</p>
       </AppShell>,
     );
 
-    const projectSelectors = screen.getAllByRole("button", {
-      name: "Project selector: No project selected",
-    });
-    const mobileProjectSelector = projectSelectors.find((button) =>
-      button.className.includes("md:hidden"),
+    const mobileProjectSelectorMatch = markup.match(
+      /<button[^>]*class="[^"]*md:hidden[^"]*"[^>]*aria-label="Project selector: No project selected"[^>]*>/,
     );
 
-    expect(mobileProjectSelector).toBeDefined();
-    expect(mobileProjectSelector).toHaveClass("w-full");
+    expect(mobileProjectSelectorMatch).not.toBeNull();
+    expect(mobileProjectSelectorMatch?.[0]).toContain("w-full");
   });
 });

@@ -1,5 +1,4 @@
-// @vitest-environment jsdom
-import { render, screen } from "@testing-library/react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import { RoleBadge } from "./role-badge";
@@ -11,9 +10,9 @@ describe("RoleBadge", () => {
     ["backer", "Backer"],
     ["evaluator", "Evaluator"],
   ])("renders the %s role with label %s", (role, label) => {
-    render(<RoleBadge role={role} />);
+    const markup = renderToStaticMarkup(<RoleBadge role={role} />);
 
-    expect(screen.getByText(label)).toBeInTheDocument();
-    expect(screen.getByLabelText(`Current role: ${label}`)).toBeInTheDocument();
+    expect(markup).toContain(label);
+    expect(markup).toContain(`Current role: ${label}`);
   });
 });

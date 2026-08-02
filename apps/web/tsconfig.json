@@ -5,7 +5,7 @@
     "jsx": "preserve",
     "lib": ["dom", "dom.iterable", "esnext"],
     "plugins": [{ "name": "next" }],
-    "types": ["node", "vitest/globals", "@testing-library/jest-dom"],
+    "types": ["node", "vitest/globals"],
     "baseUrl": ".",
     "paths": {
       "@/*": ["./*"]
