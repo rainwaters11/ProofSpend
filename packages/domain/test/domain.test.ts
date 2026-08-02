@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
-  addMoney, AgenticJobStatusSchema, AgentReputationRefSchema, ArcTransactionRefSchema, compareMoney,
-  createPawPovAiSeed, EvidenceItemSchema, IdempotencyConflictError, InMemoryAuditRepository,
+  addMoney, AgenticJobRefSchema, AgenticJobStatusSchema, AgentIdentityRefSchema, AgentReputationRefSchema,
+  AllocationOperationRecordSchema, ApprovalRecordSchema, ArcTransactionRefSchema, compareMoney,
+  createPawPovAiSeed, EvidenceItemSchema, filterBackerDisclosure, IdempotencyConflictError, InMemoryAuditRepository,
   InMemoryIdempotencyRepository, InMemoryRepository, InvalidTransitionError, mapAgenticJobToApplication,
   MockAgenticJobAdapter, MockIdentityAdapter, MockWalletReferenceAdapter, money, MoneyAmountSchema, MoneyError,
-  subtractMoney, transitionAgenticJob, transitionApplication,
+  RecoveryOperationRecordSchema, SettlementRecordSchema, SubmissionOperationRecordSchema, subtractMoney,
+  TransactionRecordSchema, transitionAgenticJob, transitionApplication,
 } from "../src";
 
 const context = { aggregateType: "milestone", aggregateId: "m1", eventId: "event:1", occurredAt: "2026-01-01T00:00:00.000Z", actor: { actorId: "system", actorType: "SYSTEM" as const } };
@@ -66,26 +68,67 @@ describe("repositories and idempotency", () => {
     expect(executions).toBe(1);
     expect(() => repository.execute("release", "key", "different", action)).toThrow(IdempotencyConflictError);
   });
+  it.each([
+    ["allocation", AllocationOperationRecordSchema, { id: "allocation:1", reserveId: "reserve:1", idempotencyKey: "allocation:key", amount: money("USDC", "1"), createdAt: context.occurredAt }],
+    ["approval", ApprovalRecordSchema, { id: "approval:1", actionType: "RELEASE", exactIntentHash: `sha256:${"a".repeat(64)}`, idempotencyKey: "approval:key", decision: "PENDING", approver: null, expiresAt: context.occurredAt, decidedAt: null }],
+    ["submission", SubmissionOperationRecordSchema, { id: "submission:1", transactionId: "transaction:1", idempotencyKey: "submission:key", createdAt: context.occurredAt }],
+    ["settlement", SettlementRecordSchema, { id: "settlement:1", releaseRequestId: "release:1", idempotencyKey: "settlement:key", amount: money("USDC", "1"), state: "PENDING", job: null, transaction: null, updatedAt: context.occurredAt }],
+    ["recovery", RecoveryOperationRecordSchema, { id: "recovery:1", proofGapId: "gap:1", idempotencyKey: "recovery:key", responseReference: "private:response:1", createdAt: context.occurredAt }],
+  ])("directly models and deduplicates %s operations", (scope, schema, record) => {
+    const parsed = schema.parse(record); const repository = new InMemoryIdempotencyRepository(); let calls = 0;
+    expect(repository.execute(scope, parsed.idempotencyKey, JSON.stringify(parsed), () => ({ parsed, calls: ++calls }))).toEqual(repository.execute(scope, parsed.idempotencyKey, JSON.stringify(parsed), () => ({ parsed, calls: ++calls })));
+    expect(calls).toBe(1);
+  });
 });
 
 describe("protocol-safe mocks and privacy", () => {
   it("uses visibly synthetic wallet and unregistered identity references", () => {
     expect(new MockWalletReferenceAdapter().getReference()).toMatchObject({ mode: "MOCK", canSubmitTransactions: false, balanceAtomic: "1000000000" });
-    expect(new MockIdentityAdapter().getIdentity()).toMatchObject({ isMock: true, registrationStatus: "UNREGISTERED", registrationTransactionHash: null });
+    expect(new MockIdentityAdapter().getIdentity()).toMatchObject({ isMock: true, registrationStatus: "UNREGISTERED", registrationReference: null, metadataVersion: "1" });
   });
-  it("does not permit owner-written reputation", () => {
-    expect(() => AgentReputationRefSchema.parse({ standard: "ERC-8004", chainId: "mock", registryAddress: "mock", agentId: "mock", reputationId: "mock", writerAddress: "same", agentOwnerAddress: "same", value: "mock", transactionHash: null, recordedAt: null, isMock: true })).toThrow();
+  it("does not permit case-insensitive owner-written reputation", () => {
+    expect(() => AgentReputationRefSchema.parse({ standard: "ERC-8004", network: "mock:network", chainId: "mock:chain", registryAddress: "mock:registry", agentId: "mock:agent", writerAddress: "mock:Writer", agentOwnerAddress: "MOCK:writer", eventReference: "mock:event", score: 1, tag: null, recordedAt: null, isMock: true })).toThrow();
   });
-  it("does not represent prepared activity as confirmed", () => {
-    expect(() => ArcTransactionRefSchema.parse({ chain: "ARC_TESTNET", chainId: "synthetic", transactionHash: null, status: "SETTLED", blockNumber: null, explorerUrl: null, isMock: true })).toThrow();
+  it("rejects confirmed transaction state without a hash", () => {
+    const transaction = { network: "ARC_TESTNET" as const, chainId: "synthetic:chain", transactionHash: null, status: "CONFIRMED" as const, blockNumber: null, blockHash: null, explorerUrl: null, operationType: "SETTLEMENT" as const, isMock: true };
+    expect(() => ArcTransactionRefSchema.parse(transaction)).toThrow();
+    expect(() => TransactionRecordSchema.parse({ id: "tx:1", intentId: "intent:1", idempotencyKey: "tx:key", amount: money("USDC", "1"), operationState: "CONFIRMED", arcTransaction: null, createdAt: context.occurredAt, updatedAt: context.occurredAt })).toThrow();
+  });
+  it("rejects registered identity without its registration reference", () => {
+    const identity = new MockIdentityAdapter().getIdentity();
+    expect(() => AgentIdentityRefSchema.parse({ ...identity, registrationStatus: "REGISTERED" })).toThrow();
+  });
+  it("rejects non-synthetic mock identifiers and synthetic live identifiers", () => {
+    const identity = new MockIdentityAdapter().getIdentity();
+    expect(() => AgentIdentityRefSchema.parse({ ...identity, agentId: "not-mock" })).toThrow();
+    expect(() => AgentIdentityRefSchema.parse({ ...identity, isMock: false })).toThrow();
   });
   it("keeps evidence private and excludes raw content and notes", () => {
     const evidence = EvidenceItemSchema.parse({ id: "e1", projectId: "p1", kind: "RECEIPT", sourceHash: `sha256:${"a".repeat(64)}`, storageRef: "private://e1", visibility: "FOUNDER_PRIVATE", submittedAt: "2026-01-01T00:00:00.000Z", rawContent: "secret", privateNotes: "secret" });
     expect(evidence).not.toHaveProperty("rawContent"); expect(evidence).not.toHaveProperty("privateNotes");
   });
   it("transitions only mock jobs without contract behavior", () => {
-    const job = { standard: "ERC-8183" as const, chainId: "synthetic", contractAddress: "mock:not-a-contract", jobId: "mock:job", clientAddress: "mock:client", providerAddress: "mock:provider", evaluatorAddress: "mock:evaluator", status: "OPEN" as const, deliverableHash: null, transaction: null, isMock: true };
+    const job = { standard: "ERC-8183" as const, network: "synthetic:arc-testnet", chainId: "synthetic:chain", contractAddress: "mock:not-a-contract", jobId: "mock:job", clientAddress: "mock:client", providerAddress: "mock:provider", evaluatorAddress: "mock:evaluator", budget: money("USDC", "250000000"), expiresAt: "2026-02-01T00:00:00.000Z", descriptionReference: "mock:description", deliverableReference: null, reasonReference: null, status: "OPEN" as const, transaction: null, isMock: true };
+    expect(AgenticJobRefSchema.parse(job)).toEqual(job);
     expect(new MockAgenticJobAdapter().transition(job, "FUNDED", context).job.status).toBe("FUNDED"); expect(job.status).toBe("OPEN");
+  });
+  it("requires every protocol-reference field", () => {
+    const identity = new MockIdentityAdapter().getIdentity(); const { metadataVersion: _metadataVersion, ...missingIdentity } = identity;
+    expect(() => AgentIdentityRefSchema.parse(missingIdentity)).toThrow();
+    expect(() => AgentReputationRefSchema.parse({ standard: "ERC-8004", network: "mock:network", chainId: "mock:chain", registryAddress: "mock:registry", agentId: "mock:agent", writerAddress: "mock:writer", agentOwnerAddress: "mock:owner", eventReference: "mock:event", score: null, tag: null, recordedAt: null, isMock: true })).toThrow();
+    expect(() => ArcTransactionRefSchema.parse({ network: "ARC_TESTNET", chainId: "synthetic:chain", transactionHash: null, status: "PREPARED", blockNumber: null, blockHash: null, explorerUrl: null, isMock: true })).toThrow();
+    expect(() => AgenticJobRefSchema.parse({ standard: "ERC-8183", network: "mock:network", chainId: "mock:chain", contractAddress: "mock:contract", jobId: "mock:job", clientAddress: "mock:client", providerAddress: "mock:provider", evaluatorAddress: "mock:evaluator", status: "OPEN", transaction: null, isMock: true })).toThrow();
+  });
+});
+
+describe("Backer-safe disclosure filtering", () => {
+  it("allowlists approved disclosures and excludes every founder-private value", () => {
+    const seed = createPawPovAiSeed(); const secret = "DO-NOT-DISCLOSE";
+    const evidence = EvidenceItemSchema.parse({ id: "evidence:private", projectId: seed.project.id, kind: "RECEIPT", sourceHash: `sha256:${"b".repeat(64)}`, storageRef: `private://${secret}`, visibility: "FOUNDER_PRIVATE", submittedAt: context.occurredAt, rawContent: secret, privateNotes: secret });
+    const proofs = [{ id: "proof:approved", milestoneId: seed.milestone.id, version: 1, approvedEvidenceHashes: [evidence.sourceHash], recordHash: `sha256:${"c".repeat(64)}`, visibility: "BACKER_SHARED" as const, createdAt: context.occurredAt }, { id: "proof:hidden", milestoneId: seed.milestone.id, version: 1, approvedEvidenceHashes: [], recordHash: `sha256:${"d".repeat(64)}`, visibility: "FOUNDER_PRIVATE" as const, createdAt: context.occurredAt }];
+    const result = filterBackerDisclosure({ project: seed.project, evidence: [evidence], proofs, settlements: [{ id: "settlement:private", releaseRequestId: "release:1", idempotencyKey: "settlement:key", amount: money("USDC", "1"), state: "PENDING", job: null, transaction: null, updatedAt: context.occurredAt }], preferences: { ...seed.disclosurePreferences, discloseProofRecords: true, approvedProofIds: ["proof:approved"], discloseSettlementState: false } });
+    expect(result.proofs.map((proof) => proof.id)).toEqual(["proof:approved"]); expect(result.settlements).toEqual([]); expect(result.evidence).toEqual([]);
+    const serialized = JSON.stringify(result); expect(serialized).not.toContain(secret); expect(serialized).not.toContain("storageRef"); expect(serialized).not.toContain("privateNotes"); expect(serialized).not.toContain("proof:hidden"); expect(serialized).not.toContain("settlement:private");
   });
 });
 
