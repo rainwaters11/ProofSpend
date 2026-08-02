@@ -4,12 +4,11 @@ Live issue dependencies override this synchronized map if they change.
 
 ```text
 #16 -> #2 -> #14A -> #3 -> #4 -> #14B/eligible #14C -> #5 -> #6
-                                                        |
+
                          #2 + #3 + #4 ----------------> #7
                          #2 + #7 ---------------------> #13 (ERC-8004)
               #4 + #5 + #6 + #7 + #13 -------------> #8  (ERC-8183)
-                                                        |
-                                                        v
+
                          #14D -> #9 -> #10
 ```
 
