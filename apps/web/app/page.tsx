@@ -4,7 +4,7 @@ export default function Home() {
   const environment = getEnvironment();
 
   return (
-    <main>
+    <main className="landing-page">
       <section className="hero" aria-labelledby="page-title">
         <p className="eyebrow">ProofSpend LaunchVault</p>
         <h1 id="page-title">Fund the vision. Prove the progress. Unlock what comes next.</h1>

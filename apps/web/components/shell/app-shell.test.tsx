@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
@@ -42,15 +43,15 @@ describe("AppShell", () => {
     expect(toggle).toHaveFocus();
   });
 
-  it("shows mode and role context in the header", () => {
+  it("shows mode and role context in the header at every breakpoint", () => {
     render(
       <AppShell mode="arc-testnet" role="evaluator">
         <p>Page content</p>
       </AppShell>,
     );
 
-    expect(screen.getByText("ARC TESTNET")).toBeInTheDocument();
-    expect(screen.getByText("Evaluator")).toBeInTheDocument();
+    expect(screen.getAllByText("ARC TESTNET").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Evaluator").length).toBeGreaterThan(0);
   });
 
   it("provides a skip-to-content link", () => {
@@ -64,5 +65,33 @@ describe("AppShell", () => {
       "href",
       "#main-content",
     );
+  });
+
+  it("never applies the legacy landing-page class to the app shell main region", () => {
+    render(
+      <AppShell mode="mock" role="founder">
+        <p>Page content</p>
+      </AppShell>,
+    );
+
+    expect(screen.getByRole("main")).not.toHaveClass("landing-page");
+  });
+
+  it("keeps mode/role badges on their own row, separate from the project selector, on mobile", () => {
+    render(
+      <AppShell mode="mock" role="founder">
+        <p>Page content</p>
+      </AppShell>,
+    );
+
+    const projectSelectors = screen.getAllByRole("button", {
+      name: "Project selector: No project selected",
+    });
+    const mobileProjectSelector = projectSelectors.find((button) =>
+      button.className.includes("md:hidden"),
+    );
+
+    expect(mobileProjectSelector).toBeDefined();
+    expect(mobileProjectSelector).toHaveClass("w-full");
   });
 });

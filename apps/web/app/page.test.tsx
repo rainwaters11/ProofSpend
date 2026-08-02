@@ -32,4 +32,10 @@ describe("Home", () => {
 
     expect(() => renderToStaticMarkup(Home())).toThrow();
   });
+
+  it("scopes legacy landing-page styles to the landing-page class", () => {
+    const markup = renderToStaticMarkup(Home());
+
+    expect(markup).toContain('class="landing-page"');
+  });
 });

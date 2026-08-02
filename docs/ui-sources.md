@@ -21,7 +21,7 @@ Records components adapted from approved open-source sources for Issue #14. See 
 
 ### Underlying Radix packages (MIT)
 
-`@radix-ui/react-dialog`, `@radix-ui/react-tooltip`, `@radix-ui/react-separator`, `@radix-ui/react-slot` — all MIT-licensed, versions pinned in `apps/web/package.json` and `bun.lock`.
+`@radix-ui/react-dialog`, `@radix-ui/react-tooltip`, `@radix-ui/react-separator`, `@radix-ui/react-slot` — all MIT-licensed. `apps/web/package.json` declares them with caret (`^`) ranges, consistent with this repo's existing dependency style; the exact resolved versions actually installed are locked by the committed `bun.lock` (`@radix-ui/react-dialog@1.1.23`, `@radix-ui/react-tooltip@1.2.16`, `@radix-ui/react-separator@1.1.15`, `@radix-ui/react-slot@1.3.3` as of this phase) and only change via an explicit `bun install`/`bun update` that regenerates the lockfile.
 
 ### Not used in Phase A
 

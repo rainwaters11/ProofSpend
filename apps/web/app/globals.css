@@ -214,8 +214,12 @@ body {
   }
 }
 
-/* Legacy landing-page styles (Phase B owns landing-page content/build). */
-main {
+/*
+  Legacy landing-page styles (Phase B owns landing-page content/build).
+  Scoped to .landing-page so they never apply to /app/* or /proof/* shells,
+  which are laid out entirely by their own Tailwind utility classes.
+*/
+main.landing-page {
   align-items: center;
   background: radial-gradient(circle at top right, #174c38 0, #081510 48%);
   display: flex;
@@ -223,13 +227,13 @@ main {
   padding: 2rem;
 }
 
-.hero {
+.landing-page .hero {
   margin: 0 auto;
   max-width: 62rem;
   width: 100%;
 }
 
-.eyebrow {
+.landing-page .eyebrow {
   color: #80f0b8;
   font-size: 0.875rem;
   font-weight: 700;
@@ -237,7 +241,7 @@ main {
   text-transform: uppercase;
 }
 
-.hero h1 {
+.landing-page .hero h1 {
   font-size: clamp(2.5rem, 7vw, 5.75rem);
   letter-spacing: -0.055em;
   line-height: 0.98;
@@ -245,14 +249,14 @@ main {
   max-width: 14ch;
 }
 
-.summary {
+.landing-page .summary {
   color: #b9cfc3;
   font-size: 1.2rem;
   line-height: 1.6;
   max-width: 42rem;
 }
 
-.mode-notice {
+.landing-page .mode-notice {
   background: #10261c;
   border: 1px solid #3f8f69;
   border-radius: 1rem;
@@ -263,16 +267,16 @@ main {
   width: fit-content;
 }
 
-.mode-notice strong {
+.landing-page .mode-notice strong {
   color: #80f0b8;
   letter-spacing: 0.08em;
 }
 
-.mode-notice small {
+.landing-page .mode-notice small {
   color: #9ab5a6;
 }
 
-.steps {
+.landing-page .steps {
   display: flex;
   flex-wrap: wrap;
   gap: 1rem;
@@ -281,7 +285,7 @@ main {
   padding: 0;
 }
 
-.steps li {
+.landing-page .steps li {
   border-bottom: 2px solid #80f0b8;
   font-size: 1.1rem;
   font-weight: 700;
@@ -289,7 +293,7 @@ main {
 }
 
 @media (max-width: 40rem) {
-  main {
+  main.landing-page {
     padding: 1.25rem;
   }
 }
