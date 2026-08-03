@@ -9,7 +9,7 @@ import {
   MockAgenticJobAdapter, MockIdentityAdapter, MockWalletReferenceAdapter, money, MoneyAmountSchema, MoneyError,
   RecoveryOperationRecordSchema, ReleaseRequestSchema, SettlementRecordSchema, SubmissionOperationRecordSchema, subtractMoney,
   ReconciliationRecordSchema, TransactionRecordSchema, transitionAgenticJob, transitionApplication,
-  validateExecutionAuthorization, validateReconciliation, validateReleaseConfirmation,
+  hashCanonicalExecutionIntent, serializeCanonicalExecutionIntent, validateExecutionAuthorization, validateReconciliation, validateReleaseConfirmation,
 } from "../src";
 
 const context = { aggregateType: "milestone", aggregateId: "m1", eventId: "event:1", occurredAt: "2026-01-01T00:00:00.000Z", actor: { actorId: "system", actorType: "SYSTEM" as const } };
@@ -161,7 +161,7 @@ describe("protocol-safe mocks and privacy", () => {
   it("rejects confirmed transaction state without a hash", () => {
     const transaction = { network: "ARC_TESTNET" as const, chainId: "synthetic:chain", transactionHash: null, status: "CONFIRMED" as const, blockNumber: null, blockHash: null, explorerUrl: null, operationType: "SETTLEMENT" as const, isMock: true };
     expect(() => ArcTransactionRefSchema.parse(transaction)).toThrow();
-    expect(() => TransactionRecordSchema.parse({ id: "tx:1", projectId: "project:1", intentId: "intent:1", approvalId: "approval:1", approvalBindingId: "binding:1", reconciliationId: null, idempotencyKey: "tx:key", amount: money("USDC", "1"), operationState: "CONFIRMED", arcTransaction: null, createdAt: context.occurredAt, updatedAt: context.occurredAt })).toThrow();
+    expect(() => TransactionRecordSchema.parse({ id: "tx:1", projectId: "project:1", releaseRequestId: "release:1", intentId: "intent:1", destinationReference: "mock:recipient", approvalId: "approval:1", approvalBindingId: "binding:1", reconciliationId: null, idempotencyKey: "tx:key", amount: money("USDC", "1"), operationState: "CONFIRMED", arcTransaction: null, createdAt: context.occurredAt, updatedAt: context.occurredAt })).toThrow();
   });
   it("rejects registered identity without its registration reference", () => {
     const identity = new MockIdentityAdapter().getIdentity();
@@ -220,7 +220,7 @@ describe("lifecycle evidence schemas", () => {
     expect(ReleaseRequestSchema.parse({ ...base, state: "SUBMITTED", approvalId: "approval:1" })).toBeDefined();
   });
   it("enforces transaction operation-state parity", () => {
-    const base = { id: "transaction:1", projectId: "project:1", intentId: "intent:1", approvalId: "approval:1", approvalBindingId: "binding:1", reconciliationId: null, idempotencyKey: "transaction:key", amount: money("USDC", "1"), createdAt: context.occurredAt, updatedAt: context.occurredAt };
+    const base = { id: "transaction:1", projectId: "project:1", releaseRequestId: "release:1", intentId: "intent:1", destinationReference: "mock:recipient", approvalId: "approval:1", approvalBindingId: "binding:1", reconciliationId: null, idempotencyKey: "transaction:key", amount: money("USDC", "1"), createdAt: context.occurredAt, updatedAt: context.occurredAt };
     expect(() => TransactionRecordSchema.parse({ ...base, operationState: "SUBMITTED", arcTransaction: null })).toThrow();
     expect(() => TransactionRecordSchema.parse({ ...base, operationState: "SUBMITTED", arcTransaction: mockTransaction("PREPARED") })).toThrow();
     expect(TransactionRecordSchema.parse({ ...base, operationState: "SUBMITTED", arcTransaction: mockTransaction("SUBMITTED") })).toBeDefined();
@@ -266,47 +266,52 @@ describe("lifecycle evidence schemas", () => {
 });
 
 describe("persisted relationship integrity", () => {
-  const approval = ApprovalRecordSchema.parse({ id: "approval:1", actionType: "RELEASE", exactIntentHash: `sha256:${"f".repeat(64)}`, idempotencyKey: "approval:key", decision: "APPROVED", approver: { actorId: "founder:1", actorType: "FOUNDER" }, expiresAt: "2027-01-01T00:00:00.000Z", decidedAt: context.occurredAt });
-  const release = ReleaseRequestSchema.parse({ id: "release:1", projectId: "project:1", milestoneId: "milestone:1", proofId: "proof:1", intentId: "intent:1", settlementId: null, amount: money("USDC", "1"), state: "PREPARED", approvalId: approval.id, idempotencyKey: "release:key", createdAt: context.occurredAt });
-  const transaction = TransactionRecordSchema.parse({ id: "transaction:1", projectId: "project:1", intentId: "intent:1", approvalId: approval.id, approvalBindingId: "binding:1", reconciliationId: null, idempotencyKey: "transaction:key", amount: money("USDC", "1"), operationState: "PREPARED", arcTransaction: mockTransaction("PREPARED"), createdAt: context.occurredAt, updatedAt: context.occurredAt });
-  const binding = { id: "binding:1", releaseRequestId: release.id, approvalId: approval.id, intentId: release.intentId, exactIntentHash: approval.exactIntentHash, transactionRecordId: transaction.id, createdAt: context.occurredAt };
-  it("validates only the exact unexpired approval-to-intent binding", () => {
-    expect(validateExecutionAuthorization(approval, release, transaction, binding, context.occurredAt)).toBe(true);
-    expect(() => validateExecutionAuthorization(approval, release, transaction, { ...binding, approvalId: "approval:other" }, context.occurredAt)).toThrow();
-    expect(() => validateExecutionAuthorization(approval, release, transaction, { ...binding, intentId: "intent:other" }, context.occurredAt)).toThrow();
-    expect(() => validateExecutionAuthorization(approval, release, transaction, { ...binding, exactIntentHash: `sha256:${"0".repeat(64)}` }, context.occurredAt)).toThrow();
-    expect(() => validateExecutionAuthorization({ ...approval, decision: "PENDING", approver: null, decidedAt: null }, release, transaction, binding, context.occurredAt)).toThrow();
-    expect(() => validateExecutionAuthorization({ ...approval, decision: "REJECTED" }, release, transaction, binding, context.occurredAt)).toThrow();
-    expect(() => validateExecutionAuthorization(approval, release, transaction, binding, "2028-01-01T00:00:00.000Z")).toThrow();
-    expect(() => validateExecutionAuthorization(approval, { ...release, id: "release:other" }, transaction, binding, context.occurredAt)).toThrow();
-    expect(() => validateExecutionAuthorization(approval, release, { ...transaction, projectId: "project:other" }, binding, context.occurredAt)).toThrow();
+  async function authorizationFixture() {
+    const release = ReleaseRequestSchema.parse({ id: "release:1", projectId: "project:1", milestoneId: "milestone:1", proofId: "proof:1", intentId: "intent:1", settlementId: null, amount: money("USDC", "100"), state: "PREPARED", approvalId: "approval:1", idempotencyKey: "release:key", createdAt: context.occurredAt });
+    const transaction = TransactionRecordSchema.parse({ id: "transaction:1", projectId: release.projectId, releaseRequestId: release.id, intentId: release.intentId, destinationReference: "mock:recipient", approvalId: "approval:1", approvalBindingId: "binding:1", reconciliationId: null, idempotencyKey: "transaction:key", amount: release.amount, operationState: "PREPARED", arcTransaction: mockTransaction("PREPARED"), createdAt: context.occurredAt, updatedAt: context.occurredAt });
+    const executionIntent = { version: 1 as const, actionType: "RELEASE", projectId: release.projectId, releaseRequestId: release.id, transactionRecordId: transaction.id, intentId: release.intentId, asset: release.amount.asset, atomicAmount: release.amount.atomicUnits, operationType: transaction.arcTransaction!.operationType, destinationReference: transaction.destinationReference, network: transaction.arcTransaction!.network, chainId: transaction.arcTransaction!.chainId };
+    const exactIntentHash = await hashCanonicalExecutionIntent(executionIntent);
+    const approval = ApprovalRecordSchema.parse({ id: "approval:1", actionType: "RELEASE", exactIntentHash, idempotencyKey: "approval:key", decision: "APPROVED", approver: { actorId: "founder:1", actorType: "FOUNDER" }, expiresAt: "2027-01-01T00:00:00.000Z", decidedAt: context.occurredAt });
+    const binding = { id: "binding:1", releaseRequestId: release.id, approvalId: approval.id, intentId: release.intentId, exactIntentHash, transactionRecordId: transaction.id, executionIntent, createdAt: context.occurredAt };
+    return { approval, release, transaction, binding };
+  }
+  it("uses one deterministic ordered canonical intent serialization and hash", async () => {
+    const { binding } = await authorizationFixture(); expect(JSON.parse(serializeCanonicalExecutionIntent(binding.executionIntent))).toEqual([1, "RELEASE", "project:1", "release:1", "transaction:1", "intent:1", "USDC", "100", "SETTLEMENT", "mock:recipient", "ARC_TESTNET", "synthetic:chain"]); expect(binding.exactIntentHash).toMatch(/^sha256:[a-f0-9]{64}$/);
   });
-  it("requires bindings on prepared-or-later transactions", () => {
+  it("validates only the recomputed exact approved execution intent", async () => {
+    const { approval, release, transaction, binding } = await authorizationFixture();
+    await expect(validateExecutionAuthorization(approval, release, transaction, binding, context.occurredAt)).resolves.toBe(true);
+    for (const changed of [{ ...transaction, amount: money("USDC", "101") }, { ...transaction, amount: money("USDC", "99") }, { ...transaction, amount: money("EURC", "100") }, { ...transaction, destinationReference: "mock:other" }, { ...transaction, projectId: "project:other" }, { ...transaction, releaseRequestId: "release:other" }, { ...transaction, id: "transaction:other" }, { ...transaction, intentId: "intent:other" }, { ...transaction, arcTransaction: { ...transaction.arcTransaction!, operationType: "REFUND" as const } }, { ...transaction, arcTransaction: { ...transaction.arcTransaction!, chainId: "mock:other-chain" } }]) await expect(validateExecutionAuthorization(approval, release, changed, binding, context.occurredAt)).rejects.toThrow();
+    await expect(validateExecutionAuthorization({ ...approval, actionType: "REFUND" }, release, transaction, binding, context.occurredAt)).rejects.toThrow();
+    await expect(validateExecutionAuthorization(approval, release, transaction, { ...binding, executionIntent: { ...binding.executionIntent, atomicAmount: "101" } }, context.occurredAt)).rejects.toThrow();
+    await expect(validateExecutionAuthorization(approval, release, transaction, { ...binding, exactIntentHash: `sha256:${"0".repeat(64)}` }, context.occurredAt)).rejects.toThrow();
+  });
+  it("continues rejecting invalid or unrelated approvals", async () => {
+    const { approval, release, transaction, binding } = await authorizationFixture();
+    await expect(validateExecutionAuthorization({ ...approval, decision: "PENDING", approver: null, decidedAt: null }, release, transaction, binding, context.occurredAt)).rejects.toThrow();
+    await expect(validateExecutionAuthorization({ ...approval, decision: "REJECTED" }, release, transaction, binding, context.occurredAt)).rejects.toThrow();
+    await expect(validateExecutionAuthorization(approval, release, transaction, binding, "2028-01-01T00:00:00.000Z")).rejects.toThrow();
+    await expect(validateExecutionAuthorization(approval, { ...release, approvalId: "approval:other" }, transaction, binding, context.occurredAt)).rejects.toThrow();
     expect(() => TransactionRecordSchema.parse({ ...transaction, approvalBindingId: null })).toThrow();
   });
-  it("validates confirmed release settlement linkage", () => {
-    const confirmedSettlement = SettlementRecordSchema.parse({ id: "settlement:1", projectId: release.projectId, releaseRequestId: release.id, reconciliationId: null, idempotencyKey: "settlement:key", amount: release.amount, state: "CONFIRMED", job: null, transaction: mockTransaction("CONFIRMED"), updatedAt: context.occurredAt });
-    const confirmedRelease = ReleaseRequestSchema.parse({ ...release, state: "CONFIRMED", settlementId: confirmedSettlement.id });
-    expect(validateReleaseConfirmation(confirmedRelease, confirmedSettlement)).toBe(true);
-    expect(() => ReleaseRequestSchema.parse({ ...release, state: "CONFIRMED", settlementId: null })).toThrow();
-    expect(() => validateReleaseConfirmation(confirmedRelease, { ...confirmedSettlement, transaction: mockTransaction("SUBMITTED") })).toThrow();
-    expect(() => validateReleaseConfirmation(confirmedRelease, { ...confirmedSettlement, transaction: mockTransaction("CONFIRMED", "REFUND") })).toThrow();
-    expect(() => validateReleaseConfirmation(confirmedRelease, { ...confirmedSettlement, releaseRequestId: "release:other" })).toThrow();
-    expect(() => validateReleaseConfirmation(confirmedRelease, { ...confirmedSettlement, amount: money("USDC", "2") })).toThrow();
-    expect(() => validateReleaseConfirmation(confirmedRelease, { ...confirmedSettlement, amount: money("EURC", "1") })).toThrow();
+  it("validates confirmed release settlement linkage", async () => {
+    const { release } = await authorizationFixture(); const confirmedSettlement = SettlementRecordSchema.parse({ id: "settlement:1", projectId: release.projectId, releaseRequestId: release.id, reconciliationId: null, idempotencyKey: "settlement:key", amount: release.amount, state: "CONFIRMED", job: null, transaction: mockTransaction("CONFIRMED"), updatedAt: context.occurredAt }); const confirmedRelease = ReleaseRequestSchema.parse({ ...release, state: "CONFIRMED", settlementId: confirmedSettlement.id });
+    expect(validateReleaseConfirmation(confirmedRelease, confirmedSettlement)).toBe(true); expect(() => validateReleaseConfirmation(confirmedRelease, { ...confirmedSettlement, transaction: mockTransaction("SUBMITTED") })).toThrow(); expect(() => validateReleaseConfirmation(confirmedRelease, { ...confirmedSettlement, transaction: mockTransaction("CONFIRMED", "REFUND") })).toThrow();
   });
-  it.each(["MATCHED", "MISMATCH", "REQUIRES_REVIEW"] as const)("persists explicit %s reconciliation", (result) => {
-    const reconciledTransaction = TransactionRecordSchema.parse({ ...transaction, operationState: "RECONCILED", reconciliationId: "reconciliation:1", arcTransaction: mockTransaction("CONFIRMED") });
-    const reconciledSettlement = SettlementRecordSchema.parse({ id: "settlement:1", projectId: "project:1", releaseRequestId: "release:1", reconciliationId: "reconciliation:1", idempotencyKey: "settlement:key", amount: money("USDC", "1"), state: "RECONCILED", job: null, transaction: mockTransaction("CONFIRMED"), updatedAt: context.occurredAt });
-    const reconciliation = ReconciliationRecordSchema.parse({ id: "reconciliation:1", projectId: "project:1", transactionRecordId: reconciledTransaction.id, settlementId: reconciledSettlement.id, result, evidenceReference: "mock:reconciliation-evidence", reconciledAt: context.occurredAt, actor: { actorId: "adapter:1", actorType: "ADAPTER" } });
-    expect(validateReconciliation(reconciledTransaction, reconciledSettlement, reconciliation)).toBe(true);
-    expect(() => validateReconciliation(reconciledTransaction, reconciledSettlement, { ...reconciliation, transactionRecordId: "transaction:other" })).toThrow();
-    expect(() => validateReconciliation(reconciledTransaction, reconciledSettlement, { ...reconciliation, settlementId: "settlement:other" })).toThrow();
-    expect(() => ReconciliationRecordSchema.parse({ ...reconciliation, evidenceReference: "" })).toThrow();
+  function reconciliationFixture(result: "MATCHED" | "MISMATCH" | "REQUIRES_REVIEW") {
+    const matched = result === "MATCHED"; const transaction = TransactionRecordSchema.parse({ id: "transaction:1", projectId: "project:1", releaseRequestId: "release:1", intentId: "intent:1", destinationReference: "mock:recipient", approvalId: "approval:1", approvalBindingId: "binding:1", reconciliationId: matched ? "reconciliation:1" : null, idempotencyKey: "transaction:key", amount: money("USDC", "100"), operationState: matched ? "RECONCILED" : "CONFIRMED", arcTransaction: mockTransaction("CONFIRMED"), createdAt: context.occurredAt, updatedAt: context.occurredAt });
+    const settlement = SettlementRecordSchema.parse({ id: "settlement:1", projectId: "project:1", releaseRequestId: "release:1", reconciliationId: matched ? "reconciliation:1" : null, idempotencyKey: "settlement:key", amount: money("USDC", "100"), state: matched ? "RECONCILED" : "CONFIRMED", job: null, transaction: mockTransaction("CONFIRMED"), updatedAt: context.occurredAt });
+    const reconciliation = ReconciliationRecordSchema.parse({ id: "reconciliation:1", projectId: "project:1", transactionRecordId: transaction.id, settlementId: settlement.id, result, evidenceReference: "mock:reconciliation-evidence", reconciledAt: context.occurredAt, actor: { actorId: "adapter:authorized", actorType: "ADAPTER" } }); return { transaction, settlement, reconciliation };
+  }
+  it("accepts MATCHED only for exact amounts and Arc evidence", () => {
+    const { transaction, settlement, reconciliation } = reconciliationFixture("MATCHED"); expect(validateReconciliation(transaction, settlement, reconciliation, "adapter:authorized")).toBe(true);
+    for (const changed of [{ ...settlement, amount: money("USDC", "101") }, { ...settlement, amount: money("EURC", "100") }, { ...settlement, transaction: { ...settlement.transaction!, transactionHash: "mock:different" } }, { ...settlement, transaction: { ...settlement.transaction!, blockHash: "mock:different" } }, { ...settlement, transaction: { ...settlement.transaction!, operationType: "REFUND" as const } }]) expect(() => validateReconciliation(transaction, changed, reconciliation, "adapter:authorized")).toThrow();
   });
-  it("rejects reconciliation state without separate references", () => {
-    expect(() => TransactionRecordSchema.parse({ ...transaction, operationState: "RECONCILED", arcTransaction: mockTransaction("CONFIRMED"), reconciliationId: null })).toThrow();
+  it.each(["MISMATCH", "REQUIRES_REVIEW"] as const)("persists %s without advancing lifecycle state", (result) => { const value = reconciliationFixture(result); expect(validateReconciliation(value.transaction, value.settlement, value.reconciliation, "adapter:authorized")).toBe(true); expect(() => validateReconciliation({ ...value.transaction, operationState: "RECONCILED", reconciliationId: value.reconciliation.id }, value.settlement, value.reconciliation, "adapter:authorized")).toThrow(); });
+  it("requires the exact authorized adapter", () => {
+    const value = reconciliationFixture("MATCHED"); for (const actorType of ["AI", "SYSTEM", "FOUNDER", "BACKER", "EVALUATOR"] as const) expect(() => validateReconciliation(value.transaction, value.settlement, { ...value.reconciliation, actor: { actorId: "adapter:authorized", actorType } } as never, "adapter:authorized")).toThrow(); expect(() => validateReconciliation(value.transaction, value.settlement, value.reconciliation, "adapter:other")).toThrow(); expect(() => validateReconciliation(value.transaction, value.settlement, value.reconciliation)).toThrow();
   });
+  it("rejects lifecycle-only reconciliation", async () => { const { transaction } = await authorizationFixture(); expect(() => TransactionRecordSchema.parse({ ...transaction, operationState: "RECONCILED", arcTransaction: mockTransaction("CONFIRMED"), reconciliationId: null })).toThrow(); });
 });
 
 describe("append-only ledger reversal relationships", () => {
