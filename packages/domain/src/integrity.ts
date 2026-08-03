@@ -58,7 +58,8 @@ export function validateReconciliation(transaction: TransactionRecord, settlemen
   assert(transaction.reconciliationId === reconciliation.id && settlement.reconciliationId === reconciliation.id, "Records do not reference reconciliation.");
   assert(transaction.amount.asset === settlement.amount.asset && transaction.amount.atomicUnits === settlement.amount.atomicUnits, "Matched reconciliation amounts differ.");
   const left = transaction.arcTransaction; const right = settlement.transaction;
-  assert(left !== null && right !== null && left.network === right.network && left.chainId === right.chainId && left.transactionHash === right.transactionHash && left.blockNumber === right.blockNumber && left.blockHash === right.blockHash && left.operationType === right.operationType && left.status === "CONFIRMED" && right.status === "CONFIRMED", "Matched reconciliation Arc evidence differs.");
+  if (left === null || right === null) throw new RelationshipIntegrityError("Matched reconciliation requires Arc evidence on both records.");
+  assert(left.network === right.network && left.chainId === right.chainId && left.transactionHash === right.transactionHash && left.blockNumber === right.blockNumber && left.blockHash === right.blockHash && left.operationType === right.operationType && left.status === "CONFIRMED" && right.status === "CONFIRMED", "Matched reconciliation Arc evidence differs.");
   assert((settlement.state === "RECONCILED") && (right.operationType === "SETTLEMENT" || right.operationType === "REFUND"), "Matched operation is incompatible with settlement.");
   return true;
 }
