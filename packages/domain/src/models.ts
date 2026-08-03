@@ -19,6 +19,7 @@ export const AgentIdentityRefSchema = z.object({
   agentId: z.string().min(1), ownerAddress: z.string().min(1), metadataVersion: z.string().min(1),
   registrationStatus: z.enum(["UNREGISTERED", "PENDING", "REGISTERED"]), registrationReference: z.string().min(1).nullable(), isMock: z.boolean(),
 }).superRefine((value, context) => {
+  if (!value.isMock) context.addIssue({ code: "custom", message: "Live ERC-8004 identity behavior is deferred to Issue #13." });
   if (value.registrationStatus === "REGISTERED" && value.registrationReference === null) context.addIssue({ code: "custom", message: "Registered identity requires a registration reference." });
   if (value.isMock && [value.network, value.chainId, value.registryAddress, value.agentId, value.ownerAddress, value.registrationReference].filter((item): item is string => item !== null).some((item) => !isSynthetic(item))) context.addIssue({ code: "custom", message: "Every mock identity reference must be visibly synthetic." });
   if (!value.isMock && [value.network, value.chainId, value.registryAddress, value.agentId, value.ownerAddress, value.registrationReference].filter((item): item is string => item !== null).some(isSynthetic)) context.addIssue({ code: "custom", message: "Synthetic identity references cannot be marked live." });
@@ -121,16 +122,16 @@ export const ReleaseRequestSchema = z.object({ id: Id, milestoneId: Id, proofId:
   if (["DRAFT", "ELIGIBLE", "APPROVAL_PENDING"].includes(value.state) && value.approvalId !== null) context.addIssue({ code: "custom", message: `${value.state} release cannot claim completed approval.` });
 });
 export type ReleaseRequest = z.infer<typeof ReleaseRequestSchema>;
-export const SettlementRecordSchema = z.object({ id: Id, releaseRequestId: Id, idempotencyKey: Id, amount: MoneyAmountSchema, state: z.enum(["PENDING", "CONFIRMED", "REFUND_PENDING", "REFUNDED", "RECONCILED", "FAILED"]), job: AgenticJobRefSchema.nullable(), transaction: ArcTransactionRefSchema.nullable(), updatedAt: Time }).superRefine((value, context) => {
-  const confirmedSettlement = value.transaction?.status === "CONFIRMED" && value.transaction.operationType === "SETTLEMENT";
-  const confirmedRefund = value.transaction?.status === "CONFIRMED" && value.transaction.operationType === "REFUND";
-  if (value.state === "CONFIRMED" && value.transaction !== null && !confirmedSettlement) context.addIssue({ code: "custom", message: "Transaction confirmation evidence must be a confirmed settlement operation." });
-  if (value.state === "CONFIRMED" && !confirmedSettlement) context.addIssue({ code: "custom", message: "Confirmed settlement requires a confirmed settlement transaction." });
-  if (value.state === "REFUNDED" && !confirmedRefund) context.addIssue({ code: "custom", message: "Refunded settlement requires confirmed refund evidence." });
-  const terminalJob = value.job !== null && ["COMPLETED", "REJECTED", "EXPIRED"].includes(value.job.status);
-  if (value.state === "RECONCILED" && value.transaction !== null && value.transaction.status !== "CONFIRMED") context.addIssue({ code: "custom", message: "Reconciled transaction evidence must be confirmed." });
-  if (value.state === "RECONCILED" && value.job !== null && !terminalJob) context.addIssue({ code: "custom", message: "Reconciled job evidence must be terminal." });
-  if (value.state === "RECONCILED" && !confirmedSettlement && !terminalJob && !confirmedRefund) context.addIssue({ code: "custom", message: "Reconciled settlement requires persisted confirmed outcome evidence." });
+export const SettlementRecordSchema = z.object({ id: Id, projectId: Id, releaseRequestId: Id, idempotencyKey: Id, amount: MoneyAmountSchema, state: z.enum(["PENDING", "CONFIRMED", "REFUND_PENDING", "REFUNDED", "RECONCILED", "FAILED"]), job: AgenticJobRefSchema.nullable(), transaction: ArcTransactionRefSchema.nullable(), updatedAt: Time }).superRefine((value, context) => {
+  const transaction = value.transaction;
+  const allowed =
+    (value.state === "PENDING" && (transaction === null || (transaction.operationType === "SETTLEMENT" && ["PREPARED", "SUBMITTED"].includes(transaction.status)))) ||
+    (value.state === "CONFIRMED" && transaction?.operationType === "SETTLEMENT" && transaction.status === "CONFIRMED") ||
+    (value.state === "REFUND_PENDING" && (transaction === null || (transaction.operationType === "REFUND" && ["PREPARED", "SUBMITTED"].includes(transaction.status)))) ||
+    (value.state === "REFUNDED" && transaction?.operationType === "REFUND" && transaction.status === "CONFIRMED") ||
+    (value.state === "RECONCILED" && transaction?.status === "CONFIRMED" && (transaction.operationType === "SETTLEMENT" || transaction.operationType === "REFUND")) ||
+    (value.state === "FAILED" && (transaction === null || transaction.status === "FAILED"));
+  if (!allowed) context.addIssue({ code: "custom", message: `${value.state} settlement requires compatible persisted transaction evidence.` });
 });
 export type SettlementRecord = z.infer<typeof SettlementRecordSchema>;
 export const AllocationOperationRecordSchema = z.object({ id: Id, reserveId: Id, idempotencyKey: Id, amount: MoneyAmountSchema, createdAt: Time });

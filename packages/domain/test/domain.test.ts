@@ -49,7 +49,7 @@ describe("separate state machines", () => {
     expect(record).toEqual({ state: "ELIGIBLE" });
   });
   it("supports only explicit job transitions and never maps eligibility to completion", () => {
-    expect(transitionAgenticJob("OPEN", "FUNDED", context).status).toBe("FUNDED");
+    expect(transitionAgenticJob("OPEN", "FUNDED", { ...context, actor: { actorId: "adapter", actorType: "ADAPTER" }, authorizedAdapterId: "adapter" }).status).toBe("FUNDED");
     expect(() => transitionAgenticJob("OPEN", "COMPLETED", context)).toThrow(InvalidTransitionError);
     expect(mapAgenticJobToApplication("OPEN")).toBeNull();
     expect(mapAgenticJobToApplication("COMPLETED")).toBeNull();
@@ -82,6 +82,16 @@ describe("separate state machines", () => {
   it("requires the exact authorized evaluator for terminal job decisions", () => {
     expect(transitionAgenticJob("SUBMITTED", "COMPLETED", { ...context, actor: { actorId: "evaluator:1", actorType: "EVALUATOR" }, authorizedEvaluatorId: "evaluator:1" }).status).toBe("COMPLETED");
     expect(() => transitionAgenticJob("SUBMITTED", "REJECTED", { ...context, actor: { actorId: "evaluator:other", actorType: "EVALUATOR" }, authorizedEvaluatorId: "evaluator:1" })).toThrow(InvalidTransitionError);
+  });
+  it.each([
+    ["OPEN", "FUNDED", "ADAPTER", "authorizedAdapterId"], ["FUNDED", "SUBMITTED", "ADAPTER", "authorizedAdapterId"],
+    ["SUBMITTED", "COMPLETED", "EVALUATOR", "authorizedEvaluatorId"], ["SUBMITTED", "REJECTED", "EVALUATOR", "authorizedEvaluatorId"],
+    ["OPEN", "EXPIRED", "SYSTEM", "authorizedSystemId"], ["FUNDED", "EXPIRED", "SYSTEM", "authorizedSystemId"], ["SUBMITTED", "EXPIRED", "SYSTEM", "authorizedSystemId"],
+  ] as const)("authorizes the complete job %s -> %s matrix", (from, to, actorType, identifier) => {
+    const actor = { actorId: "authorized", actorType }; const authorized = { [identifier]: actor.actorId };
+    expect(transitionAgenticJob(from, to, { ...context, actor, ...authorized }).status).toBe(to);
+    expect(() => transitionAgenticJob(from, to, { ...context, actor: { ...actor, actorId: "wrong" }, ...authorized })).toThrow(InvalidTransitionError);
+    expect(() => transitionAgenticJob(from, to, { ...context, actor })).toThrow(InvalidTransitionError);
   });
 });
 
@@ -116,7 +126,7 @@ describe("repositories and idempotency", () => {
     ["allocation", AllocationOperationRecordSchema, { id: "allocation:1", reserveId: "reserve:1", idempotencyKey: "allocation:key", amount: money("USDC", "1"), createdAt: context.occurredAt }],
     ["approval", ApprovalRecordSchema, { id: "approval:1", actionType: "RELEASE", exactIntentHash: `sha256:${"a".repeat(64)}`, idempotencyKey: "approval:key", decision: "PENDING", approver: null, expiresAt: context.occurredAt, decidedAt: null }],
     ["submission", SubmissionOperationRecordSchema, { id: "submission:1", transactionId: "transaction:1", idempotencyKey: "submission:key", createdAt: context.occurredAt }],
-    ["settlement", SettlementRecordSchema, { id: "settlement:1", releaseRequestId: "release:1", idempotencyKey: "settlement:key", amount: money("USDC", "1"), state: "PENDING", job: null, transaction: null, updatedAt: context.occurredAt }],
+    ["settlement", SettlementRecordSchema, { id: "settlement:1", projectId: "project:1", releaseRequestId: "release:1", idempotencyKey: "settlement:key", amount: money("USDC", "1"), state: "PENDING", job: null, transaction: null, updatedAt: context.occurredAt }],
     ["recovery", RecoveryOperationRecordSchema, { id: "recovery:1", proofGapId: "gap:1", idempotencyKey: "recovery:key", responseReference: "private:response:1", createdAt: context.occurredAt }],
   ])("directly models and deduplicates %s operations", async (scope, schema, record) => {
     const parsed = schema.parse(record); const repository = new InMemoryIdempotencyRepository(); let calls = 0;
@@ -159,6 +169,10 @@ describe("protocol-safe mocks and privacy", () => {
   it("rejects a synthetic registration reference on a live identity", () => {
     expect(() => AgentIdentityRefSchema.parse({ standard: "ERC-8004", network: "ARC_TESTNET", chainId: "5042002", registryAddress: "0x1111111111111111111111111111111111111111", agentId: "1", ownerAddress: "0x2222222222222222222222222222222222222222", metadataVersion: "1", registrationStatus: "REGISTERED", registrationReference: "synthetic:registration", isMock: false })).toThrow();
   });
+  it("defers every live ERC-8004 identity to Issue #13", () => {
+    const result = AgentIdentityRefSchema.safeParse({ standard: "ERC-8004", network: "ARC_TESTNET", chainId: "5042002", registryAddress: "0x1111111111111111111111111111111111111111", agentId: "1", ownerAddress: "0x2222222222222222222222222222222222222222", metadataVersion: "1", registrationStatus: "REGISTERED", registrationReference: `0x${"3".repeat(64)}`, isMock: false });
+    expect(result.success).toBe(false); if (!result.success) expect(result.error.issues.some((issue) => issue.message.includes("deferred to Issue #13"))).toBe(true);
+  });
   it("rejects non-synthetic mock identifiers and synthetic live identifiers", () => {
     const identity = new MockIdentityAdapter().getIdentity();
     expect(() => AgentIdentityRefSchema.parse({ ...identity, agentId: "not-mock" })).toThrow();
@@ -171,7 +185,7 @@ describe("protocol-safe mocks and privacy", () => {
   it("transitions only mock jobs without contract behavior", () => {
     const job = { standard: "ERC-8183" as const, network: "synthetic:arc-testnet", chainId: "synthetic:chain", contractAddress: "mock:not-a-contract", jobId: "mock:job", clientAddress: "mock:client", providerAddress: "mock:provider", evaluatorAddress: "mock:evaluator", budget: money("USDC", "250000000"), expiresAt: "2026-02-01T00:00:00.000Z", descriptionReference: "mock:description", deliverableReference: null, reasonReference: null, status: "OPEN" as const, transaction: null, isMock: true };
     expect(AgenticJobRefSchema.parse(job)).toEqual(job);
-    expect(new MockAgenticJobAdapter().transition(job, "FUNDED", context).job.status).toBe("FUNDED"); expect(job.status).toBe("OPEN");
+    expect(new MockAgenticJobAdapter().transition(job, "FUNDED", { ...context, actor: { actorId: "adapter", actorType: "ADAPTER" }, authorizedAdapterId: "adapter" }).job.status).toBe("FUNDED"); expect(job.status).toBe("OPEN");
   });
   it("requires every protocol-reference field", () => {
     const identity = new MockIdentityAdapter().getIdentity(); const { metadataVersion: _metadataVersion, ...missingIdentity } = identity;
@@ -221,7 +235,7 @@ describe("lifecycle evidence schemas", () => {
     expect(() => ArcTransactionRefSchema.parse({ ...liveTransaction, explorerUrl: `${liveTransaction.explorerUrl}wrong` })).toThrow();
   });
   it("requires truthful settlement, refund, and reconciliation evidence", () => {
-    const base = { id: "settlement:1", releaseRequestId: "release:1", idempotencyKey: "settlement:key", amount: money("USDC", "1"), job: null, updatedAt: context.occurredAt };
+    const base = { id: "settlement:1", projectId: "project:1", releaseRequestId: "release:1", idempotencyKey: "settlement:key", amount: money("USDC", "1"), job: null, updatedAt: context.occurredAt };
     expect(() => SettlementRecordSchema.parse({ ...base, state: "CONFIRMED", transaction: null })).toThrow();
     expect(() => SettlementRecordSchema.parse({ ...base, state: "CONFIRMED", transaction: mockTransaction("SUBMITTED") })).toThrow();
     expect(SettlementRecordSchema.parse({ ...base, state: "CONFIRMED", transaction: mockTransaction("CONFIRMED") })).toBeDefined();
@@ -231,9 +245,20 @@ describe("lifecycle evidence schemas", () => {
     const completedJob = { standard: "ERC-8183" as const, network: "synthetic:arc-testnet", chainId: "synthetic:chain", contractAddress: "mock:contract", jobId: "mock:job", clientAddress: "mock:client", providerAddress: "mock:provider", evaluatorAddress: "mock:evaluator", budget: money("USDC", "1"), expiresAt: "2026-02-01T00:00:00.000Z", descriptionReference: "mock:description", deliverableReference: "mock:deliverable", reasonReference: null, status: "COMPLETED" as const, transaction: null, isMock: true };
     expect(() => SettlementRecordSchema.parse({ ...base, state: "CONFIRMED", job: completedJob, transaction: null })).toThrow();
   });
+  it.each([
+    ["PENDING", null, true], ["PENDING", mockTransaction("PREPARED"), true], ["PENDING", mockTransaction("SUBMITTED"), true], ["PENDING", mockTransaction("CONFIRMED"), false],
+    ["CONFIRMED", mockTransaction("CONFIRMED"), true], ["CONFIRMED", null, false],
+    ["REFUND_PENDING", null, true], ["REFUND_PENDING", mockTransaction("PREPARED", "REFUND"), true], ["REFUND_PENDING", mockTransaction("SUBMITTED", "REFUND"), true], ["REFUND_PENDING", mockTransaction("SUBMITTED"), false],
+    ["REFUNDED", mockTransaction("CONFIRMED", "REFUND"), true], ["REFUNDED", mockTransaction("CONFIRMED"), false],
+    ["RECONCILED", mockTransaction("CONFIRMED"), true], ["RECONCILED", mockTransaction("CONFIRMED", "REFUND"), true], ["RECONCILED", mockTransaction("SUBMITTED"), false],
+    ["FAILED", null, true], ["FAILED", mockTransaction("FAILED"), true], ["FAILED", mockTransaction("CONFIRMED"), false],
+  ] as const)("validates %s settlement evidence", (state, transaction, valid) => {
+    const candidate = { id: "settlement:matrix", projectId: "project:1", releaseRequestId: "release:1", idempotencyKey: "settlement:key", amount: money("USDC", "1"), state, job: null, transaction, updatedAt: context.occurredAt };
+    expect(SettlementRecordSchema.safeParse(candidate).success).toBe(valid);
+  });
   it("rejects unsupported confirmed settlement disclosure", () => {
     const seed = createPawPovAiSeed();
-    expect(() => filterBackerDisclosure({ project: seed.project, evidence: [], proofs: [], settlements: [{ id: "settlement:bad", releaseRequestId: "release:1", idempotencyKey: "settlement:key", amount: money("USDC", "1"), state: "CONFIRMED", job: null, transaction: null, updatedAt: context.occurredAt }], preferences: { ...seed.disclosurePreferences, discloseSettlementState: true } })).toThrow();
+    expect(() => filterBackerDisclosure({ project: seed.project, evidence: [], proofs: [], settlements: [{ id: "settlement:bad", projectId: seed.project.id, releaseRequestId: "release:1", idempotencyKey: "settlement:key", amount: money("USDC", "1"), state: "CONFIRMED", job: null, transaction: null, updatedAt: context.occurredAt }], preferences: { ...seed.disclosurePreferences, discloseSettlementState: true } })).toThrow();
   });
 });
 
@@ -257,9 +282,15 @@ describe("Backer-safe disclosure filtering", () => {
     const seed = createPawPovAiSeed(); const secret = "DO-NOT-DISCLOSE";
     const evidence = EvidenceItemSchema.parse({ id: "evidence:private", projectId: seed.project.id, kind: "RECEIPT", sourceHash: `sha256:${"b".repeat(64)}`, storageRef: `private://${secret}`, visibility: "FOUNDER_PRIVATE", submittedAt: context.occurredAt, rawContent: secret, privateNotes: secret });
     const proofs = [{ id: "proof:approved", milestoneId: seed.milestone.id, version: 1, approvedEvidenceHashes: [evidence.sourceHash], recordHash: `sha256:${"c".repeat(64)}`, visibility: "BACKER_SHARED" as const, createdAt: context.occurredAt }, { id: "proof:hidden", milestoneId: seed.milestone.id, version: 1, approvedEvidenceHashes: [], recordHash: `sha256:${"d".repeat(64)}`, visibility: "FOUNDER_PRIVATE" as const, createdAt: context.occurredAt }];
-    const result = filterBackerDisclosure({ project: seed.project, evidence: [evidence], proofs, settlements: [{ id: "settlement:private", releaseRequestId: "release:1", idempotencyKey: "settlement:key", amount: money("USDC", "1"), state: "PENDING", job: null, transaction: null, updatedAt: context.occurredAt }], preferences: { ...seed.disclosurePreferences, discloseProofRecords: true, approvedProofIds: ["proof:approved", "proof:hidden"], discloseSettlementState: false } });
+    const result = filterBackerDisclosure({ project: seed.project, evidence: [evidence], proofs, settlements: [{ id: "settlement:private", projectId: seed.project.id, releaseRequestId: "release:1", idempotencyKey: "settlement:key", amount: money("USDC", "1"), state: "PENDING", job: null, transaction: null, updatedAt: context.occurredAt }], preferences: { ...seed.disclosurePreferences, discloseProofRecords: true, approvedProofIds: ["proof:approved", "proof:hidden"], discloseSettlementState: false } });
     expect(result.proofs.map((proof) => proof.id)).toEqual(["proof:approved"]); expect(result.settlements).toEqual([]); expect(result.evidence).toEqual([]);
     const serialized = JSON.stringify(result); expect(serialized).not.toContain(secret); expect(serialized).not.toContain("storageRef"); expect(serialized).not.toContain("privateNotes"); expect(serialized).not.toContain("proof:hidden"); expect(serialized).not.toContain("settlement:private");
+  });
+  it("revalidates all settlements and discloses only the selected project", () => {
+    const seed = createPawPovAiSeed(); const settlement = { releaseRequestId: "release:1", idempotencyKey: "settlement:key", amount: money("USDC", "1"), state: "PENDING" as const, job: null, transaction: null, updatedAt: context.occurredAt };
+    const result = filterBackerDisclosure({ project: seed.project, evidence: [], proofs: [], settlements: [{ ...settlement, id: "settlement:selected", projectId: seed.project.id }, { ...settlement, id: "settlement:other", projectId: "project:other" }], preferences: { ...seed.disclosurePreferences, discloseSettlementState: true } });
+    expect(result.settlements.map((record) => record.id)).toEqual(["settlement:selected"]);
+    expect(() => filterBackerDisclosure({ project: seed.project, evidence: [], proofs: [], settlements: [{ ...settlement, id: "settlement:invalid-other", projectId: "project:other", state: "CONFIRMED" }], preferences: { ...seed.disclosurePreferences, discloseSettlementState: false } })).toThrow();
   });
 });
 

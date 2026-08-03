@@ -16,6 +16,7 @@ export function filterBackerDisclosure(input: {
   preferences: DisclosurePreferences;
 }): BackerSafeProjectRecord {
   if (input.project.id !== input.preferences.projectId) throw new Error("Disclosure preferences belong to another project.");
+  const validatedSettlements = input.settlements.map((settlement) => SettlementRecordSchema.parse(settlement));
   return {
     project: { id: input.project.id, name: input.project.name, description: input.project.description },
     evidence: [],
@@ -23,7 +24,7 @@ export function filterBackerDisclosure(input: {
       ? input.proofs.filter((proof) => input.preferences.approvedProofIds.includes(proof.id) && proof.visibility !== "FOUNDER_PRIVATE").map(({ id, milestoneId, version, recordHash, createdAt }) => ({ id, milestoneId, version, recordHash, createdAt }))
       : [],
     settlements: input.preferences.discloseSettlementState
-      ? input.settlements.map((settlement) => SettlementRecordSchema.parse(settlement)).map(({ id, releaseRequestId, amount, state, updatedAt }) => ({ id, releaseRequestId, amount: structuredClone(amount), state, updatedAt }))
+      ? validatedSettlements.filter((settlement) => settlement.projectId === input.project.id).map(({ id, releaseRequestId, amount, state, updatedAt }) => ({ id, releaseRequestId, amount: structuredClone(amount), state, updatedAt }))
       : [],
   };
 }

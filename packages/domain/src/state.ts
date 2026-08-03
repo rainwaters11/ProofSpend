@@ -36,6 +36,17 @@ const applicationAuthority: Partial<Record<ApplicationEdge, AuthorityRule>> = {
   "SUBMITTED->FAILED": { actorTypes: ["ADAPTER"], identifier: "authorizedAdapterId" },
   "CONFIRMED->RECONCILED": { actorTypes: ["ADAPTER"], identifier: "authorizedAdapterId" },
 };
+type JobEdge = `${AgenticJobStatus}->${AgenticJobStatus}`;
+type JobAuthorityRule = { actorType: "ADAPTER" | "EVALUATOR" | "SYSTEM"; identifier: "authorizedAdapterId" | "authorizedEvaluatorId" | "authorizedSystemId" };
+const jobAuthority: Partial<Record<JobEdge, JobAuthorityRule>> = {
+  "OPEN->FUNDED": { actorType: "ADAPTER", identifier: "authorizedAdapterId" },
+  "FUNDED->SUBMITTED": { actorType: "ADAPTER", identifier: "authorizedAdapterId" },
+  "SUBMITTED->COMPLETED": { actorType: "EVALUATOR", identifier: "authorizedEvaluatorId" },
+  "SUBMITTED->REJECTED": { actorType: "EVALUATOR", identifier: "authorizedEvaluatorId" },
+  "OPEN->EXPIRED": { actorType: "SYSTEM", identifier: "authorizedSystemId" },
+  "FUNDED->EXPIRED": { actorType: "SYSTEM", identifier: "authorizedSystemId" },
+  "SUBMITTED->EXPIRED": { actorType: "SYSTEM", identifier: "authorizedSystemId" },
+};
 function event(context: TransitionContext, from: string, to: string): AuditEvent {
   return { id: context.eventId, aggregateType: context.aggregateType, aggregateId: context.aggregateId, eventType: "STATE_TRANSITIONED", actor: context.actor, idempotencyKey: context.idempotencyKey ?? null, occurredAt: context.occurredAt, details: { from, to } };
 }
@@ -47,7 +58,8 @@ export function transitionApplication(from: ProofSpendApplicationState, to: Proo
 }
 export function transitionAgenticJob(from: AgenticJobStatus, to: AgenticJobStatus, context: TransitionContext) {
   if (!jobTransitions[from].includes(to)) throw new InvalidTransitionError("agentic job", from, to);
-  if (from === "SUBMITTED" && (to === "COMPLETED" || to === "REJECTED") && (context.actor.actorType !== "EVALUATOR" || context.actor.actorId !== context.authorizedEvaluatorId)) throw new InvalidTransitionError("agentic job authority", from, to);
+  const authority = jobAuthority[`${from}->${to}`];
+  if (authority === undefined || context.actor.actorType !== authority.actorType || context[authority.identifier] === undefined || context.actor.actorId !== context[authority.identifier]) throw new InvalidTransitionError("agentic job authority", from, to);
   return { status: to, auditEvent: event(context, from, to) } as const;
 }
 export function mapAgenticJobToApplication(status: AgenticJobStatus): ProofSpendApplicationState | null {
