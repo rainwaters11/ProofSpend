@@ -1,4 +1,5 @@
-import type { AuditEvent } from "./models";
+import { ExecutionAuthorizationBindingSchema, type AuditEvent, type ExecutionAuthorizationBinding } from "./models";
+import { consumeExecutionAuthorizationBinding } from "./integrity";
 
 export class DuplicateRecordError extends Error { constructor(id: string) { super(`Record ${id} already exists.`); this.name = "DuplicateRecordError"; } }
 export class IdempotencyConflictError extends Error { constructor(key: string) { super(`Idempotency key ${key} was reused for a different action.`); this.name = "IdempotencyConflictError"; } }
@@ -14,6 +15,19 @@ export class InMemoryAuditRepository {
   readonly #events: AuditEvent[] = [];
   append(event: AuditEvent): AuditEvent { const saved = clone(event); this.#events.push(saved); return clone(saved); }
   list(): AuditEvent[] { return this.#events.map(clone); }
+}
+export class ExecutionAuthorizationBindingRepository {
+  readonly #records = new Map<string, ExecutionAuthorizationBinding>();
+  create(binding: ExecutionAuthorizationBinding): ExecutionAuthorizationBinding {
+    if (this.#records.has(binding.id)) throw new DuplicateRecordError(binding.id);
+    const saved = clone(ExecutionAuthorizationBindingSchema.parse(binding)); this.#records.set(saved.id, saved); return clone(saved);
+  }
+  get(id: string): ExecutionAuthorizationBinding | undefined { const value = this.#records.get(id); return value ? clone(value) : undefined; }
+  consume(id: string, transactionId: string, consumedAt: string): ExecutionAuthorizationBinding {
+    const stored = this.#records.get(id); if (!stored) throw new Error(`Authorization binding ${id} does not exist.`);
+    const consumed = ExecutionAuthorizationBindingSchema.parse(consumeExecutionAuthorizationBinding(stored, transactionId, consumedAt));
+    this.#records.set(id, clone(consumed)); return clone(consumed);
+  }
 }
 type IdempotentEntry =
   | { fingerprint: string; status: "IN_FLIGHT"; promise: Promise<unknown> }

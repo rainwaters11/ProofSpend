@@ -10,6 +10,7 @@ const EvmHash = /^0x[a-fA-F0-9]{64}$/;
 const isSynthetic = (value: string) => /^(mock:|synthetic:)/.test(value);
 export const LAUNCHVAULT_SETTLEMENT_ASSET = "USDC" as const;
 export const SettlementMoneyAmountSchema = MoneyAmountSchema.extend({ asset: z.literal(LAUNCHVAULT_SETTLEMENT_ASSET) });
+export type SettlementMoneyAmount = z.infer<typeof SettlementMoneyAmountSchema>;
 export const VisibilitySchema = z.enum(["FOUNDER_PRIVATE", "BACKER_SHARED", "ONCHAIN_PUBLIC"]);
 export const ActorSchema = z.object({ actorId: Id, actorType: z.enum(["SYSTEM", "AI", "FOUNDER", "BACKER", "EVALUATOR", "ADAPTER"]) });
 export type Actor = z.infer<typeof ActorSchema>;
@@ -155,10 +156,10 @@ export const SettlementRecordSchema = z.object({ id: Id, projectId: Id, releaseR
 export type SettlementRecord = z.infer<typeof SettlementRecordSchema>;
 const DestinationProtocolTargetSchema = z.object({ kind: z.literal("DESTINATION"), destination: Id, network: z.string().min(1).nullable(), chainId: z.string().min(1).nullable() }).strict();
 const Erc8183ProtocolTargetSchema = z.object({
-  kind: z.literal("ERC8183"), standard: z.literal("ERC-8183"), network: Id, chainId: Id,
+  kind: z.literal("ERC8183"), standard: z.literal("ERC-8183"), network: z.literal(ARC_TESTNET_NETWORK), chainId: Id.refine(isSynthetic),
   contractReference: Id.refine(isSynthetic, "Issue #2 ERC-8183 contract references must be visibly synthetic."), jobId: Id.refine(isSynthetic, "Issue #2 job IDs must be visibly synthetic."),
   method: z.enum(["JOB_FUND", "JOB_SUBMIT", "JOB_EVALUATE"]), parameterCommitment: Hash,
-  clientReference: Id.refine(isSynthetic), providerReference: Id.refine(isSynthetic), evaluatorReference: Id.refine(isSynthetic), destination: Id,
+  clientReference: Id.refine(isSynthetic), providerReference: Id.refine(isSynthetic), evaluatorReference: Id.refine(isSynthetic), destination: Id.refine(isSynthetic),
 }).strict();
 export const ProtocolTargetSchema = z.discriminatedUnion("kind", [DestinationProtocolTargetSchema, Erc8183ProtocolTargetSchema]);
 export const CanonicalExecutionIntentSchema = z.object({ version: z.literal(1), actionKind: ApprovalActionKindSchema, projectId: Id, releaseRequestId: Id, transactionRecordId: Id, intentId: Id, asset: z.literal(LAUNCHVAULT_SETTLEMENT_ASSET), atomicAmount: AtomicUnitsSchema, operationType: TransactionOperationTypeSchema, protocolTarget: ProtocolTargetSchema }).superRefine((value, context) => {

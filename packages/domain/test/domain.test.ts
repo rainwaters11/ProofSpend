@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
+import type { SettlementMoneyAmount } from "../src";
 import {
   addMoney, AgenticJobRefSchema, AgenticJobStatusSchema, AgentIdentityRefSchema, AgentReputationRefSchema,
   ARC_TESTNET_CHAIN_ID, arcTestnetExplorerTransactionUrl,
   AllocationOperationRecordSchema, AllocationRuleSchema, ApprovalRecordSchema, ArcTransactionRefSchema, CanonicalExecutionIntentSchema, compareMoney,
   createPawPovAiSeed, EvidenceItemSchema, filterBackerDisclosure, IdempotencyConflictError, InMemoryAuditRepository,
-  InMemoryIdempotencyRepository, InMemoryRepository, InvalidTransitionError, LaunchVaultSchema, mapAgenticJobToApplication,
+  ExecutionAuthorizationBindingRepository, InMemoryIdempotencyRepository, InMemoryRepository, InvalidTransitionError, LaunchVaultSchema, mapAgenticJobToApplication,
   LedgerEntrySchema, MilestoneRequirementSchema,
   MockAgenticJobAdapter, MockIdentityAdapter, MockWalletReferenceAdapter, money, MoneyAmountSchema, MoneyError,
   RecoveryOperationRecordSchema, ReleaseRequestSchema, ReserveSchema, SettlementRecordSchema, SubmissionOperationRecordSchema, subtractMoney,
@@ -13,6 +14,7 @@ import {
 } from "../src";
 
 const context = { aggregateType: "milestone", aggregateId: "m1", eventId: "event:1", occurredAt: "2026-01-01T00:00:00.000Z", actor: { actorId: "system", actorType: "SYSTEM" as const } };
+const usdc = (atomicUnits: string): SettlementMoneyAmount => ({ asset: "USDC", atomicUnits });
 const mockTransaction = (status: "NONE" | "PREPARED" | "SUBMITTED" | "CONFIRMED" | "FAILED", operationType: "SETTLEMENT" | "REFUND" = "SETTLEMENT") => ({
   network: "ARC_TESTNET" as const, chainId: "synthetic:chain", transactionHash: status === "SUBMITTED" || status === "CONFIRMED" ? "mock:transaction" : null,
   status, blockNumber: status === "CONFIRMED" ? "1" : null, blockHash: status === "CONFIRMED" ? "mock:block" : null,
@@ -124,10 +126,10 @@ describe("repositories and idempotency", () => {
     await expect(repository.execute("a", "b:c", "two", () => "second")).resolves.toBe("second");
   });
   it.each([
-    ["allocation", AllocationOperationRecordSchema, { id: "allocation:1", reserveId: "reserve:1", idempotencyKey: "allocation:key", amount: money("USDC", "1"), createdAt: context.occurredAt }],
+    ["allocation", AllocationOperationRecordSchema, { id: "allocation:1", reserveId: "reserve:1", idempotencyKey: "allocation:key", amount: usdc("1"), createdAt: context.occurredAt }],
     ["approval", ApprovalRecordSchema, { id: "approval:1", actionKind: "RELEASE_APPROVAL", authorizedActorType: "FOUNDER", authorizedActorId: "founder:1", exactIntentHash: `sha256:${"a".repeat(64)}`, idempotencyKey: "approval:key", decision: "PENDING", approver: null, expiresAt: context.occurredAt, decidedAt: null }],
     ["submission", SubmissionOperationRecordSchema, { id: "submission:1", transactionId: "transaction:1", idempotencyKey: "submission:key", createdAt: context.occurredAt }],
-    ["settlement", SettlementRecordSchema, { id: "settlement:1", projectId: "project:1", releaseRequestId: "release:1", reconciliationId: null, idempotencyKey: "settlement:key", amount: money("USDC", "1"), state: "PENDING", job: null, transaction: null, updatedAt: context.occurredAt }],
+    ["settlement", SettlementRecordSchema, { id: "settlement:1", projectId: "project:1", releaseRequestId: "release:1", reconciliationId: null, idempotencyKey: "settlement:key", amount: usdc("1"), state: "PENDING", job: null, transaction: null, updatedAt: context.occurredAt }],
     ["recovery", RecoveryOperationRecordSchema, { id: "recovery:1", proofGapId: "gap:1", idempotencyKey: "recovery:key", responseReference: "private:response:1", createdAt: context.occurredAt }],
   ])("directly models and deduplicates %s operations", async (scope, schema, record) => {
     const parsed = schema.parse(record); const repository = new InMemoryIdempotencyRepository(); let calls = 0;
@@ -161,7 +163,7 @@ describe("protocol-safe mocks and privacy", () => {
   it("rejects confirmed transaction state without a hash", () => {
     const transaction = { network: "ARC_TESTNET" as const, chainId: "synthetic:chain", transactionHash: null, status: "CONFIRMED" as const, blockNumber: null, blockHash: null, explorerUrl: null, operationType: "SETTLEMENT" as const, isMock: true };
     expect(() => ArcTransactionRefSchema.parse(transaction)).toThrow();
-    expect(() => TransactionRecordSchema.parse({ id: "tx:1", projectId: "project:1", releaseRequestId: "release:1", intentId: "intent:1", destinationReference: "mock:recipient", approvalId: "approval:1", approvalBindingId: "binding:1", reconciliationId: null, idempotencyKey: "tx:key", amount: money("USDC", "1"), operationState: "CONFIRMED", arcTransaction: null, createdAt: context.occurredAt, updatedAt: context.occurredAt })).toThrow();
+    expect(() => TransactionRecordSchema.parse({ id: "tx:1", projectId: "project:1", releaseRequestId: "release:1", intentId: "intent:1", destinationReference: "mock:recipient", approvalId: "approval:1", approvalBindingId: "binding:1", reconciliationId: null, idempotencyKey: "tx:key", amount: usdc("1"), operationState: "CONFIRMED", arcTransaction: null, createdAt: context.occurredAt, updatedAt: context.occurredAt })).toThrow();
   });
   it("rejects registered identity without its registration reference", () => {
     const identity = new MockIdentityAdapter().getIdentity();
@@ -184,7 +186,7 @@ describe("protocol-safe mocks and privacy", () => {
     expect(evidence).not.toHaveProperty("rawContent"); expect(evidence).not.toHaveProperty("privateNotes");
   });
   it("transitions only mock jobs without contract behavior", () => {
-    const job = { standard: "ERC-8183" as const, network: "synthetic:arc-testnet", chainId: "synthetic:chain", contractAddress: "mock:not-a-contract", jobId: "mock:job", clientAddress: "mock:client", providerAddress: "mock:provider", evaluatorAddress: "mock:evaluator", budget: money("USDC", "250000000"), expiresAt: "2026-02-01T00:00:00.000Z", descriptionReference: "mock:description", deliverableReference: null, reasonReference: null, status: "OPEN" as const, transaction: null, isMock: true };
+    const job = { standard: "ERC-8183" as const, network: "synthetic:arc-testnet", chainId: "synthetic:chain", contractAddress: "mock:not-a-contract", jobId: "mock:job", clientAddress: "mock:client", providerAddress: "mock:provider", evaluatorAddress: "mock:evaluator", budget: usdc("250000000"), expiresAt: "2026-02-01T00:00:00.000Z", descriptionReference: "mock:description", deliverableReference: null, reasonReference: null, status: "OPEN" as const, transaction: null, isMock: true };
     expect(AgenticJobRefSchema.parse(job)).toEqual(job);
     expect(new MockAgenticJobAdapter().transition(job, "FUNDED", { ...context, actor: { actorId: "adapter", actorType: "ADAPTER" }, authorizedAdapterId: "adapter" }).job.status).toBe("FUNDED"); expect(job.status).toBe("OPEN");
     expect(() => AgenticJobRefSchema.parse({ ...job, network: "ARC_TESTNET", chainId: "5042002", contractAddress: "0x1111111111111111111111111111111111111111", jobId: "1", clientAddress: "0x2222222222222222222222222222222222222222", providerAddress: "0x3333333333333333333333333333333333333333", evaluatorAddress: "0x4444444444444444444444444444444444444444", descriptionReference: "description", isMock: false })).toThrow(/deferred to Issue #8/);
@@ -217,13 +219,13 @@ describe("lifecycle evidence schemas", () => {
     expect(() => ApprovalRecordSchema.parse({ ...base, decision: "PENDING", approver: { actorId: "founder:1", actorType: "FOUNDER" }, decidedAt: context.occurredAt })).toThrow();
   });
   it("requires persisted approvals only in approved-or-later release states", () => {
-    const base = { id: "release:1", projectId: "project:1", milestoneId: "milestone:1", proofId: "proof:1", intentId: "intent:1", settlementId: null, amount: money("USDC", "1"), idempotencyKey: "release:key", createdAt: context.occurredAt };
+    const base = { id: "release:1", projectId: "project:1", milestoneId: "milestone:1", proofId: "proof:1", intentId: "intent:1", settlementId: null, amount: usdc("1"), idempotencyKey: "release:key", createdAt: context.occurredAt };
     expect(() => ReleaseRequestSchema.parse({ ...base, state: "APPROVED", approvalId: null })).toThrow();
     expect(() => ReleaseRequestSchema.parse({ ...base, state: "DRAFT", approvalId: "approval:1" })).toThrow();
     expect(ReleaseRequestSchema.parse({ ...base, state: "SUBMITTED", approvalId: "approval:1" })).toBeDefined();
   });
   it("enforces transaction operation-state parity", () => {
-    const base = { id: "transaction:1", projectId: "project:1", releaseRequestId: "release:1", intentId: "intent:1", destinationReference: "mock:recipient", approvalId: "approval:1", approvalBindingId: "binding:1", reconciliationId: null, idempotencyKey: "transaction:key", amount: money("USDC", "1"), createdAt: context.occurredAt, updatedAt: context.occurredAt };
+    const base = { id: "transaction:1", projectId: "project:1", releaseRequestId: "release:1", intentId: "intent:1", destinationReference: "mock:recipient", approvalId: "approval:1", approvalBindingId: "binding:1", reconciliationId: null, idempotencyKey: "transaction:key", amount: usdc("1"), createdAt: context.occurredAt, updatedAt: context.occurredAt };
     expect(() => TransactionRecordSchema.parse({ ...base, operationState: "SUBMITTED", arcTransaction: null })).toThrow();
     expect(() => TransactionRecordSchema.parse({ ...base, operationState: "SUBMITTED", arcTransaction: mockTransaction("PREPARED") })).toThrow();
     expect(TransactionRecordSchema.parse({ ...base, operationState: "SUBMITTED", arcTransaction: mockTransaction("SUBMITTED") })).toBeDefined();
@@ -233,8 +235,8 @@ describe("lifecycle evidence schemas", () => {
   it("restricts LaunchVault value-moving records to USDC", async () => {
     const { vault } = createPawPovAiSeed();
     expect(LaunchVaultSchema.parse(vault).asset).toBe("USDC");
-    expect(ReserveSchema.parse({ id: "reserve:1", vaultId: vault.id, name: "Reserve", allocated: money("USDC", "1"), status: "ACTIVE" })).toBeDefined();
-    expect(AllocationRuleSchema.parse({ id: "rule:1", reserveId: "reserve:1", purpose: "Demo", maximum: money("USDC", "1"), requiresApproval: true })).toBeDefined();
+    expect(ReserveSchema.parse({ id: "reserve:1", vaultId: vault.id, name: "Reserve", allocated: usdc("1"), status: "ACTIVE" })).toBeDefined();
+    expect(AllocationRuleSchema.parse({ id: "rule:1", reserveId: "reserve:1", purpose: "Demo", maximum: usdc("1"), requiresApproval: true })).toBeDefined();
     for (const asset of ["EURC", "ETH", "OTHER", ""]) {
       expect(() => LaunchVaultSchema.parse({ ...vault, asset, totalCapital: money(asset, "1") })).toThrow();
       expect(() => TransactionRecordSchema.parse({ id: "tx:asset", projectId: "project:1", releaseRequestId: "release:1", intentId: "intent:1", destinationReference: "mock:recipient", approvalId: "approval:1", approvalBindingId: "binding:1", reconciliationId: null, idempotencyKey: "tx:key", amount: money(asset, "1"), operationState: "PREPARED", arcTransaction: mockTransaction("PREPARED"), createdAt: context.occurredAt, updatedAt: context.occurredAt })).toThrow();
@@ -251,14 +253,14 @@ describe("lifecycle evidence schemas", () => {
     expect(() => ArcTransactionRefSchema.parse({ ...liveTransaction, explorerUrl: `${liveTransaction.explorerUrl}wrong` })).toThrow();
   });
   it("requires truthful settlement, refund, and reconciliation evidence", () => {
-    const base = { id: "settlement:1", projectId: "project:1", releaseRequestId: "release:1", reconciliationId: null, idempotencyKey: "settlement:key", amount: money("USDC", "1"), job: null, updatedAt: context.occurredAt };
+    const base = { id: "settlement:1", projectId: "project:1", releaseRequestId: "release:1", reconciliationId: null, idempotencyKey: "settlement:key", amount: usdc("1"), job: null, updatedAt: context.occurredAt };
     expect(() => SettlementRecordSchema.parse({ ...base, state: "CONFIRMED", transaction: null })).toThrow();
     expect(() => SettlementRecordSchema.parse({ ...base, state: "CONFIRMED", transaction: mockTransaction("SUBMITTED") })).toThrow();
     expect(SettlementRecordSchema.parse({ ...base, state: "CONFIRMED", transaction: mockTransaction("CONFIRMED") })).toBeDefined();
     expect(() => SettlementRecordSchema.parse({ ...base, state: "REFUNDED", transaction: mockTransaction("CONFIRMED") })).toThrow();
     expect(SettlementRecordSchema.parse({ ...base, state: "REFUNDED", transaction: mockTransaction("CONFIRMED", "REFUND") })).toBeDefined();
     expect(() => SettlementRecordSchema.parse({ ...base, state: "RECONCILED", transaction: null })).toThrow();
-    const completedJob = { standard: "ERC-8183" as const, network: "synthetic:arc-testnet", chainId: "synthetic:chain", contractAddress: "mock:contract", jobId: "mock:job", clientAddress: "mock:client", providerAddress: "mock:provider", evaluatorAddress: "mock:evaluator", budget: money("USDC", "1"), expiresAt: "2026-02-01T00:00:00.000Z", descriptionReference: "mock:description", deliverableReference: "mock:deliverable", reasonReference: null, status: "COMPLETED" as const, transaction: null, isMock: true };
+    const completedJob = { standard: "ERC-8183" as const, network: "synthetic:arc-testnet", chainId: "synthetic:chain", contractAddress: "mock:contract", jobId: "mock:job", clientAddress: "mock:client", providerAddress: "mock:provider", evaluatorAddress: "mock:evaluator", budget: usdc("1"), expiresAt: "2026-02-01T00:00:00.000Z", descriptionReference: "mock:description", deliverableReference: "mock:deliverable", reasonReference: null, status: "COMPLETED" as const, transaction: null, isMock: true };
     expect(() => SettlementRecordSchema.parse({ ...base, state: "CONFIRMED", job: completedJob, transaction: null })).toThrow();
   });
   it.each([
@@ -269,18 +271,18 @@ describe("lifecycle evidence schemas", () => {
     ["RECONCILED", mockTransaction("CONFIRMED"), true], ["RECONCILED", mockTransaction("CONFIRMED", "REFUND"), true], ["RECONCILED", mockTransaction("SUBMITTED"), false],
     ["FAILED", null, true], ["FAILED", mockTransaction("FAILED"), true], ["FAILED", mockTransaction("CONFIRMED"), false],
   ] as const)("validates %s settlement evidence", (state, transaction, valid) => {
-    const candidate = { id: "settlement:matrix", projectId: "project:1", releaseRequestId: "release:1", reconciliationId: state === "RECONCILED" ? "reconciliation:1" : null, idempotencyKey: "settlement:key", amount: money("USDC", "1"), state, job: null, transaction, updatedAt: context.occurredAt };
+    const candidate = { id: "settlement:matrix", projectId: "project:1", releaseRequestId: "release:1", reconciliationId: state === "RECONCILED" ? "reconciliation:1" : null, idempotencyKey: "settlement:key", amount: usdc("1"), state, job: null, transaction, updatedAt: context.occurredAt };
     expect(SettlementRecordSchema.safeParse(candidate).success).toBe(valid);
   });
   it("rejects unsupported confirmed settlement disclosure", () => {
     const seed = createPawPovAiSeed();
-    expect(() => filterBackerDisclosure({ project: seed.project, evidence: [], proofs: [], settlements: [{ id: "settlement:bad", projectId: seed.project.id, releaseRequestId: "release:1", reconciliationId: null, idempotencyKey: "settlement:key", amount: money("USDC", "1"), state: "CONFIRMED", job: null, transaction: null, updatedAt: context.occurredAt }], preferences: { ...seed.disclosurePreferences, discloseSettlementState: true } })).toThrow();
+    expect(() => filterBackerDisclosure({ project: seed.project, evidence: [], proofs: [], settlements: [{ id: "settlement:bad", projectId: seed.project.id, releaseRequestId: "release:1", reconciliationId: null, idempotencyKey: "settlement:key", amount: usdc("1"), state: "CONFIRMED", job: null, transaction: null, updatedAt: context.occurredAt }], preferences: { ...seed.disclosurePreferences, discloseSettlementState: true } })).toThrow();
   });
 });
 
 describe("persisted relationship integrity", () => {
   async function authorizationFixture() {
-    const release = ReleaseRequestSchema.parse({ id: "release:1", projectId: "project:1", milestoneId: "milestone:1", proofId: "proof:1", intentId: "intent:1", settlementId: null, amount: money("USDC", "100"), state: "PREPARED", approvalId: "approval:1", idempotencyKey: "release:key", createdAt: context.occurredAt });
+    const release = ReleaseRequestSchema.parse({ id: "release:1", projectId: "project:1", milestoneId: "milestone:1", proofId: "proof:1", intentId: "intent:1", settlementId: null, amount: usdc("100"), state: "PREPARED", approvalId: "approval:1", idempotencyKey: "release:key", createdAt: context.occurredAt });
     const transaction = TransactionRecordSchema.parse({ id: "transaction:1", projectId: release.projectId, releaseRequestId: release.id, intentId: release.intentId, destinationReference: "mock:recipient", approvalId: "approval:1", approvalBindingId: "binding:1", reconciliationId: null, idempotencyKey: "transaction:key", amount: release.amount, operationState: "PREPARED", arcTransaction: mockTransaction("PREPARED"), createdAt: context.occurredAt, updatedAt: context.occurredAt });
     const executionIntent = { version: 1 as const, actionKind: "RELEASE_APPROVAL" as const, projectId: release.projectId, releaseRequestId: release.id, transactionRecordId: transaction.id, intentId: release.intentId, asset: release.amount.asset, atomicAmount: release.amount.atomicUnits, operationType: transaction.arcTransaction!.operationType, protocolTarget: { kind: "DESTINATION" as const, destination: transaction.destinationReference, network: transaction.arcTransaction!.network, chainId: transaction.arcTransaction!.chainId } };
     const exactIntentHash = await hashCanonicalExecutionIntent(executionIntent);
@@ -293,36 +295,65 @@ describe("persisted relationship integrity", () => {
   });
   it("validates only the recomputed exact approved execution intent", async () => {
     const { approval, release, transaction, binding } = await authorizationFixture();
-    await expect(validateExecutionAuthorization(approval, release, transaction, binding, context.occurredAt, "RELEASE_APPROVAL")).resolves.toBe(true);
-    for (const changed of [{ ...transaction, amount: money("USDC", "101") }, { ...transaction, amount: money("USDC", "99") }, { ...transaction, amount: money("EURC", "100") }, { ...transaction, destinationReference: "mock:other" }, { ...transaction, projectId: "project:other" }, { ...transaction, releaseRequestId: "release:other" }, { ...transaction, id: "transaction:other" }, { ...transaction, intentId: "intent:other" }, { ...transaction, arcTransaction: { ...transaction.arcTransaction!, operationType: "REFUND" as const } }, { ...transaction, arcTransaction: { ...transaction.arcTransaction!, chainId: "mock:other-chain" } }]) await expect(validateExecutionAuthorization(approval, release, changed as never, binding, context.occurredAt, "RELEASE_APPROVAL")).rejects.toThrow();
-    await expect(validateExecutionAuthorization({ ...approval, actionKind: "JOB_EVALUATION" as const } as never, release, transaction, binding, context.occurredAt, "RELEASE_APPROVAL")).rejects.toThrow();
-    await expect(validateExecutionAuthorization(approval, release, transaction, { ...binding, executionIntent: { ...binding.executionIntent, atomicAmount: "101" } }, context.occurredAt, "RELEASE_APPROVAL")).rejects.toThrow();
-    await expect(validateExecutionAuthorization(approval, release, transaction, { ...binding, exactIntentHash: `sha256:${"0".repeat(64)}` }, context.occurredAt, "RELEASE_APPROVAL")).rejects.toThrow();
+    await expect(validateExecutionAuthorization(approval, release, transaction, binding, context.occurredAt)).resolves.toBe(true);
+    for (const changed of [{ ...transaction, amount: usdc("101") }, { ...transaction, amount: usdc("99") }, { ...transaction, amount: money("EURC", "100") }, { ...transaction, destinationReference: "mock:other" }, { ...transaction, projectId: "project:other" }, { ...transaction, releaseRequestId: "release:other" }, { ...transaction, id: "transaction:other" }, { ...transaction, intentId: "intent:other" }, { ...transaction, arcTransaction: { ...transaction.arcTransaction!, operationType: "REFUND" as const } }, { ...transaction, arcTransaction: { ...transaction.arcTransaction!, chainId: "mock:other-chain" } }]) await expect(validateExecutionAuthorization(approval, release, changed as never, binding, context.occurredAt)).rejects.toThrow();
+    await expect(validateExecutionAuthorization({ ...approval, actionKind: "JOB_EVALUATION" as const } as never, release, transaction, binding, context.occurredAt)).rejects.toThrow();
+    await expect(validateExecutionAuthorization(approval, release, transaction, { ...binding, executionIntent: { ...binding.executionIntent, atomicAmount: "101" } }, context.occurredAt)).rejects.toThrow();
+    await expect(validateExecutionAuthorization(approval, release, transaction, { ...binding, exactIntentHash: `sha256:${"0".repeat(64)}` }, context.occurredAt)).rejects.toThrow();
   });
   it("continues rejecting invalid or unrelated approvals", async () => {
     const { approval, release, transaction, binding } = await authorizationFixture();
-    await expect(validateExecutionAuthorization({ ...approval, decision: "PENDING", approver: null, decidedAt: null }, release, transaction, binding, context.occurredAt, "RELEASE_APPROVAL")).rejects.toThrow();
-    await expect(validateExecutionAuthorization({ ...approval, decision: "REJECTED" }, release, transaction, binding, context.occurredAt, "RELEASE_APPROVAL")).rejects.toThrow();
-    await expect(validateExecutionAuthorization(approval, release, transaction, binding, "2028-01-01T00:00:00.000Z", "RELEASE_APPROVAL")).rejects.toThrow();
-    await expect(validateExecutionAuthorization(approval, { ...release, approvalId: "approval:other" }, transaction, binding, context.occurredAt, "RELEASE_APPROVAL")).rejects.toThrow();
+    await expect(validateExecutionAuthorization({ ...approval, decision: "PENDING", approver: null, decidedAt: null }, release, transaction, binding, context.occurredAt)).rejects.toThrow();
+    await expect(validateExecutionAuthorization({ ...approval, decision: "REJECTED" }, release, transaction, binding, context.occurredAt)).rejects.toThrow();
+    await expect(validateExecutionAuthorization(approval, release, transaction, binding, "2028-01-01T00:00:00.000Z")).rejects.toThrow();
+    await expect(validateExecutionAuthorization(approval, { ...release, approvalId: "approval:other" }, transaction, binding, context.occurredAt)).rejects.toThrow();
     expect(() => TransactionRecordSchema.parse({ ...transaction, approvalBindingId: null })).toThrow();
   });
   it("is a PREPARED-only gate and consumes an active binding once", async () => {
     const { approval, release, transaction, binding } = await authorizationFixture();
-    for (const operationState of ["SUBMITTED", "CONFIRMED", "FAILED", "RECONCILED"] as const) await expect(validateExecutionAuthorization(approval, release, { ...transaction, operationState }, binding, context.occurredAt, "RELEASE_APPROVAL")).rejects.toThrow();
-    await expect(validateExecutionAuthorization(approval, { ...release, state: "APPROVED" }, transaction, binding, context.occurredAt, "RELEASE_APPROVAL")).rejects.toThrow();
-    for (const status of ["CONSUMED", "REVOKED"] as const) await expect(validateExecutionAuthorization(approval, release, transaction, { ...binding, status }, context.occurredAt, "RELEASE_APPROVAL")).rejects.toThrow();
+    for (const operationState of ["SUBMITTED", "CONFIRMED", "FAILED", "RECONCILED"] as const) await expect(validateExecutionAuthorization(approval, release, { ...transaction, operationState }, binding, context.occurredAt)).rejects.toThrow();
+    await expect(validateExecutionAuthorization(approval, { ...release, state: "APPROVED" }, transaction, binding, context.occurredAt)).rejects.toThrow();
+    for (const status of ["CONSUMED", "REVOKED"] as const) await expect(validateExecutionAuthorization(approval, release, transaction, { ...binding, status }, context.occurredAt)).rejects.toThrow();
     const consumed = consumeExecutionAuthorizationBinding(binding, transaction.id, context.occurredAt);
     expect(consumed).toMatchObject({ status: "CONSUMED", consumedByTransactionId: transaction.id });
     expect(() => consumeExecutionAuthorizationBinding(consumed, transaction.id, context.occurredAt)).toThrow();
   });
+  it("derives approval policy internally and fails closed for deferred operations", async () => {
+    const { approval, release, transaction, binding } = await authorizationFixture();
+    await expect(validateExecutionAuthorization({ ...approval, actionKind: "JOB_EVALUATION", authorizedActorType: "EVALUATOR", authorizedActorId: "evaluator:1", approver: { actorId: "evaluator:1", actorType: "EVALUATOR" } }, release, transaction, binding, context.occurredAt)).rejects.toThrow(/policy/);
+    const deferredIntent = { ...binding.executionIntent, operationType: "JOB_SUBMIT" as const, protocolTarget: { kind: "ERC8183" as const, standard: "ERC-8183" as const, network: "ARC_TESTNET" as const, chainId: "synthetic:chain", contractReference: "mock:contract", jobId: "mock:job", method: "JOB_SUBMIT" as const, parameterCommitment: `sha256:${"a".repeat(64)}`, clientReference: "mock:client", providerReference: "mock:provider", evaluatorReference: "mock:evaluator", destination: "mock:destination" } };
+    await expect(validateExecutionAuthorization(approval, release, { ...transaction, arcTransaction: { ...transaction.arcTransaction!, operationType: "JOB_SUBMIT" } }, { ...binding, executionIntent: deferredIntent }, context.occurredAt)).rejects.toThrow(/deferred/);
+  });
+  it.each([
+    ["REFUND", "RELEASE_APPROVAL", "FOUNDER"], ["JOB_FUND", "RELEASE_APPROVAL", "FOUNDER"], ["JOB_EVALUATE", "JOB_EVALUATION", "EVALUATOR"],
+  ] as const)("derives %s authorization as %s by %s", async (operationType, actionKind, actorType) => {
+    const fixture = await authorizationFixture();
+    const actorId = actorType === "FOUNDER" ? "founder:1" : "evaluator:1";
+    const protocolTarget = operationType === "REFUND" ? fixture.binding.executionIntent.protocolTarget : { kind: "ERC8183" as const, standard: "ERC-8183" as const, network: "ARC_TESTNET" as const, chainId: "synthetic:chain", contractReference: "mock:contract", jobId: "mock:job", method: operationType, parameterCommitment: `sha256:${"a".repeat(64)}`, clientReference: "mock:client", providerReference: "mock:provider", evaluatorReference: "mock:evaluator", destination: fixture.transaction.destinationReference };
+    const executionIntent = CanonicalExecutionIntentSchema.parse({ ...fixture.binding.executionIntent, actionKind, operationType, protocolTarget });
+    const exactIntentHash = await hashCanonicalExecutionIntent(executionIntent);
+    const approval = ApprovalRecordSchema.parse({ ...fixture.approval, actionKind, authorizedActorType: actorType, authorizedActorId: actorId, approver: { actorId, actorType }, exactIntentHash });
+    const transaction = TransactionRecordSchema.parse({ ...fixture.transaction, arcTransaction: { ...fixture.transaction.arcTransaction!, operationType, network: protocolTarget.network, chainId: protocolTarget.chainId } });
+    await expect(validateExecutionAuthorization(approval, fixture.release, transaction, { ...fixture.binding, exactIntentHash, executionIntent }, context.occurredAt)).resolves.toBe(true);
+  });
+  it("atomically consumes stored authorization bindings exactly once", async () => {
+    const { binding, transaction } = await authorizationFixture(); const repository = new ExecutionAuthorizationBindingRepository();
+    const input = structuredClone(binding); repository.create(input); input.exactIntentHash = `sha256:${"f".repeat(64)}`;
+    expect(repository.get(binding.id)?.status).toBe("ACTIVE");
+    expect(() => repository.consume(binding.id, "transaction:other", context.occurredAt)).toThrow();
+    const attempts = await Promise.allSettled([Promise.resolve().then(() => repository.consume(binding.id, transaction.id, context.occurredAt)), Promise.resolve().then(() => repository.consume(binding.id, transaction.id, context.occurredAt))]);
+    expect(attempts.filter((result) => result.status === "fulfilled")).toHaveLength(1); expect(attempts.filter((result) => result.status === "rejected")).toHaveLength(1);
+    const stored = repository.get(binding.id)!; expect(stored).toMatchObject({ status: "CONSUMED", consumedByTransactionId: transaction.id }); stored.status = "REVOKED"; expect(repository.get(binding.id)?.status).toBe("CONSUMED");
+    const revokedRepository = new ExecutionAuthorizationBindingRepository(); revokedRepository.create({ ...binding, status: "REVOKED" }); expect(() => revokedRepository.consume(binding.id, transaction.id, context.occurredAt)).toThrow();
+  });
   it("commits every ERC-8183 protocol target field in canonical hashes", async () => {
     const { binding } = await authorizationFixture();
-    const target = { kind: "ERC8183" as const, standard: "ERC-8183" as const, network: "mock:network", chainId: "mock:chain", contractReference: "mock:contract", jobId: "mock:job", method: "JOB_FUND" as const, parameterCommitment: `sha256:${"a".repeat(64)}`, clientReference: "mock:client", providerReference: "mock:provider", evaluatorReference: "mock:evaluator", destination: "mock:escrow" };
+    const target = { kind: "ERC8183" as const, standard: "ERC-8183" as const, network: "ARC_TESTNET" as const, chainId: "synthetic:chain", contractReference: "mock:contract", jobId: "mock:job", method: "JOB_FUND" as const, parameterCommitment: `sha256:${"a".repeat(64)}`, clientReference: "mock:client", providerReference: "mock:provider", evaluatorReference: "mock:evaluator", destination: "mock:escrow" };
     const intent = { ...binding.executionIntent, actionKind: "JOB_EVALUATION" as const, operationType: "JOB_FUND" as const, protocolTarget: target };
     expect(CanonicalExecutionIntentSchema.parse(intent)).toBeDefined();
     expect(() => CanonicalExecutionIntentSchema.parse({ ...intent, protocolTarget: { kind: "ERC8183", standard: "ERC-8183" } })).toThrow();
     expect(() => CanonicalExecutionIntentSchema.parse({ ...binding.executionIntent, protocolTarget: target })).toThrow();
+    for (const field of ["network", "chainId", "contractReference", "jobId", "clientReference", "providerReference", "evaluatorReference", "destination"] as const) expect(() => CanonicalExecutionIntentSchema.parse({ ...intent, protocolTarget: { ...target, [field]: "fake" } })).toThrow();
     const original = await hashCanonicalExecutionIntent(intent);
     for (const protocolTarget of [{ ...target, contractReference: "mock:other" }, { ...target, jobId: "mock:other" }, { ...target, method: "JOB_SUBMIT" as const }, { ...target, parameterCommitment: `sha256:${"b".repeat(64)}` }, { ...target, evaluatorReference: "mock:other" }]) expect(await hashCanonicalExecutionIntent({ ...intent, protocolTarget })).not.toBe(original);
   });
@@ -331,13 +362,13 @@ describe("persisted relationship integrity", () => {
     expect(validateReleaseConfirmation(confirmedRelease, confirmedSettlement)).toBe(true); expect(() => validateReleaseConfirmation(confirmedRelease, { ...confirmedSettlement, transaction: mockTransaction("SUBMITTED") })).toThrow(); expect(() => validateReleaseConfirmation(confirmedRelease, { ...confirmedSettlement, transaction: mockTransaction("CONFIRMED", "REFUND") })).toThrow();
   });
   function reconciliationFixture(result: "MATCHED" | "MISMATCH" | "REQUIRES_REVIEW") {
-    const matched = result === "MATCHED"; const transaction = TransactionRecordSchema.parse({ id: "transaction:1", projectId: "project:1", releaseRequestId: "release:1", intentId: "intent:1", destinationReference: "mock:recipient", approvalId: "approval:1", approvalBindingId: "binding:1", reconciliationId: matched ? "reconciliation:1" : null, idempotencyKey: "transaction:key", amount: money("USDC", "100"), operationState: matched ? "RECONCILED" : "CONFIRMED", arcTransaction: mockTransaction("CONFIRMED"), createdAt: context.occurredAt, updatedAt: context.occurredAt });
-    const settlement = SettlementRecordSchema.parse({ id: "settlement:1", projectId: "project:1", releaseRequestId: "release:1", reconciliationId: matched ? "reconciliation:1" : null, idempotencyKey: "settlement:key", amount: money("USDC", "100"), state: matched ? "RECONCILED" : "CONFIRMED", job: null, transaction: mockTransaction("CONFIRMED"), updatedAt: context.occurredAt });
+    const matched = result === "MATCHED"; const transaction = TransactionRecordSchema.parse({ id: "transaction:1", projectId: "project:1", releaseRequestId: "release:1", intentId: "intent:1", destinationReference: "mock:recipient", approvalId: "approval:1", approvalBindingId: "binding:1", reconciliationId: matched ? "reconciliation:1" : null, idempotencyKey: "transaction:key", amount: usdc("100"), operationState: matched ? "RECONCILED" : "CONFIRMED", arcTransaction: mockTransaction("CONFIRMED"), createdAt: context.occurredAt, updatedAt: context.occurredAt });
+    const settlement = SettlementRecordSchema.parse({ id: "settlement:1", projectId: "project:1", releaseRequestId: "release:1", reconciliationId: matched ? "reconciliation:1" : null, idempotencyKey: "settlement:key", amount: usdc("100"), state: matched ? "RECONCILED" : "CONFIRMED", job: null, transaction: mockTransaction("CONFIRMED"), updatedAt: context.occurredAt });
     const reconciliation = ReconciliationRecordSchema.parse({ id: "reconciliation:1", projectId: "project:1", transactionRecordId: transaction.id, settlementId: settlement.id, result, evidenceReference: "mock:reconciliation-evidence", reconciledAt: context.occurredAt, actor: { actorId: "adapter:authorized", actorType: "ADAPTER" } }); return { transaction, settlement, reconciliation };
   }
   it("accepts MATCHED only for exact amounts and Arc evidence", () => {
     const { transaction, settlement, reconciliation } = reconciliationFixture("MATCHED"); expect(validateReconciliation(transaction, settlement, reconciliation, "adapter:authorized")).toBe(true);
-    for (const changed of [{ ...settlement, amount: money("USDC", "101") }, { ...settlement, amount: money("EURC", "100") }, { ...settlement, transaction: { ...settlement.transaction!, transactionHash: "mock:different" } }, { ...settlement, transaction: { ...settlement.transaction!, blockHash: "mock:different" } }, { ...settlement, transaction: { ...settlement.transaction!, operationType: "REFUND" as const } }]) expect(() => validateReconciliation(transaction, changed, reconciliation, "adapter:authorized")).toThrow();
+    for (const changed of [{ ...settlement, amount: usdc("101") }, { ...settlement, amount: money("EURC", "100") }, { ...settlement, transaction: { ...settlement.transaction!, transactionHash: "mock:different" } }, { ...settlement, transaction: { ...settlement.transaction!, blockHash: "mock:different" } }, { ...settlement, transaction: { ...settlement.transaction!, operationType: "REFUND" as const } }]) expect(() => validateReconciliation(transaction, changed, reconciliation, "adapter:authorized")).toThrow();
   });
   it.each(["MISMATCH", "REQUIRES_REVIEW"] as const)("persists %s without advancing lifecycle state", (result) => { const value = reconciliationFixture(result); expect(validateReconciliation(value.transaction, value.settlement, value.reconciliation, "adapter:authorized")).toBe(true); expect(() => validateReconciliation({ ...value.transaction, operationState: "RECONCILED", reconciliationId: value.reconciliation.id }, value.settlement, value.reconciliation, "adapter:authorized")).toThrow(); });
   it("requires the exact authorized adapter", () => {
@@ -347,7 +378,7 @@ describe("persisted relationship integrity", () => {
 });
 
 describe("append-only ledger reversal relationships", () => {
-  const base = { id: "ledger:1", vaultId: "vault:1", reserveId: null, amount: money("USDC", "1"), idempotencyKey: "ledger:key", occurredAt: context.occurredAt };
+  const base = { id: "ledger:1", vaultId: "vault:1", reserveId: null, amount: usdc("1"), idempotencyKey: "ledger:key", occurredAt: context.occurredAt };
   it("requires a distinct target only for reversals", () => {
     expect(() => LedgerEntrySchema.parse({ ...base, kind: "REVERSAL", reversesEntryId: null })).toThrow();
     expect(() => LedgerEntrySchema.parse({ ...base, kind: "CAPITAL", reversesEntryId: "ledger:original" })).toThrow();
@@ -355,14 +386,17 @@ describe("append-only ledger reversal relationships", () => {
     expect(LedgerEntrySchema.parse({ ...base, kind: "REVERSAL", reversesEntryId: "ledger:original" })).toBeDefined();
   });
   it("validates persisted targets and remaining reversible amount", () => {
-    const target = LedgerEntrySchema.parse({ ...base, id: "ledger:original", kind: "CAPITAL", reversesEntryId: null, amount: money("USDC", "10") });
-    const reversal = LedgerEntrySchema.parse({ ...base, kind: "REVERSAL", reversesEntryId: target.id, amount: money("USDC", "6") });
+    const target = LedgerEntrySchema.parse({ ...base, id: "ledger:original", kind: "CAPITAL", reversesEntryId: null, amount: usdc("10") });
+    const reversal = LedgerEntrySchema.parse({ ...base, kind: "REVERSAL", reversesEntryId: target.id, amount: usdc("6") });
     expect(validateLedgerReversal(reversal, target)).toBe(true);
     expect(() => validateLedgerReversal(reversal, null)).toThrow();
     expect(() => validateLedgerReversal(reversal, { ...target, vaultId: "vault:other" })).toThrow();
-    expect(() => validateLedgerReversal({ ...reversal, amount: money("USDC", "11") }, target)).toThrow();
-    const prior = { ...reversal, id: "ledger:prior", amount: money("USDC", "4") };
+    expect(() => validateLedgerReversal({ ...reversal, amount: usdc("11") }, target)).toThrow();
+    const prior = { ...reversal, id: "ledger:prior", amount: usdc("10") };
     expect(() => validateLedgerReversal(reversal, target, [prior])).toThrow();
+    expect(() => validateLedgerReversal(reversal, target, [{ ...prior, reversesEntryId: "ledger:other" }])).toThrow();
+    expect(() => validateLedgerReversal(reversal, target, [{ ...prior, vaultId: "vault:other" }])).toThrow();
+    expect(() => validateLedgerReversal({ ...reversal, amount: { asset: "EURC", atomicUnits: "1" } } as never, target)).toThrow();
   });
 });
 
@@ -371,13 +405,13 @@ describe("discriminated milestone requirements", () => {
   it("requires kind-specific parameters", () => {
     expect(() => MilestoneRequirementSchema.parse({ ...base, kind: "SPEND_LIMIT" })).toThrow();
     expect(() => MilestoneRequirementSchema.parse({ ...base, kind: "EXPENSE_RECORDS" })).toThrow();
-    expect(MilestoneRequirementSchema.parse({ ...base, kind: "SPEND_LIMIT", spendLimit: money("USDC", "1") })).toBeDefined();
+    expect(MilestoneRequirementSchema.parse({ ...base, kind: "SPEND_LIMIT", spendLimit: usdc("1") })).toBeDefined();
     expect(MilestoneRequirementSchema.parse({ ...base, kind: "EXPENSE_RECORDS", requiredCount: 2 })).toBeDefined();
   });
   it("rejects parameters belonging to another kind", () => {
-    expect(() => MilestoneRequirementSchema.parse({ ...base, kind: "DELIVERABLE", spendLimit: money("USDC", "1") })).toThrow();
+    expect(() => MilestoneRequirementSchema.parse({ ...base, kind: "DELIVERABLE", spendLimit: usdc("1") })).toThrow();
     expect(() => MilestoneRequirementSchema.parse({ ...base, kind: "FOUNDER_CONFIRMATION", requiredCount: 1 })).toThrow();
-    expect(() => MilestoneRequirementSchema.parse({ ...base, kind: "EXPENSE_RECORDS", requiredCount: 2, spendLimit: money("USDC", "1") })).toThrow();
+    expect(() => MilestoneRequirementSchema.parse({ ...base, kind: "EXPENSE_RECORDS", requiredCount: 2, spendLimit: usdc("1") })).toThrow();
   });
 });
 
@@ -386,12 +420,12 @@ describe("Backer-safe disclosure filtering", () => {
     const seed = createPawPovAiSeed(); const secret = "DO-NOT-DISCLOSE";
     const evidence = EvidenceItemSchema.parse({ id: "evidence:private", projectId: seed.project.id, kind: "RECEIPT", sourceHash: `sha256:${"b".repeat(64)}`, storageRef: `private://${secret}`, visibility: "FOUNDER_PRIVATE", submittedAt: context.occurredAt, rawContent: secret, privateNotes: secret });
     const proofs = [{ id: "proof:approved", projectId: seed.project.id, milestoneId: seed.milestone.id, version: 1, approvedEvidenceHashes: [evidence.sourceHash], recordHash: `sha256:${"c".repeat(64)}`, visibility: "BACKER_SHARED" as const, createdAt: context.occurredAt }, { id: "proof:hidden", projectId: seed.project.id, milestoneId: seed.milestone.id, version: 1, approvedEvidenceHashes: [], recordHash: `sha256:${"d".repeat(64)}`, visibility: "FOUNDER_PRIVATE" as const, createdAt: context.occurredAt }, { id: "proof:other", projectId: "project:other", milestoneId: "milestone:other", version: 99, approvedEvidenceHashes: [], recordHash: `sha256:${"e".repeat(64)}`, visibility: "BACKER_SHARED" as const, createdAt: context.occurredAt }];
-    const result = filterBackerDisclosure({ project: seed.project, evidence: [evidence], proofs, settlements: [{ id: "settlement:private", projectId: seed.project.id, releaseRequestId: "release:1", reconciliationId: null, idempotencyKey: "settlement:key", amount: money("USDC", "1"), state: "PENDING", job: null, transaction: null, updatedAt: context.occurredAt }], preferences: { ...seed.disclosurePreferences, discloseProofRecords: true, approvedProofIds: ["proof:approved", "proof:hidden", "proof:other"], discloseSettlementState: false } });
+    const result = filterBackerDisclosure({ project: seed.project, evidence: [evidence], proofs, settlements: [{ id: "settlement:private", projectId: seed.project.id, releaseRequestId: "release:1", reconciliationId: null, idempotencyKey: "settlement:key", amount: usdc("1"), state: "PENDING", job: null, transaction: null, updatedAt: context.occurredAt }], preferences: { ...seed.disclosurePreferences, discloseProofRecords: true, approvedProofIds: ["proof:approved", "proof:hidden", "proof:other"], discloseSettlementState: false } });
     expect(result.proofs.map((proof) => proof.id)).toEqual(["proof:approved"]); expect(result.settlements).toEqual([]); expect(result.evidence).toEqual([]);
     const serialized = JSON.stringify(result); expect(serialized).not.toContain(secret); expect(serialized).not.toContain("storageRef"); expect(serialized).not.toContain("privateNotes"); expect(serialized).not.toContain("proof:hidden"); expect(serialized).not.toContain("proof:other"); expect(serialized).not.toContain("milestone:other"); expect(serialized).not.toContain("settlement:private");
   });
   it("revalidates all settlements and discloses only the selected project", () => {
-    const seed = createPawPovAiSeed(); const settlement = { releaseRequestId: "release:1", reconciliationId: null, idempotencyKey: "settlement:key", amount: money("USDC", "1"), state: "PENDING" as const, job: null, transaction: null, updatedAt: context.occurredAt };
+    const seed = createPawPovAiSeed(); const settlement = { releaseRequestId: "release:1", reconciliationId: null, idempotencyKey: "settlement:key", amount: usdc("1"), state: "PENDING" as const, job: null, transaction: null, updatedAt: context.occurredAt };
     const result = filterBackerDisclosure({ project: seed.project, evidence: [], proofs: [], settlements: [{ ...settlement, id: "settlement:selected", projectId: seed.project.id }, { ...settlement, id: "settlement:other", projectId: "project:other" }], preferences: { ...seed.disclosurePreferences, discloseSettlementState: true } });
     expect(result.settlements.map((record) => record.id)).toEqual(["settlement:selected"]);
     expect(() => filterBackerDisclosure({ project: seed.project, evidence: [], proofs: [], settlements: [{ ...settlement, id: "settlement:invalid-other", projectId: "project:other", state: "CONFIRMED" }], preferences: { ...seed.disclosurePreferences, discloseSettlementState: false } })).toThrow();

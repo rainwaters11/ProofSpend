@@ -1,4 +1,4 @@
-import type { ApprovalRecord, CanonicalExecutionIntent, ExecutionAuthorizationBinding, LedgerEntry, ReconciliationRecord, ReleaseRequest, SettlementRecord, TransactionRecord } from "./models";
+import { LedgerEntrySchema, type ApprovalRecord, type CanonicalExecutionIntent, type ExecutionAuthorizationBinding, type LedgerEntry, type ReconciliationRecord, type ReleaseRequest, type SettlementRecord, type TransactionRecord } from "./models";
 
 export class RelationshipIntegrityError extends Error { constructor(message: string) { super(message); this.name = "RelationshipIntegrityError"; } }
 const assert = (condition: boolean, message: string): void => { if (!condition) throw new RelationshipIntegrityError(message); };
@@ -16,7 +16,22 @@ export async function hashCanonicalExecutionIntent(intent: CanonicalExecutionInt
   return `sha256:${Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
 }
 
-export async function validateExecutionAuthorization(approval: ApprovalRecord, release: ReleaseRequest, transaction: TransactionRecord, binding: ExecutionAuthorizationBinding, asOf: string, expectedAction: ApprovalRecord["actionKind"]): Promise<true> {
+function requiredApprovalPolicy(intent: CanonicalExecutionIntent): { actionKind: ApprovalRecord["actionKind"]; actorType: "FOUNDER" | "EVALUATOR" } {
+  switch (intent.operationType) {
+    case "SETTLEMENT": case "REFUND":
+      assert(intent.protocolTarget.kind === "DESTINATION", `${intent.operationType} requires an exact destination target.`);
+      return { actionKind: "RELEASE_APPROVAL", actorType: "FOUNDER" };
+    case "JOB_FUND":
+      assert(intent.protocolTarget.kind === "ERC8183", "JOB_FUND requires an exact ERC-8183 target.");
+      return { actionKind: "RELEASE_APPROVAL", actorType: "FOUNDER" };
+    case "JOB_EVALUATE":
+      assert(intent.protocolTarget.kind === "ERC8183", "JOB_EVALUATE requires an exact ERC-8183 target.");
+      return { actionKind: "JOB_EVALUATION", actorType: "EVALUATOR" };
+    default: throw new RelationshipIntegrityError(`Authorization governance for ${intent.operationType} is deferred to its owning issue.`);
+  }
+}
+
+export async function validateExecutionAuthorization(approval: ApprovalRecord, release: ReleaseRequest, transaction: TransactionRecord, binding: ExecutionAuthorizationBinding, asOf: string): Promise<true> {
   assert(release.state === "PREPARED", "Pre-submission authorization requires a PREPARED release.");
   if (transaction.operationState !== "PREPARED" || transaction.arcTransaction === null || transaction.arcTransaction.status !== "PREPARED") throw new RelationshipIntegrityError("Pre-submission authorization requires compatible PREPARED transaction evidence.");
   assert(transaction.arcTransaction.transactionHash === null && transaction.arcTransaction.blockNumber === null && transaction.arcTransaction.blockHash === null && transaction.arcTransaction.explorerUrl === null, "PREPARED transaction cannot contain submission or confirmation evidence.");
@@ -24,7 +39,8 @@ export async function validateExecutionAuthorization(approval: ApprovalRecord, r
   assert(binding.releaseRequestId === release.id && binding.approvalId === approval.id && binding.transactionRecordId === transaction.id, "Authorization binding record IDs do not match.");
   assert(release.approvalId === approval.id && transaction.approvalId === approval.id && transaction.approvalBindingId === binding.id, "Release or transaction does not reference the approval and authorization binding.");
   assert(approval.decision === "APPROVED", "Execution requires an approved decision.");
-  assert(approval.actionKind === expectedAction && approval.approver?.actorType === approval.authorizedActorType && approval.approver.actorId === approval.authorizedActorId, "Approval action or exact authorized actor does not match.");
+  const policy = requiredApprovalPolicy(binding.executionIntent);
+  assert(approval.actionKind === policy.actionKind && approval.authorizedActorType === policy.actorType && approval.approver?.actorType === policy.actorType && approval.approver.actorId === approval.authorizedActorId, "Approval policy or exact authorized actor does not match.");
   assert(Date.parse(approval.expiresAt) > Date.parse(asOf), "Approval is expired.");
   assert(release.intentId === binding.intentId && transaction.intentId === binding.intentId, "Release and transaction intent IDs do not match binding.");
   assert(release.projectId === transaction.projectId, "Release and transaction projects do not match.");
@@ -48,12 +64,17 @@ export function consumeExecutionAuthorizationBinding(binding: ExecutionAuthoriza
 }
 
 export function validateLedgerReversal(reversal: LedgerEntry, targetEntry: LedgerEntry | null | undefined, acceptedReversals: readonly LedgerEntry[] = []): true {
-  assert(reversal.kind === "REVERSAL", "Ledger relationship validation requires a reversal entry.");
-  if (targetEntry === null || targetEntry === undefined || targetEntry.id !== reversal.reversesEntryId) throw new RelationshipIntegrityError("Ledger reversal target does not exist or match.");
-  assert(targetEntry.id !== reversal.id && targetEntry.vaultId === reversal.vaultId, "Ledger reversal target must be a different entry in the same vault.");
-  assert(targetEntry.amount.asset === reversal.amount.asset, "Ledger reversal asset does not match target.");
-  const alreadyReversed = acceptedReversals.filter((entry) => entry.kind === "REVERSAL" && entry.reversesEntryId === targetEntry.id).reduce((total, entry) => total + BigInt(entry.amount.atomicUnits), 0n);
-  assert(alreadyReversed + BigInt(reversal.amount.atomicUnits) <= BigInt(targetEntry.amount.atomicUnits), "Ledger reversal exceeds the remaining target amount.");
+  const parsedReversal = LedgerEntrySchema.parse(reversal);
+  assert(parsedReversal.kind === "REVERSAL", "Ledger relationship validation requires a reversal entry.");
+  if (targetEntry === null || targetEntry === undefined) throw new RelationshipIntegrityError("Ledger reversal target does not exist or match.");
+  const parsedTarget = LedgerEntrySchema.parse(targetEntry);
+  assert(parsedTarget.id === parsedReversal.reversesEntryId && parsedTarget.id !== parsedReversal.id && parsedTarget.vaultId === parsedReversal.vaultId, "Ledger reversal target must be a different matching entry in the same vault.");
+  assert(parsedTarget.amount.asset === parsedReversal.amount.asset, "Ledger reversal asset does not match target.");
+  const alreadyReversed = acceptedReversals.map((entry) => LedgerEntrySchema.parse(entry)).reduce((total, entry) => {
+    assert(entry.kind === "REVERSAL" && entry.reversesEntryId === parsedTarget.id && entry.vaultId === parsedTarget.vaultId && entry.amount.asset === parsedTarget.amount.asset, "Accepted reversal is unrelated to the target ledger entry.");
+    return total + BigInt(entry.amount.atomicUnits);
+  }, 0n);
+  assert(alreadyReversed + BigInt(parsedReversal.amount.atomicUnits) <= BigInt(parsedTarget.amount.atomicUnits), "Ledger reversal exceeds the remaining target amount.");
   return true;
 }
 
