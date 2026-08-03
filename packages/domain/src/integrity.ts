@@ -1,11 +1,14 @@
-import type { ApprovalRecord, CanonicalExecutionIntent, ExecutionAuthorizationBinding, ReconciliationRecord, ReleaseRequest, SettlementRecord, TransactionRecord } from "./models";
+import type { ApprovalRecord, CanonicalExecutionIntent, ExecutionAuthorizationBinding, LedgerEntry, ReconciliationRecord, ReleaseRequest, SettlementRecord, TransactionRecord } from "./models";
 
 export class RelationshipIntegrityError extends Error { constructor(message: string) { super(message); this.name = "RelationshipIntegrityError"; } }
 const assert = (condition: boolean, message: string): void => { if (!condition) throw new RelationshipIntegrityError(message); };
 
 export function serializeCanonicalExecutionIntent(intent: CanonicalExecutionIntent): string {
-  const value = intent;
-  return JSON.stringify([value.version, value.actionType, value.projectId, value.releaseRequestId, value.transactionRecordId, value.intentId, value.asset, value.atomicAmount, value.operationType, value.destinationReference, value.network, value.chainId]);
+  const target = intent.protocolTarget;
+  const targetValues = target.kind === "DESTINATION"
+    ? [target.kind, target.destination, target.network, target.chainId]
+    : [target.kind, target.standard, target.network, target.chainId, target.contractReference, target.jobId, target.method, target.parameterCommitment, target.clientReference, target.providerReference, target.evaluatorReference, target.destination];
+  return JSON.stringify([intent.version, intent.actionKind, intent.projectId, intent.releaseRequestId, intent.transactionRecordId, intent.intentId, intent.asset, intent.atomicAmount, intent.operationType, ...targetValues]);
 }
 
 export async function hashCanonicalExecutionIntent(intent: CanonicalExecutionIntent): Promise<string> {
@@ -13,10 +16,15 @@ export async function hashCanonicalExecutionIntent(intent: CanonicalExecutionInt
   return `sha256:${Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
 }
 
-export async function validateExecutionAuthorization(approval: ApprovalRecord, release: ReleaseRequest, transaction: TransactionRecord, binding: ExecutionAuthorizationBinding, asOf: string): Promise<true> {
+export async function validateExecutionAuthorization(approval: ApprovalRecord, release: ReleaseRequest, transaction: TransactionRecord, binding: ExecutionAuthorizationBinding, asOf: string, expectedAction: ApprovalRecord["actionKind"]): Promise<true> {
+  assert(release.state === "PREPARED", "Pre-submission authorization requires a PREPARED release.");
+  if (transaction.operationState !== "PREPARED" || transaction.arcTransaction === null || transaction.arcTransaction.status !== "PREPARED") throw new RelationshipIntegrityError("Pre-submission authorization requires compatible PREPARED transaction evidence.");
+  assert(transaction.arcTransaction.transactionHash === null && transaction.arcTransaction.blockNumber === null && transaction.arcTransaction.blockHash === null && transaction.arcTransaction.explorerUrl === null, "PREPARED transaction cannot contain submission or confirmation evidence.");
+  assert(binding.status === "ACTIVE" && binding.consumedAt === null && binding.consumedByTransactionId === null, "Execution authorization binding is not active.");
   assert(binding.releaseRequestId === release.id && binding.approvalId === approval.id && binding.transactionRecordId === transaction.id, "Authorization binding record IDs do not match.");
   assert(release.approvalId === approval.id && transaction.approvalId === approval.id && transaction.approvalBindingId === binding.id, "Release or transaction does not reference the approval and authorization binding.");
   assert(approval.decision === "APPROVED", "Execution requires an approved decision.");
+  assert(approval.actionKind === expectedAction && approval.approver?.actorType === approval.authorizedActorType && approval.approver.actorId === approval.authorizedActorId, "Approval action or exact authorized actor does not match.");
   assert(Date.parse(approval.expiresAt) > Date.parse(asOf), "Approval is expired.");
   assert(release.intentId === binding.intentId && transaction.intentId === binding.intentId, "Release and transaction intent IDs do not match binding.");
   assert(release.projectId === transaction.projectId, "Release and transaction projects do not match.");
@@ -24,12 +32,28 @@ export async function validateExecutionAuthorization(approval: ApprovalRecord, r
   assert(release.amount.asset === transaction.amount.asset && release.amount.atomicUnits === transaction.amount.atomicUnits, "Release and transaction amounts do not match exactly.");
   const intent = binding.executionIntent;
   assert(intent.version === 1, "Canonical execution intent version is unsupported.");
-  assert(intent.actionType === approval.actionType && intent.projectId === release.projectId && intent.releaseRequestId === release.id && intent.transactionRecordId === transaction.id && intent.intentId === release.intentId, "Canonical execution identifiers or action do not match persisted records.");
+  assert(intent.actionKind === approval.actionKind && intent.projectId === release.projectId && intent.releaseRequestId === release.id && intent.transactionRecordId === transaction.id && intent.intentId === release.intentId, "Canonical execution identifiers or action do not match persisted records.");
   assert(intent.asset === release.amount.asset && intent.atomicAmount === release.amount.atomicUnits, "Canonical execution amount does not match persisted amount.");
-  assert(intent.operationType === transaction.arcTransaction?.operationType && intent.destinationReference === transaction.destinationReference, "Canonical execution operation or destination does not match transaction.");
-  assert(intent.network === (transaction.arcTransaction?.network ?? null) && intent.chainId === (transaction.arcTransaction?.chainId ?? null), "Canonical execution network does not match transaction.");
+  assert(intent.operationType === transaction.arcTransaction.operationType && intent.protocolTarget.destination === transaction.destinationReference, "Canonical execution operation or destination does not match transaction.");
+  assert(intent.protocolTarget.network === transaction.arcTransaction.network && intent.protocolTarget.chainId === transaction.arcTransaction.chainId, "Canonical execution network does not match transaction.");
   const recomputedHash = await hashCanonicalExecutionIntent(intent);
   assert(recomputedHash === approval.exactIntentHash && recomputedHash === binding.exactIntentHash, "Recomputed exact intent hash does not match approval and binding.");
+  return true;
+}
+
+export function consumeExecutionAuthorizationBinding(binding: ExecutionAuthorizationBinding, transactionId: string, consumedAt: string): ExecutionAuthorizationBinding {
+  assert(binding.status === "ACTIVE" && binding.consumedAt === null && binding.consumedByTransactionId === null, "Execution authorization binding has already been consumed or revoked.");
+  assert(binding.transactionRecordId === transactionId, "Binding cannot be consumed by an unrelated transaction.");
+  return { ...binding, status: "CONSUMED", consumedAt, consumedByTransactionId: transactionId };
+}
+
+export function validateLedgerReversal(reversal: LedgerEntry, targetEntry: LedgerEntry | null | undefined, acceptedReversals: readonly LedgerEntry[] = []): true {
+  assert(reversal.kind === "REVERSAL", "Ledger relationship validation requires a reversal entry.");
+  if (targetEntry === null || targetEntry === undefined || targetEntry.id !== reversal.reversesEntryId) throw new RelationshipIntegrityError("Ledger reversal target does not exist or match.");
+  assert(targetEntry.id !== reversal.id && targetEntry.vaultId === reversal.vaultId, "Ledger reversal target must be a different entry in the same vault.");
+  assert(targetEntry.amount.asset === reversal.amount.asset, "Ledger reversal asset does not match target.");
+  const alreadyReversed = acceptedReversals.filter((entry) => entry.kind === "REVERSAL" && entry.reversesEntryId === targetEntry.id).reduce((total, entry) => total + BigInt(entry.amount.atomicUnits), 0n);
+  assert(alreadyReversed + BigInt(reversal.amount.atomicUnits) <= BigInt(targetEntry.amount.atomicUnits), "Ledger reversal exceeds the remaining target amount.");
   return true;
 }
 
