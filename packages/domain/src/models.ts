@@ -1,10 +1,12 @@
 import { z } from "zod";
 import { MoneyAmountSchema } from "./money";
+import { ARC_TESTNET_CHAIN_ID, ARC_TESTNET_NETWORK, arcTestnetExplorerTransactionUrl } from "./network";
 
 const Id = z.string().min(1);
 const Time = z.string().datetime();
 const Hash = z.string().regex(/^sha256:[a-f0-9]{64}$/);
 const EvmAddress = /^0x[a-fA-F0-9]{40}$/;
+const EvmHash = /^0x[a-fA-F0-9]{64}$/;
 const isSynthetic = (value: string) => /^(mock:|synthetic:)/.test(value);
 export const VisibilitySchema = z.enum(["FOUNDER_PRIVATE", "BACKER_SHARED", "ONCHAIN_PUBLIC"]);
 export const ActorSchema = z.object({ actorId: Id, actorType: z.enum(["SYSTEM", "AI", "FOUNDER", "BACKER", "EVALUATOR", "ADAPTER"]) });
@@ -36,7 +38,7 @@ export const AgentReputationRefSchema = z.object({
 });
 export type AgentReputationRef = z.infer<typeof AgentReputationRefSchema>;
 export const ArcTransactionRefSchema = z.object({
-  network: z.literal("ARC_TESTNET"), chainId: z.string().min(1), transactionHash: z.string().min(1).nullable(),
+  network: z.literal(ARC_TESTNET_NETWORK), chainId: z.string().min(1), transactionHash: z.string().min(1).nullable(),
   status: z.enum(["NONE", "PREPARED", "SUBMITTED", "CONFIRMED", "FAILED"]), blockNumber: z.string().regex(/^\d+$/).nullable(),
   blockHash: z.string().min(1).nullable(), explorerUrl: z.string().url().nullable(),
   operationType: z.enum(["IDENTITY_REGISTRATION", "REPUTATION_WRITE", "JOB_CREATE", "JOB_FUND", "JOB_SUBMIT", "JOB_EVALUATE", "SETTLEMENT", "REFUND"]), isMock: z.boolean(),
@@ -50,6 +52,10 @@ export const ArcTransactionRefSchema = z.object({
   if (value.isMock && references.some((item) => !isSynthetic(item))) context.addIssue({ code: "custom", message: "Every mock transaction reference must be visibly synthetic." });
   if (value.isMock && value.explorerUrl !== null) context.addIssue({ code: "custom", message: "Mock transactions cannot have a live explorer URL." });
   if (!value.isMock && references.some(isSynthetic)) context.addIssue({ code: "custom", message: "Synthetic transaction references cannot be marked live." });
+  if (!value.isMock && value.chainId !== ARC_TESTNET_CHAIN_ID) context.addIssue({ code: "custom", message: "Live transaction reference must use Arc Testnet chain ID." });
+  if (!value.isMock && value.transactionHash !== null && !EvmHash.test(value.transactionHash)) context.addIssue({ code: "custom", message: "Live transaction hash must be a canonical 32-byte EVM hash." });
+  if (!value.isMock && value.blockHash !== null && !EvmHash.test(value.blockHash)) context.addIssue({ code: "custom", message: "Live block hash must be a canonical 32-byte EVM hash." });
+  if (!value.isMock && value.transactionHash !== null && value.explorerUrl !== arcTestnetExplorerTransactionUrl(value.transactionHash)) context.addIssue({ code: "custom", message: "Live explorer URL must match the exact transaction hash." });
 });
 export type ArcTransactionRef = z.infer<typeof ArcTransactionRefSchema>;
 export const AgenticJobRefSchema = z.object({
@@ -117,11 +123,9 @@ export const ReleaseRequestSchema = z.object({ id: Id, milestoneId: Id, proofId:
 export type ReleaseRequest = z.infer<typeof ReleaseRequestSchema>;
 export const SettlementRecordSchema = z.object({ id: Id, releaseRequestId: Id, idempotencyKey: Id, amount: MoneyAmountSchema, state: z.enum(["PENDING", "CONFIRMED", "REFUND_PENDING", "REFUNDED", "RECONCILED", "FAILED"]), job: AgenticJobRefSchema.nullable(), transaction: ArcTransactionRefSchema.nullable(), updatedAt: Time }).superRefine((value, context) => {
   const confirmedSettlement = value.transaction?.status === "CONFIRMED" && value.transaction.operationType === "SETTLEMENT";
-  const completedJob = value.job?.status === "COMPLETED";
   const confirmedRefund = value.transaction?.status === "CONFIRMED" && value.transaction.operationType === "REFUND";
   if (value.state === "CONFIRMED" && value.transaction !== null && !confirmedSettlement) context.addIssue({ code: "custom", message: "Transaction confirmation evidence must be a confirmed settlement operation." });
-  if (value.state === "CONFIRMED" && value.job !== null && !completedJob) context.addIssue({ code: "custom", message: "Job confirmation evidence must be completed." });
-  if (value.state === "CONFIRMED" && !confirmedSettlement && !completedJob) context.addIssue({ code: "custom", message: "Confirmed settlement requires confirmed settlement or completed job evidence." });
+  if (value.state === "CONFIRMED" && !confirmedSettlement) context.addIssue({ code: "custom", message: "Confirmed settlement requires a confirmed settlement transaction." });
   if (value.state === "REFUNDED" && !confirmedRefund) context.addIssue({ code: "custom", message: "Refunded settlement requires confirmed refund evidence." });
   const terminalJob = value.job !== null && ["COMPLETED", "REJECTED", "EXPIRED"].includes(value.job.status);
   if (value.state === "RECONCILED" && value.transaction !== null && value.transaction.status !== "CONFIRMED") context.addIssue({ code: "custom", message: "Reconciled transaction evidence must be confirmed." });

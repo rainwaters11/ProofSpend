@@ -15,14 +15,34 @@ const jobTransitions: Record<AgenticJobStatus, readonly AgenticJobStatus[]> = {
   OPEN: ["FUNDED", "EXPIRED"], FUNDED: ["SUBMITTED", "EXPIRED"], SUBMITTED: ["COMPLETED", "REJECTED", "EXPIRED"],
   COMPLETED: [], REJECTED: [], EXPIRED: [],
 };
-export interface TransitionContext { aggregateType: string; aggregateId: string; eventId: string; occurredAt: string; actor: Actor; authorizedActorId?: string; authorizedEvaluatorId?: string; idempotencyKey?: string }
+export interface TransitionContext {
+  aggregateType: string; aggregateId: string; eventId: string; occurredAt: string; actor: Actor;
+  authorizedSystemId?: string; authorizedApproverId?: string; authorizedAdapterId?: string; authorizedEvaluatorId?: string; idempotencyKey?: string;
+}
+type ApplicationEdge = `${ProofSpendApplicationState}->${ProofSpendApplicationState}`;
+type AuthorityRule = { actorTypes: readonly Actor["actorType"][]; identifier: "authorizedSystemId" | "authorizedApproverId" | "authorizedAdapterId" };
+const applicationAuthority: Partial<Record<ApplicationEdge, AuthorityRule>> = {
+  "INCOMPLETE->NEEDS_REVIEW": { actorTypes: ["SYSTEM"], identifier: "authorizedSystemId" },
+  "NEEDS_REVIEW->INCOMPLETE": { actorTypes: ["SYSTEM"], identifier: "authorizedSystemId" },
+  "NEEDS_REVIEW->ELIGIBLE": { actorTypes: ["SYSTEM"], identifier: "authorizedSystemId" },
+  "NEEDS_REVIEW->REJECTED": { actorTypes: ["SYSTEM"], identifier: "authorizedSystemId" },
+  "ELIGIBLE->APPROVAL_PENDING": { actorTypes: ["SYSTEM"], identifier: "authorizedSystemId" },
+  "APPROVAL_PENDING->APPROVED": { actorTypes: ["FOUNDER", "EVALUATOR"], identifier: "authorizedApproverId" },
+  "APPROVAL_PENDING->REJECTED": { actorTypes: ["FOUNDER", "EVALUATOR"], identifier: "authorizedApproverId" },
+  "APPROVED->PREPARED": { actorTypes: ["ADAPTER"], identifier: "authorizedAdapterId" },
+  "PREPARED->SUBMITTED": { actorTypes: ["ADAPTER"], identifier: "authorizedAdapterId" },
+  "PREPARED->FAILED": { actorTypes: ["ADAPTER"], identifier: "authorizedAdapterId" },
+  "SUBMITTED->CONFIRMED": { actorTypes: ["ADAPTER"], identifier: "authorizedAdapterId" },
+  "SUBMITTED->FAILED": { actorTypes: ["ADAPTER"], identifier: "authorizedAdapterId" },
+  "CONFIRMED->RECONCILED": { actorTypes: ["ADAPTER"], identifier: "authorizedAdapterId" },
+};
 function event(context: TransitionContext, from: string, to: string): AuditEvent {
   return { id: context.eventId, aggregateType: context.aggregateType, aggregateId: context.aggregateId, eventType: "STATE_TRANSITIONED", actor: context.actor, idempotencyKey: context.idempotencyKey ?? null, occurredAt: context.occurredAt, details: { from, to } };
 }
 export function transitionApplication(from: ProofSpendApplicationState, to: ProofSpendApplicationState, context: TransitionContext) {
   if (!applicationTransitions[from].includes(to)) throw new InvalidTransitionError("ProofSpend application", from, to);
-  if (from === "APPROVAL_PENDING" && to === "APPROVED" && (!(context.actor.actorType === "FOUNDER" || context.actor.actorType === "EVALUATOR") || context.actor.actorId !== context.authorizedActorId)) throw new InvalidTransitionError("ProofSpend application authority", from, to);
-  if (from === "PREPARED" && to === "SUBMITTED" && (context.actor.actorType !== "ADAPTER" || context.actor.actorId !== context.authorizedActorId)) throw new InvalidTransitionError("ProofSpend application authority", from, to);
+  const authority = applicationAuthority[`${from}->${to}`];
+  if (authority === undefined || !authority.actorTypes.includes(context.actor.actorType) || context[authority.identifier] === undefined || context.actor.actorId !== context[authority.identifier]) throw new InvalidTransitionError("ProofSpend application authority", from, to);
   return { state: to, auditEvent: event(context, from, to) } as const;
 }
 export function transitionAgenticJob(from: AgenticJobStatus, to: AgenticJobStatus, context: TransitionContext) {
@@ -31,7 +51,6 @@ export function transitionAgenticJob(from: AgenticJobStatus, to: AgenticJobStatu
   return { status: to, auditEvent: event(context, from, to) } as const;
 }
 export function mapAgenticJobToApplication(status: AgenticJobStatus): ProofSpendApplicationState | null {
-  if (status === "COMPLETED") return "CONFIRMED";
   if (status === "REJECTED" || status === "EXPIRED") return "REJECTED";
   return null;
 }
