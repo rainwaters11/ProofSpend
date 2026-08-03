@@ -33,6 +33,7 @@ export const AgentReputationRefSchema = z.object({
   (value) => value.writerAddress.trim().toLowerCase() !== value.agentOwnerAddress.trim().toLowerCase(),
   "Agent owner cannot write its own reputation.",
 ).superRefine((value, context) => {
+  if (!value.isMock) context.addIssue({ code: "custom", message: "Live ERC-8004 reputation writes are deferred to Issue #13." });
   if (value.isMock && [value.network, value.chainId, value.registryAddress, value.agentId, value.writerAddress, value.agentOwnerAddress, value.eventReference].some((item) => !isSynthetic(item))) context.addIssue({ code: "custom", message: "Every mock reputation reference must be visibly synthetic." });
   if (!value.isMock && [value.network, value.chainId, value.registryAddress, value.agentId, value.eventReference].some(isSynthetic)) context.addIssue({ code: "custom", message: "Synthetic reputation references cannot be marked live." });
   if (!value.isMock && (!EvmAddress.test(value.writerAddress) || !EvmAddress.test(value.agentOwnerAddress))) context.addIssue({ code: "custom", message: "Live reputation owner and writer must be EVM addresses." });
@@ -65,6 +66,7 @@ export const AgenticJobRefSchema = z.object({
   budget: MoneyAmountSchema, expiresAt: Time, descriptionReference: z.string().min(1), deliverableReference: z.string().min(1).nullable(),
   reasonReference: z.string().min(1).nullable(), status: AgenticJobStatusSchema, transaction: ArcTransactionRefSchema.nullable(), isMock: z.boolean(),
 }).superRefine((value, context) => {
+  if (!value.isMock) context.addIssue({ code: "custom", message: "Live ERC-8183 job behavior is deferred to Issue #8." });
   const references = [value.network, value.chainId, value.contractAddress, value.jobId, value.clientAddress, value.providerAddress, value.evaluatorAddress, value.descriptionReference, value.deliverableReference, value.reasonReference].filter((item): item is string => item !== null);
   if (value.isMock && references.some((item) => !isSynthetic(item))) context.addIssue({ code: "custom", message: "Every mock job reference must be visibly synthetic." });
   if (!value.isMock && references.some(isSynthetic)) context.addIssue({ code: "custom", message: "Synthetic job references cannot be marked live." });
@@ -82,13 +84,19 @@ export const ReserveSchema = z.object({ id: Id, vaultId: Id, name: z.string().mi
 export type Reserve = z.infer<typeof ReserveSchema>;
 export const AllocationRuleSchema = z.object({ id: Id, reserveId: Id, purpose: z.string().min(1), maximum: MoneyAmountSchema, requiresApproval: z.boolean() });
 export type AllocationRule = z.infer<typeof AllocationRuleSchema>;
-export const LedgerEntrySchema = z.object({ id: Id, vaultId: Id, reserveId: Id.nullable(), kind: z.enum(["CAPITAL", "ALLOCATION", "COMMITMENT", "SETTLEMENT", "REFUND", "REVERSAL"]), amount: MoneyAmountSchema, reversesEntryId: Id.nullable(), idempotencyKey: Id, occurredAt: Time });
+const LedgerEntryBaseSchema = z.object({ id: Id, vaultId: Id, reserveId: Id.nullable(), amount: MoneyAmountSchema, idempotencyKey: Id, occurredAt: Time });
+export const LedgerEntrySchema = z.discriminatedUnion("kind", [
+  LedgerEntryBaseSchema.extend({ kind: z.enum(["CAPITAL", "ALLOCATION", "COMMITMENT", "SETTLEMENT", "REFUND"]), reversesEntryId: z.null() }),
+  LedgerEntryBaseSchema.extend({ kind: z.literal("REVERSAL"), reversesEntryId: Id }),
+]).refine((value) => value.kind !== "REVERSAL" || value.reversesEntryId !== value.id, "A ledger reversal cannot reference itself.");
 export type LedgerEntry = z.infer<typeof LedgerEntrySchema>;
-export const TransactionRecordSchema = z.object({ id: Id, intentId: Id, idempotencyKey: Id, amount: MoneyAmountSchema, operationState: z.enum(["INTENT_PERSISTED", "PREPARED", "SUBMITTED", "CONFIRMED", "FAILED", "RECONCILED"]), arcTransaction: ArcTransactionRefSchema.nullable(), createdAt: Time, updatedAt: Time }).superRefine((value, context) => {
+export const TransactionRecordSchema = z.object({ id: Id, projectId: Id, intentId: Id, approvalId: Id.nullable(), approvalBindingId: Id.nullable(), reconciliationId: Id.nullable(), idempotencyKey: Id, amount: MoneyAmountSchema, operationState: z.enum(["INTENT_PERSISTED", "PREPARED", "SUBMITTED", "CONFIRMED", "FAILED", "RECONCILED"]), arcTransaction: ArcTransactionRefSchema.nullable(), createdAt: Time, updatedAt: Time }).superRefine((value, context) => {
   const compatible: Record<typeof value.operationState, readonly ArcTransactionRef["status"][]> = { INTENT_PERSISTED: ["NONE"], PREPARED: ["PREPARED"], SUBMITTED: ["SUBMITTED"], CONFIRMED: ["CONFIRMED"], FAILED: ["FAILED"], RECONCILED: ["CONFIRMED"] };
-  if (value.operationState === "INTENT_PERSISTED" && value.arcTransaction === null) return;
   const allowed: readonly ArcTransactionRef["status"][] = compatible[value.operationState];
-  if (value.arcTransaction === null || !allowed.includes(value.arcTransaction.status)) context.addIssue({ code: "custom", message: `${value.operationState} transaction record requires compatible lifecycle evidence.` });
+  if (!(value.operationState === "INTENT_PERSISTED" && value.arcTransaction === null) && (value.arcTransaction === null || !allowed.includes(value.arcTransaction.status))) context.addIssue({ code: "custom", message: `${value.operationState} transaction record requires compatible lifecycle evidence.` });
+  if (["PREPARED", "SUBMITTED", "CONFIRMED", "RECONCILED"].includes(value.operationState) && (value.approvalId === null || value.approvalBindingId === null)) context.addIssue({ code: "custom", message: `${value.operationState} transaction requires persisted approval and binding references.` });
+  if (value.operationState === "INTENT_PERSISTED" && (value.approvalId !== null || value.approvalBindingId !== null)) context.addIssue({ code: "custom", message: "Persisted intent cannot claim completed approval binding." });
+  if (value.operationState === "RECONCILED" ? value.reconciliationId === null : value.reconciliationId !== null) context.addIssue({ code: "custom", message: "Transaction reconciliation reference must match RECONCILED state." });
 });
 export type TransactionRecord = z.infer<typeof TransactionRecordSchema>;
 export const ApprovalRecordSchema = z.object({ id: Id, actionType: z.string().min(1), exactIntentHash: Hash, idempotencyKey: Id, decision: z.enum(["PENDING", "APPROVED", "REJECTED"]), approver: ActorSchema.nullable(), expiresAt: Time, decidedAt: Time.nullable() }).superRefine((value, context) => {
@@ -115,14 +123,15 @@ export const EvidenceMatchSchema = z.object({ id: Id, evidenceId: Id, requiremen
 export type EvidenceMatch = z.infer<typeof EvidenceMatchSchema>;
 export const ProofGapSchema = z.object({ id: Id, milestoneId: Id, requirementId: Id, reasonCode: z.string().min(1), question: z.string().min(1), priority: z.number().int().nonnegative(), resolvedAt: Time.nullable() });
 export type ProofGap = z.infer<typeof ProofGapSchema>;
-export const ProofOfProgressSchema = z.object({ id: Id, milestoneId: Id, version: z.number().int().positive(), approvedEvidenceHashes: z.array(Hash), recordHash: Hash, visibility: VisibilitySchema, createdAt: Time });
+export const ProofOfProgressSchema = z.object({ id: Id, projectId: Id, milestoneId: Id, version: z.number().int().positive(), approvedEvidenceHashes: z.array(Hash), recordHash: Hash, visibility: VisibilitySchema, createdAt: Time });
 export type ProofOfProgress = z.infer<typeof ProofOfProgressSchema>;
-export const ReleaseRequestSchema = z.object({ id: Id, milestoneId: Id, proofId: Id, amount: MoneyAmountSchema, state: z.enum(["DRAFT", "ELIGIBLE", "APPROVAL_PENDING", "APPROVED", "PREPARED", "SUBMITTED", "CONFIRMED", "REJECTED", "FAILED"]), approvalId: Id.nullable(), idempotencyKey: Id, createdAt: Time }).superRefine((value, context) => {
+export const ReleaseRequestSchema = z.object({ id: Id, projectId: Id, milestoneId: Id, proofId: Id, intentId: Id, settlementId: Id.nullable(), amount: MoneyAmountSchema, state: z.enum(["DRAFT", "ELIGIBLE", "APPROVAL_PENDING", "APPROVED", "PREPARED", "SUBMITTED", "CONFIRMED", "REJECTED", "FAILED"]), approvalId: Id.nullable(), idempotencyKey: Id, createdAt: Time }).superRefine((value, context) => {
   if (["APPROVED", "PREPARED", "SUBMITTED", "CONFIRMED"].includes(value.state) && value.approvalId === null) context.addIssue({ code: "custom", message: `${value.state} release requires a persisted approval.` });
   if (["DRAFT", "ELIGIBLE", "APPROVAL_PENDING"].includes(value.state) && value.approvalId !== null) context.addIssue({ code: "custom", message: `${value.state} release cannot claim completed approval.` });
+  if (value.state === "CONFIRMED" ? value.settlementId === null : value.settlementId !== null) context.addIssue({ code: "custom", message: "Release settlement reference must exist only in CONFIRMED state." });
 });
 export type ReleaseRequest = z.infer<typeof ReleaseRequestSchema>;
-export const SettlementRecordSchema = z.object({ id: Id, projectId: Id, releaseRequestId: Id, idempotencyKey: Id, amount: MoneyAmountSchema, state: z.enum(["PENDING", "CONFIRMED", "REFUND_PENDING", "REFUNDED", "RECONCILED", "FAILED"]), job: AgenticJobRefSchema.nullable(), transaction: ArcTransactionRefSchema.nullable(), updatedAt: Time }).superRefine((value, context) => {
+export const SettlementRecordSchema = z.object({ id: Id, projectId: Id, releaseRequestId: Id, reconciliationId: Id.nullable(), idempotencyKey: Id, amount: MoneyAmountSchema, state: z.enum(["PENDING", "CONFIRMED", "REFUND_PENDING", "REFUNDED", "RECONCILED", "FAILED"]), job: AgenticJobRefSchema.nullable(), transaction: ArcTransactionRefSchema.nullable(), updatedAt: Time }).superRefine((value, context) => {
   const transaction = value.transaction;
   const allowed =
     (value.state === "PENDING" && (transaction === null || (transaction.operationType === "SETTLEMENT" && ["PREPARED", "SUBMITTED"].includes(transaction.status)))) ||
@@ -132,8 +141,13 @@ export const SettlementRecordSchema = z.object({ id: Id, projectId: Id, releaseR
     (value.state === "RECONCILED" && transaction?.status === "CONFIRMED" && (transaction.operationType === "SETTLEMENT" || transaction.operationType === "REFUND")) ||
     (value.state === "FAILED" && (transaction === null || transaction.status === "FAILED"));
   if (!allowed) context.addIssue({ code: "custom", message: `${value.state} settlement requires compatible persisted transaction evidence.` });
+  if (value.state === "RECONCILED" ? value.reconciliationId === null : value.reconciliationId !== null) context.addIssue({ code: "custom", message: "Settlement reconciliation reference must match RECONCILED state." });
 });
 export type SettlementRecord = z.infer<typeof SettlementRecordSchema>;
+export const ExecutionAuthorizationBindingSchema = z.object({ id: Id, releaseRequestId: Id, approvalId: Id, intentId: Id, exactIntentHash: Hash, transactionRecordId: Id, createdAt: Time });
+export type ExecutionAuthorizationBinding = z.infer<typeof ExecutionAuthorizationBindingSchema>;
+export const ReconciliationRecordSchema = z.object({ id: Id, projectId: Id, transactionRecordId: Id, settlementId: Id, result: z.enum(["MATCHED", "MISMATCH", "REQUIRES_REVIEW"]), evidenceReference: z.string().min(1), reconciledAt: Time, actor: ActorSchema });
+export type ReconciliationRecord = z.infer<typeof ReconciliationRecordSchema>;
 export const AllocationOperationRecordSchema = z.object({ id: Id, reserveId: Id, idempotencyKey: Id, amount: MoneyAmountSchema, createdAt: Time });
 export type AllocationOperationRecord = z.infer<typeof AllocationOperationRecordSchema>;
 export const SubmissionOperationRecordSchema = z.object({ id: Id, transactionId: Id, idempotencyKey: Id, createdAt: Time });
