@@ -35,7 +35,7 @@ function SheetContent({ className, children, side = "left", ...props }: SheetCon
       <SheetOverlay />
       <SheetPrimitive.Content
         className={cn(
-          "fixed z-50 flex flex-col gap-4 border-border bg-surface p-6 text-surface-foreground shadow-lg transition ease-in-out",
+          "fixed z-50 flex flex-col gap-4 overflow-y-auto border-border bg-surface p-6 text-surface-foreground shadow-lg transition ease-in-out",
           "data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:duration-200 data-[state=open]:duration-300",
           side === "left" &&
             "inset-y-0 left-0 h-full w-3/4 max-w-sm border-r data-[state=closed]:slide-out-to-left data-[state=open]:slide-in-from-left",
