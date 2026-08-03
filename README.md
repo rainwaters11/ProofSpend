@@ -2,6 +2,12 @@
 
 **Fund the vision. Prove the progress. Unlock what comes next.**
 
+<p align="center">
+  <img src="proofspend-launchvault-hero.png" alt="ProofSpend LaunchVault product vision showing Smart Reserves, Proof-of-Progress, ERC-8004 agent identity, ERC-8183 milestone escrow, the Evidence Engine, and the LaunchVault Treasury" width="100%" />
+</p>
+
+<p align="center"><em>Product vision — mock foundation complete; Arc Testnet capabilities are in active development.</em></p>
+
 ProofSpend LaunchVault is an evidence-aware programmable capital platform for founders, solopreneurs, and the people who fund their work. It connects business capital, milestone requirements, receipts, deliverables, deterministic policy, human approval, and Arc Testnet settlement into one accountable workflow.
 
 > **Current status:** The technical foundation and Arc-native architecture are complete. The application currently runs in explicit mock mode, and no real funds are being moved. Smart Reserves, evidence workflows, ERC-8004 identity, ERC-8183 settlement, and the premium product interface are in active development.
