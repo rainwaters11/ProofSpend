@@ -124,8 +124,11 @@ describe("separate state machines", () => {
     expect(await hashCanonicalExecutionIntent({ ...jobFundIntent, actionKind: "JOB_EVALUATION" } as unknown as typeof jobFundIntent)).not.toBe(await hashCanonicalExecutionIntent(jobFundIntent));
     expect(await hashCanonicalExecutionIntent({ ...jobFundIntent, protocolTarget: erc8183Target("JOB_EVALUATE") } as unknown as typeof jobFundIntent)).not.toBe(await hashCanonicalExecutionIntent(jobFundIntent));
     for (const operationType of ["JOB_CREATE", "JOB_SUBMIT", "IDENTITY_REGISTRATION", "REPUTATION_WRITE"] as const) {
-      await expect(submitForOperation(operationType, "FOUNDER")).rejects.toThrow(InvalidTransitionError);
-      await expect(submitForOperation(operationType, "EVALUATOR")).rejects.toThrow(InvalidTransitionError);
+      const protocolTarget = operationType === "JOB_SUBMIT" ? erc8183Target("JOB_SUBMIT") : { kind: "DESTINATION" as const, destination: transaction.destinationReference, network: "ARC_TESTNET" as const, chainId: "synthetic:chain" };
+      for (const actionKind of ["RELEASE_APPROVAL", "JOB_EVALUATION"] as const) expect(CanonicalExecutionIntentSchema.safeParse({ ...executionIntent, actionKind, operationType, protocolTarget }).success).toBe(false);
+      const rawUnsupportedIntent = { ...executionIntent, actionKind: "RELEASE_APPROVAL" as const, operationType, protocolTarget };
+      const unsupportedTransaction = TransactionRecordSchema.parse({ ...transaction, arcTransaction: { ...transaction.arcTransaction!, operationType } });
+      await expect(transitionApplicationSubmission({ ...submitted, submissionTransaction: unsupportedTransaction, executionBinding: { ...binding, executionIntent: rawUnsupportedIntent } as unknown as typeof binding })).rejects.toThrow(InvalidTransitionError);
     }
     for (const actorType of ["AI", "FOUNDER", "EVALUATOR"] as const) await expect(transitionApplicationSubmission({ ...submitted, actor: { actorId: "adapter:authorized", actorType } })).rejects.toThrow(InvalidTransitionError);
     await expect(transitionApplicationSubmission({ ...submitted, actor: { actorId: "adapter:other", actorType: "ADAPTER" } })).rejects.toThrow(InvalidTransitionError);
