@@ -1,4 +1,5 @@
-import { TransactionRecordSchema, type Actor, type AgenticJobStatus, type AuditEvent, type TransactionRecord } from "./models";
+import { ExecutionAuthorizationBindingSchema, ReconciliationRecordSchema, SettlementRecordSchema, SubmissionOperationRecordSchema, TransactionRecordSchema, type Actor, type AgenticJobStatus, type AuditEvent, type ExecutionAuthorizationBinding, type ReconciliationRecord, type SettlementRecord, type SubmissionOperationRecord, type TransactionRecord } from "./models";
+import { validateReconciliation } from "./integrity";
 
 export class InvalidTransitionError extends Error {
   constructor(readonly machine: string, readonly from: string, readonly to: string) {
@@ -19,6 +20,9 @@ export interface TransitionContext {
   aggregateType: string; aggregateId: string; eventId: string; occurredAt: string; actor: Actor;
   authorizedSystemId?: string; authorizedApproverId?: string; authorizedAdapterId?: string; authorizedEvaluatorId?: string; idempotencyKey?: string;
   confirmationTransaction?: TransactionRecord; expectedTransactionId?: string; expectedProjectId?: string; expectedReleaseRequestId?: string; expectedOperationType?: NonNullable<TransactionRecord["arcTransaction"]>["operationType"];
+  expectedIntentId?: string; expectedApprovalId?: string; expectedApprovalBindingId?: string;
+  submissionTransaction?: TransactionRecord; executionBinding?: ExecutionAuthorizationBinding; submissionOperation?: SubmissionOperationRecord;
+  reconciliationTransaction?: TransactionRecord; reconciliationSettlement?: SettlementRecord; reconciliationRecord?: ReconciliationRecord;
 }
 type ApplicationEdge = `${ProofSpendApplicationState}->${ProofSpendApplicationState}`;
 type AuthorityRule = { actorTypes: readonly Actor["actorType"][]; identifier: "authorizedSystemId" | "authorizedApproverId" | "authorizedAdapterId" };
@@ -55,10 +59,23 @@ export function transitionApplication(from: ProofSpendApplicationState, to: Proo
   if (!applicationTransitions[from].includes(to)) throw new InvalidTransitionError("ProofSpend application", from, to);
   const authority = applicationAuthority[`${from}->${to}`];
   if (authority === undefined || !authority.actorTypes.includes(context.actor.actorType) || context[authority.identifier] === undefined || context.actor.actorId !== context[authority.identifier]) throw new InvalidTransitionError("ProofSpend application authority", from, to);
+  if (from === "PREPARED" && to === "SUBMITTED") {
+    const transaction = TransactionRecordSchema.safeParse(context.submissionTransaction);
+    const binding = ExecutionAuthorizationBindingSchema.safeParse(context.executionBinding);
+    const submission = SubmissionOperationRecordSchema.safeParse(context.submissionOperation);
+    if (!transaction.success || !binding.success || !submission.success || transaction.data.operationState !== "SUBMITTED" || transaction.data.arcTransaction?.status !== "SUBMITTED" || binding.data.status !== "CONSUMED" || binding.data.consumedAt === null || binding.data.consumedByTransactionId !== transaction.data.id || binding.data.transactionRecordId !== transaction.data.id || binding.data.releaseRequestId !== transaction.data.releaseRequestId || binding.data.intentId !== transaction.data.intentId || binding.data.approvalId !== transaction.data.approvalId || transaction.data.approvalBindingId !== binding.data.id || submission.data.transactionId !== transaction.data.id || context.idempotencyKey === undefined || submission.data.idempotencyKey !== context.idempotencyKey || context.aggregateId !== transaction.data.releaseRequestId || transaction.data.id !== context.expectedTransactionId || transaction.data.projectId !== context.expectedProjectId || transaction.data.releaseRequestId !== context.expectedReleaseRequestId || transaction.data.intentId !== context.expectedIntentId || transaction.data.approvalId !== context.expectedApprovalId || transaction.data.approvalBindingId !== context.expectedApprovalBindingId) throw new InvalidTransitionError("ProofSpend application submission evidence", from, to);
+  }
   if (from === "SUBMITTED" && to === "CONFIRMED") {
     const parsed = TransactionRecordSchema.safeParse(context.confirmationTransaction);
     const transaction = parsed.success ? parsed.data : null;
     if (transaction === null || transaction.operationState !== "CONFIRMED" || transaction.arcTransaction?.status !== "CONFIRMED" || context.expectedTransactionId === undefined || context.expectedProjectId === undefined || context.expectedReleaseRequestId === undefined || context.expectedOperationType === undefined || transaction.id !== context.expectedTransactionId || transaction.projectId !== context.expectedProjectId || transaction.releaseRequestId !== context.expectedReleaseRequestId || transaction.arcTransaction.operationType !== context.expectedOperationType) throw new InvalidTransitionError("ProofSpend application confirmation evidence", from, to);
+  }
+  if (from === "CONFIRMED" && to === "RECONCILED") {
+    const transaction = TransactionRecordSchema.safeParse(context.reconciliationTransaction);
+    const settlement = SettlementRecordSchema.safeParse(context.reconciliationSettlement);
+    const reconciliation = ReconciliationRecordSchema.safeParse(context.reconciliationRecord);
+    if (!transaction.success || !settlement.success || !reconciliation.success || reconciliation.data.result !== "MATCHED" || transaction.data.reconciliationId !== reconciliation.data.id || settlement.data.reconciliationId !== reconciliation.data.id || transaction.data.releaseRequestId !== settlement.data.releaseRequestId || context.aggregateId !== transaction.data.releaseRequestId) throw new InvalidTransitionError("ProofSpend application reconciliation evidence", from, to);
+    try { validateReconciliation(transaction.data, settlement.data, reconciliation.data, context.authorizedAdapterId); } catch { throw new InvalidTransitionError("ProofSpend application reconciliation evidence", from, to); }
   }
   return { state: to, auditEvent: event(context, from, to) } as const;
 }

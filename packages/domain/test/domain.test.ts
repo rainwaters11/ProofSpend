@@ -3,7 +3,7 @@ import {
   addMoney, AgenticJobRefSchema, AgenticJobStatusSchema, AgentIdentityRefSchema, AgentReputationRefSchema,
   ARC_TESTNET_CHAIN_ID, arcTestnetExplorerTransactionUrl,
   AllocationOperationRecordSchema, AllocationRuleSchema, ApprovalRecordSchema, ArcTransactionRefSchema, CanonicalExecutionIntentSchema, compareMoney,
-  createPawPovAiSeed, EvidenceItemSchema, filterBackerDisclosure, IdempotencyConflictError, InMemoryAuditRepository,
+  createPawPovAiSeed, EvidenceItemSchema, ExecutionAuthorizationBindingSchema, filterBackerDisclosure, IdempotencyConflictError, InMemoryAuditRepository,
   ExecutionAuthorizationBindingRepository, InMemoryIdempotencyRepository, InMemoryRepository, InvalidTransitionError, LaunchVaultSchema, mapAgenticJobToApplication,
   LedgerEntrySchema, MilestoneRequirementSchema, type LedgerEntry,
   MockAgenticJobAdapter, MockIdentityAdapter, MockWalletReferenceAdapter, money, MoneyAmountSchema, MoneyError,
@@ -66,8 +66,21 @@ describe("separate state machines", () => {
     expect(() => transitionApplication("APPROVAL_PENDING", "APPROVED", { ...context, actor: { actorId: "forbidden", actorType }, authorizedApproverId: "forbidden" })).toThrow(InvalidTransitionError);
   });
   it("requires the explicitly authorized adapter to submit", () => {
-    expect(transitionApplication("PREPARED", "SUBMITTED", { ...context, actor: { actorId: "adapter:authorized", actorType: "ADAPTER" }, authorizedAdapterId: "adapter:authorized" }).state).toBe("SUBMITTED");
-    expect(() => transitionApplication("PREPARED", "SUBMITTED", { ...context, actor: { actorId: "adapter:other", actorType: "ADAPTER" }, authorizedAdapterId: "adapter:authorized" })).toThrow(InvalidTransitionError);
+    const transaction = TransactionRecordSchema.parse({ id: "transaction:submission", projectId: "project:1", releaseRequestId: "release:1", intentId: "intent:1", destinationReference: "mock:recipient", approvalId: "approval:1", approvalBindingId: "binding:submission", reconciliationId: null, idempotencyKey: "transaction:key", amount: usdc("1"), operationState: "SUBMITTED", arcTransaction: mockTransaction("SUBMITTED"), createdAt: context.occurredAt, updatedAt: context.occurredAt });
+    const executionIntent = CanonicalExecutionIntentSchema.parse({ version: 1, actionKind: "RELEASE_APPROVAL", projectId: transaction.projectId, releaseRequestId: transaction.releaseRequestId, transactionRecordId: transaction.id, intentId: transaction.intentId, asset: "USDC", atomicAmount: "1", operationType: "SETTLEMENT", protocolTarget: { kind: "DESTINATION", destination: transaction.destinationReference, network: "ARC_TESTNET", chainId: "synthetic:chain" } });
+    const binding = ExecutionAuthorizationBindingSchema.parse({ id: transaction.approvalBindingId, releaseRequestId: transaction.releaseRequestId, approvalId: transaction.approvalId, intentId: transaction.intentId, exactIntentHash: `sha256:${"a".repeat(64)}`, transactionRecordId: transaction.id, executionIntent, status: "CONSUMED", consumedAt: context.occurredAt, consumedByTransactionId: transaction.id, createdAt: context.occurredAt });
+    const submissionOperation = SubmissionOperationRecordSchema.parse({ id: "submission:1", transactionId: transaction.id, idempotencyKey: "submission:key", createdAt: context.occurredAt });
+    const submitted = { ...context, aggregateId: transaction.releaseRequestId, actor: { actorId: "adapter:authorized", actorType: "ADAPTER" as const }, authorizedAdapterId: "adapter:authorized", idempotencyKey: submissionOperation.idempotencyKey, submissionTransaction: transaction, executionBinding: binding, submissionOperation, expectedTransactionId: transaction.id, expectedProjectId: transaction.projectId, expectedReleaseRequestId: transaction.releaseRequestId, expectedIntentId: transaction.intentId, expectedApprovalId: transaction.approvalId!, expectedApprovalBindingId: transaction.approvalBindingId! };
+    expect(() => transitionApplication("PREPARED", "SUBMITTED", { ...submitted, submissionTransaction: undefined })).toThrow(InvalidTransitionError);
+    for (const status of ["PREPARED", "CONFIRMED", "FAILED"] as const) expect(() => transitionApplication("PREPARED", "SUBMITTED", { ...submitted, submissionTransaction: { ...transaction, operationState: status, arcTransaction: mockTransaction(status) } })).toThrow(InvalidTransitionError);
+    for (const status of ["ACTIVE", "REVOKED"] as const) expect(() => transitionApplication("PREPARED", "SUBMITTED", { ...submitted, executionBinding: { ...binding, status, consumedAt: null, consumedByTransactionId: null } })).toThrow(InvalidTransitionError);
+    expect(() => transitionApplication("PREPARED", "SUBMITTED", { ...submitted, executionBinding: { ...binding, consumedByTransactionId: "transaction:other" } })).toThrow(InvalidTransitionError);
+    expect(() => transitionApplication("PREPARED", "SUBMITTED", { ...submitted, submissionOperation: undefined })).toThrow(InvalidTransitionError);
+    expect(() => transitionApplication("PREPARED", "SUBMITTED", { ...submitted, idempotencyKey: "submission:other" })).toThrow(InvalidTransitionError);
+    for (const changed of [{ projectId: "project:other" }, { releaseRequestId: "release:other" }, { intentId: "intent:other" }, { approvalId: "approval:other" }, { approvalBindingId: "binding:other" }]) expect(() => transitionApplication("PREPARED", "SUBMITTED", { ...submitted, submissionTransaction: { ...transaction, ...changed } })).toThrow(InvalidTransitionError);
+    expect(transitionApplication("PREPARED", "SUBMITTED", submitted).state).toBe("SUBMITTED");
+    for (const actorType of ["AI", "FOUNDER", "EVALUATOR"] as const) expect(() => transitionApplication("PREPARED", "SUBMITTED", { ...submitted, actor: { actorId: "adapter:authorized", actorType } })).toThrow(InvalidTransitionError);
+    expect(() => transitionApplication("PREPARED", "SUBMITTED", { ...submitted, actor: { actorId: "adapter:other", actorType: "ADAPTER" } })).toThrow(InvalidTransitionError);
   });
   it("requires exact confirmed transaction evidence before application confirmation", () => {
     const transaction = TransactionRecordSchema.parse({ id: "transaction:confirmation", projectId: "project:1", releaseRequestId: "release:1", intentId: "intent:1", destinationReference: "mock:recipient", approvalId: "approval:1", approvalBindingId: "binding:1", reconciliationId: null, idempotencyKey: "transaction:confirmation:key", amount: usdc("1"), operationState: "CONFIRMED", arcTransaction: mockTransaction("CONFIRMED"), createdAt: context.occurredAt, updatedAt: context.occurredAt });
@@ -80,14 +93,28 @@ describe("separate state machines", () => {
     for (const actorType of ["AI", "FOUNDER", "EVALUATOR"] as const) expect(() => transitionApplication("SUBMITTED", "CONFIRMED", { ...confirmation, actor: { actorId: "adapter:authorized", actorType } })).toThrow(InvalidTransitionError);
     expect(() => transitionApplication("SUBMITTED", "CONFIRMED", { ...confirmation, actor: { actorId: "adapter:other", actorType: "ADAPTER" } })).toThrow(InvalidTransitionError);
   });
+  it("requires exact MATCHED evidence before application reconciliation", () => {
+    const reconciliationId = "reconciliation:transition";
+    const transaction = TransactionRecordSchema.parse({ id: "transaction:reconciled", projectId: "project:1", releaseRequestId: "release:1", intentId: "intent:1", destinationReference: "mock:recipient", approvalId: "approval:1", approvalBindingId: "binding:1", reconciliationId, idempotencyKey: "transaction:key", amount: usdc("1"), operationState: "RECONCILED", arcTransaction: mockTransaction("CONFIRMED"), createdAt: context.occurredAt, updatedAt: context.occurredAt });
+    const settlement = SettlementRecordSchema.parse({ id: "settlement:reconciled", projectId: transaction.projectId, releaseRequestId: transaction.releaseRequestId, reconciliationId, idempotencyKey: "settlement:key", amount: transaction.amount, state: "RECONCILED", job: null, transaction: transaction.arcTransaction, updatedAt: context.occurredAt });
+    const reconciliation = ReconciliationRecordSchema.parse({ id: reconciliationId, projectId: transaction.projectId, transactionRecordId: transaction.id, settlementId: settlement.id, result: "MATCHED", evidenceReference: "mock:reconciliation-evidence", reconciledAt: context.occurredAt, actor: { actorId: "adapter:authorized", actorType: "ADAPTER" } });
+    const reconciled = { ...context, aggregateId: transaction.releaseRequestId, actor: { actorId: "adapter:authorized", actorType: "ADAPTER" as const }, authorizedAdapterId: "adapter:authorized", reconciliationTransaction: transaction, reconciliationSettlement: settlement, reconciliationRecord: reconciliation };
+    expect(() => transitionApplication("CONFIRMED", "RECONCILED", { ...reconciled, reconciliationRecord: undefined })).toThrow(InvalidTransitionError);
+    for (const result of ["MISMATCH", "REQUIRES_REVIEW"] as const) expect(() => transitionApplication("CONFIRMED", "RECONCILED", { ...reconciled, reconciliationRecord: { ...reconciliation, result } })).toThrow(InvalidTransitionError);
+    expect(() => transitionApplication("CONFIRMED", "RECONCILED", { ...reconciled, reconciliationRecord: { ...reconciliation, evidenceReference: "" } })).toThrow(InvalidTransitionError);
+    expect(() => transitionApplication("CONFIRMED", "RECONCILED", { ...reconciled, reconciliationTransaction: { ...transaction, id: "transaction:other" } })).toThrow(InvalidTransitionError);
+    expect(() => transitionApplication("CONFIRMED", "RECONCILED", { ...reconciled, reconciliationSettlement: { ...settlement, id: "settlement:other" } })).toThrow(InvalidTransitionError);
+    expect(() => transitionApplication("CONFIRMED", "RECONCILED", { ...reconciled, reconciliationTransaction: { ...transaction, reconciliationId: "reconciliation:other" } })).toThrow(InvalidTransitionError);
+    expect(() => transitionApplication("CONFIRMED", "RECONCILED", { ...reconciled, actor: { actorId: "adapter:other", actorType: "ADAPTER" } })).toThrow(InvalidTransitionError);
+    expect(transitionApplication("CONFIRMED", "RECONCILED", reconciled).state).toBe("RECONCILED");
+  });
   it.each([
     ["INCOMPLETE", "NEEDS_REVIEW", "SYSTEM", "authorizedSystemId"], ["NEEDS_REVIEW", "INCOMPLETE", "SYSTEM", "authorizedSystemId"],
     ["NEEDS_REVIEW", "ELIGIBLE", "SYSTEM", "authorizedSystemId"], ["NEEDS_REVIEW", "REJECTED", "SYSTEM", "authorizedSystemId"],
     ["ELIGIBLE", "APPROVAL_PENDING", "SYSTEM", "authorizedSystemId"], ["APPROVAL_PENDING", "APPROVED", "FOUNDER", "authorizedApproverId"],
     ["APPROVAL_PENDING", "REJECTED", "EVALUATOR", "authorizedApproverId"], ["APPROVED", "PREPARED", "ADAPTER", "authorizedAdapterId"],
-    ["PREPARED", "SUBMITTED", "ADAPTER", "authorizedAdapterId"], ["PREPARED", "FAILED", "ADAPTER", "authorizedAdapterId"],
+    ["PREPARED", "FAILED", "ADAPTER", "authorizedAdapterId"],
     ["SUBMITTED", "FAILED", "ADAPTER", "authorizedAdapterId"],
-    ["CONFIRMED", "RECONCILED", "ADAPTER", "authorizedAdapterId"],
   ] as const)("authorizes the complete %s -> %s matrix", (from: "INCOMPLETE" | "NEEDS_REVIEW" | "ELIGIBLE" | "APPROVAL_PENDING" | "APPROVED" | "PREPARED" | "SUBMITTED" | "CONFIRMED", to: "INCOMPLETE" | "NEEDS_REVIEW" | "ELIGIBLE" | "APPROVAL_PENDING" | "APPROVED" | "PREPARED" | "SUBMITTED" | "CONFIRMED" | "REJECTED" | "FAILED" | "RECONCILED", actorType: "SYSTEM" | "FOUNDER" | "EVALUATOR" | "ADAPTER", identifier: string) => {
     const actor = { actorId: "authorized", actorType }; const authorized = { [identifier]: actor.actorId };
     expect(transitionApplication(from, to, { ...context, actor, ...authorized }).state).toBe(to);
@@ -466,6 +493,18 @@ describe("Backer-safe disclosure filtering", () => {
     const result = filterBackerDisclosure({ project: seed.project, evidence: [evidence], proofs, settlements: [{ id: "settlement:private", projectId: seed.project.id, releaseRequestId: "release:1", reconciliationId: null, idempotencyKey: "settlement:key", amount: usdc("1"), state: "PENDING", job: null, transaction: null, updatedAt: context.occurredAt }], preferences: { ...seed.disclosurePreferences, discloseProofRecords: true, approvedProofIds: ["proof:approved", "proof:hidden", "proof:other"], discloseSettlementState: false } });
     expect(result.proofs.map((proof) => proof.id)).toEqual(["proof:approved"]); expect(result.settlements).toEqual([]); expect(result.evidence).toEqual([]);
     const serialized = JSON.stringify(result); expect(serialized).not.toContain(secret); expect(serialized).not.toContain("storageRef"); expect(serialized).not.toContain("privateNotes"); expect(serialized).not.toContain("proof:hidden"); expect(serialized).not.toContain("proof:other"); expect(serialized).not.toContain("milestone:other"); expect(serialized).not.toContain("settlement:private");
+  });
+  it("parses every proof and discloses only explicitly approved public records", () => {
+    const seed = createPawPovAiSeed();
+    const proof = { id: "proof:shared", projectId: seed.project.id, milestoneId: seed.milestone.id, version: 1, approvedEvidenceHashes: [], recordHash: `sha256:${"a".repeat(64)}`, visibility: "BACKER_SHARED" as const, createdAt: context.occurredAt };
+    const publicProof = { ...proof, id: "proof:public", visibility: "ONCHAIN_PUBLIC" as const };
+    const hidden = { ...proof, id: "proof:hidden", visibility: "FOUNDER_PRIVATE" as const };
+    const unapproved = { ...proof, id: "proof:unapproved" };
+    const other = { ...proof, id: "proof:other", projectId: "project:other" };
+    const preferences = { ...seed.disclosurePreferences, discloseProofRecords: true, approvedProofIds: [proof.id, publicProof.id, hidden.id, other.id] };
+    const result = filterBackerDisclosure({ project: seed.project, evidence: [], proofs: [proof, publicProof, hidden, unapproved, other], settlements: [], preferences });
+    expect(result.proofs.map(({ id }) => id)).toEqual([proof.id, publicProof.id]);
+    for (const malformed of [{ ...proof, visibility: undefined }, { ...proof, visibility: "ARBITRARY" }, { ...proof, recordHash: "bad" }, { ...proof, version: 0 }]) expect(() => filterBackerDisclosure({ project: seed.project, evidence: [], proofs: [malformed] as never, settlements: [], preferences })).toThrow();
   });
   it("revalidates all settlements and discloses only the selected project", () => {
     const seed = createPawPovAiSeed(); const settlement = { releaseRequestId: "release:1", reconciliationId: null, idempotencyKey: "settlement:key", amount: usdc("1"), state: "PENDING" as const, job: null, transaction: null, updatedAt: context.occurredAt };
