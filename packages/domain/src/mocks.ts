@@ -10,7 +10,7 @@ export class MockAgenticJobAdapter {
   transition(job: AgenticJobRef, to: AgenticJobRef["status"], context: TransitionContext): { job: AgenticJobRef; auditEvent: ReturnType<typeof transitionAgenticJob>["auditEvent"] } {
     job = AgenticJobRefSchema.parse(job);
     if (!job.isMock) throw new Error("Mock adapter accepts only visibly synthetic jobs.");
-    const result = transitionAgenticJob(job.status, to, context);
+    const result = transitionAgenticJob(job.status, to, { ...context, currentJobEvidence: job });
     const evidence = to === "EXPIRED" ? { ...job, status: result.status } : context.jobEvidence;
     if (evidence === undefined) throw new Error("Mock job transition requires persisted target evidence.");
     return { job: evidence, auditEvent: result.auditEvent };
