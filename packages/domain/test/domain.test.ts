@@ -12,6 +12,8 @@ import {
   hashCanonicalExecutionIntent, serializeCanonicalExecutionIntent, validateExecutionAuthorization, validateLedgerReversal, validateReconciliation, validateReleaseConfirmation,
 } from "../src";
 
+type ReversalEntry = Extract<LedgerEntry, { kind: "REVERSAL" }>;
+
 const context = { aggregateType: "milestone", aggregateId: "m1", eventId: "event:1", occurredAt: "2026-01-01T00:00:00.000Z", actor: { actorId: "system", actorType: "SYSTEM" as const } };
 const usdc = (atomicUnits: string) => SettlementMoneyAmountSchema.parse({ asset: "USDC", atomicUnits });
 const mockTransaction = (status: "NONE" | "PREPARED" | "SUBMITTED" | "CONFIRMED" | "FAILED", operationType: "SETTLEMENT" | "REFUND" = "SETTLEMENT") => ({
@@ -384,12 +386,21 @@ describe("append-only ledger reversal relationships", () => {
   });
   it("validates persisted targets and remaining reversible amount", () => {
     const target = LedgerEntrySchema.parse({ ...base, id: "ledger:original", kind: "CAPITAL", reversesEntryId: null, amount: usdc("10") });
-    const reversal = LedgerEntrySchema.parse({ ...base, kind: "REVERSAL", reversesEntryId: target.id, amount: usdc("6") });
+    const reversal = LedgerEntrySchema.parse({
+      ...base,
+      kind: "REVERSAL",
+      reversesEntryId: target.id,
+      amount: usdc("6"),
+    }) as ReversalEntry;
     expect(validateLedgerReversal(reversal, target)).toBe(true);
     expect(() => validateLedgerReversal(reversal, null)).toThrow();
     expect(() => validateLedgerReversal(reversal, { ...target, vaultId: "vault:other" })).toThrow();
     expect(() => validateLedgerReversal({ ...reversal, amount: usdc("11") }, target)).toThrow();
-    const prior: Extract<LedgerEntry, { kind: "REVERSAL" }> = { ...reversal, id: "ledger:prior", amount: usdc("10") };
+    const prior: ReversalEntry = {
+      ...reversal,
+      id: "ledger:prior",
+      amount: usdc("10"),
+    };
     expect(() => validateLedgerReversal(reversal, target, [prior])).toThrow();
     expect(() => validateLedgerReversal(reversal, target, [{ ...prior, reversesEntryId: "ledger:other" }])).toThrow();
     expect(() => validateLedgerReversal(reversal, target, [{ ...prior, vaultId: "vault:other" }])).toThrow();
