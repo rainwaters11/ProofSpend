@@ -122,7 +122,7 @@ const RequirementBaseSchema = z.object({ id: Id, milestoneId: Id, description: z
 export const MilestoneRequirementSchema = z.discriminatedUnion("kind", [
   RequirementBaseSchema.extend({ kind: z.literal("DELIVERABLE"), requiredCount: z.never().optional(), spendLimit: z.never().optional() }),
   RequirementBaseSchema.extend({ kind: z.literal("EXPENSE_RECORDS"), requiredCount: z.number().int().positive(), spendLimit: z.never().optional() }),
-  RequirementBaseSchema.extend({ kind: z.literal("SPEND_LIMIT"), requiredCount: z.never().optional(), spendLimit: MoneyAmountSchema }),
+  RequirementBaseSchema.extend({ kind: z.literal("SPEND_LIMIT"), requiredCount: z.never().optional(), spendLimit: SettlementMoneyAmountSchema }),
   RequirementBaseSchema.extend({ kind: z.literal("FOUNDER_CONFIRMATION"), requiredCount: z.never().optional(), spendLimit: z.never().optional() }),
 ]);
 export type MilestoneRequirement = z.infer<typeof MilestoneRequirementSchema>;

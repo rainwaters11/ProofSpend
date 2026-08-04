@@ -1,5 +1,5 @@
-import { AgenticJobRefSchema, ApprovalRecordSchema, ExecutionAuthorizationBindingSchema, ReconciliationRecordSchema, SettlementRecordSchema, SubmissionOperationRecordSchema, TransactionRecordSchema, type Actor, type AgenticJobRef, type AgenticJobStatus, type ApprovalRecord, type AuditEvent, type ExecutionAuthorizationBinding, type ReconciliationRecord, type SettlementRecord, type SubmissionOperationRecord, type TransactionRecord } from "./models";
-import { validateReconciliation } from "./integrity";
+import { AgenticJobRefSchema, ApprovalRecordSchema, CanonicalExecutionIntentSchema, ExecutionAuthorizationBindingSchema, ReconciliationRecordSchema, SettlementRecordSchema, SubmissionOperationRecordSchema, TransactionRecordSchema, type Actor, type AgenticJobRef, type AgenticJobStatus, type ApprovalRecord, type AuditEvent, type ExecutionAuthorizationBinding, type ReconciliationRecord, type SettlementRecord, type SubmissionOperationRecord, type TransactionRecord } from "./models";
+import { hashCanonicalExecutionIntent, validateReconciliation } from "./integrity";
 
 export class InvalidTransitionError extends Error {
   constructor(readonly machine: string, readonly from: string, readonly to: string) {
@@ -9,7 +9,7 @@ export class InvalidTransitionError extends Error {
 export type ProofSpendApplicationState = "INCOMPLETE" | "NEEDS_REVIEW" | "ELIGIBLE" | "APPROVAL_PENDING" | "APPROVED" | "PREPARED" | "SUBMITTED" | "CONFIRMED" | "REJECTED" | "FAILED" | "RECONCILED";
 const applicationTransitions: Record<ProofSpendApplicationState, readonly ProofSpendApplicationState[]> = {
   INCOMPLETE: ["NEEDS_REVIEW"], NEEDS_REVIEW: ["INCOMPLETE", "ELIGIBLE", "REJECTED"], ELIGIBLE: ["APPROVAL_PENDING"],
-  APPROVAL_PENDING: ["APPROVED", "REJECTED"], APPROVED: ["PREPARED"], PREPARED: ["SUBMITTED", "FAILED"],
+  APPROVAL_PENDING: ["APPROVED", "REJECTED"], APPROVED: ["PREPARED"], PREPARED: ["FAILED"],
   SUBMITTED: ["CONFIRMED", "FAILED"], CONFIRMED: ["RECONCILED"], REJECTED: [], FAILED: [], RECONCILED: [],
 };
 const jobTransitions: Record<AgenticJobStatus, readonly AgenticJobStatus[]> = {
@@ -25,6 +25,7 @@ export interface TransitionContext {
   reconciliationTransaction?: TransactionRecord; reconciliationSettlement?: SettlementRecord; reconciliationRecord?: ReconciliationRecord;
   approvalDecision?: ApprovalRecord; lifecycleTransaction?: TransactionRecord;
   jobEvidence?: AgenticJobRef; currentJobEvidence?: AgenticJobRef; jobApprovalDecision?: ApprovalRecord;
+  jobEvaluationEvidence?: { jobId: string; approvalId: string; decision: "APPROVED" | "REJECTED"; transactionHash: string };
 }
 type ApplicationEdge = `${ProofSpendApplicationState}->${ProofSpendApplicationState}`;
 type AuthorityRule = { actorTypes: readonly Actor["actorType"][]; identifier: "authorizedSystemId" | "authorizedApproverId" | "authorizedAdapterId" };
@@ -37,7 +38,6 @@ const applicationAuthority: Partial<Record<ApplicationEdge, AuthorityRule>> = {
   "APPROVAL_PENDING->APPROVED": { actorTypes: ["FOUNDER", "EVALUATOR"], identifier: "authorizedApproverId" },
   "APPROVAL_PENDING->REJECTED": { actorTypes: ["FOUNDER", "EVALUATOR"], identifier: "authorizedApproverId" },
   "APPROVED->PREPARED": { actorTypes: ["ADAPTER"], identifier: "authorizedAdapterId" },
-  "PREPARED->SUBMITTED": { actorTypes: ["ADAPTER"], identifier: "authorizedAdapterId" },
   "PREPARED->FAILED": { actorTypes: ["ADAPTER"], identifier: "authorizedAdapterId" },
   "SUBMITTED->CONFIRMED": { actorTypes: ["ADAPTER"], identifier: "authorizedAdapterId" },
   "SUBMITTED->FAILED": { actorTypes: ["ADAPTER"], identifier: "authorizedAdapterId" },
@@ -68,15 +68,6 @@ export function transitionApplication(from: ProofSpendApplicationState, to: Proo
   }
   if (from === "APPROVED" && to === "PREPARED") validateLifecycleTransaction(context, "PREPARED", from, to);
   if ((from === "PREPARED" || from === "SUBMITTED") && to === "FAILED") validateLifecycleTransaction(context, "FAILED", from, to);
-  if (from === "PREPARED" && to === "SUBMITTED") {
-    const transaction = TransactionRecordSchema.safeParse(context.submissionTransaction);
-    const binding = ExecutionAuthorizationBindingSchema.safeParse(context.executionBinding);
-    const submission = SubmissionOperationRecordSchema.safeParse(context.submissionOperation);
-    if (!transaction.success || !binding.success || !submission.success) throw new InvalidTransitionError("ProofSpend application submission evidence", from, to);
-    const arcTransaction = transaction.data.arcTransaction;
-    const executionIntent = binding.data.executionIntent;
-    if (transaction.data.operationState !== "SUBMITTED" || arcTransaction?.status !== "SUBMITTED" || binding.data.status !== "CONSUMED" || binding.data.consumedAt === null || binding.data.consumedByTransactionId !== transaction.data.id || binding.data.transactionRecordId !== transaction.data.id || binding.data.releaseRequestId !== transaction.data.releaseRequestId || binding.data.intentId !== transaction.data.intentId || binding.data.approvalId !== transaction.data.approvalId || transaction.data.approvalBindingId !== binding.data.id || submission.data.transactionId !== transaction.data.id || context.idempotencyKey === undefined || submission.data.idempotencyKey !== context.idempotencyKey || context.aggregateId !== transaction.data.releaseRequestId || transaction.data.id !== context.expectedTransactionId || transaction.data.projectId !== context.expectedProjectId || transaction.data.releaseRequestId !== context.expectedReleaseRequestId || transaction.data.intentId !== context.expectedIntentId || transaction.data.approvalId !== context.expectedApprovalId || transaction.data.approvalBindingId !== context.expectedApprovalBindingId || executionIntent.transactionRecordId !== transaction.data.id || executionIntent.projectId !== transaction.data.projectId || executionIntent.releaseRequestId !== transaction.data.releaseRequestId || executionIntent.intentId !== transaction.data.intentId || executionIntent.asset !== transaction.data.amount.asset || executionIntent.atomicAmount !== transaction.data.amount.atomicUnits || executionIntent.operationType !== arcTransaction.operationType || executionIntent.protocolTarget.destination !== transaction.data.destinationReference || executionIntent.protocolTarget.network !== arcTransaction.network || executionIntent.protocolTarget.chainId !== arcTransaction.chainId) throw new InvalidTransitionError("ProofSpend application submission evidence", from, to);
-  }
   if (from === "SUBMITTED" && to === "CONFIRMED") {
     const parsed = TransactionRecordSchema.safeParse(context.confirmationTransaction);
     const transaction = parsed.success ? parsed.data : null;
@@ -96,6 +87,36 @@ function validateLifecycleTransaction(context: TransitionContext, status: "PREPA
   const transaction = parsed.success ? parsed.data : null;
   if (transaction === null || transaction.operationState !== status || transaction.arcTransaction?.status !== status || transaction.releaseRequestId !== context.aggregateId || transaction.id !== context.expectedTransactionId || transaction.projectId !== context.expectedProjectId || transaction.releaseRequestId !== context.expectedReleaseRequestId || transaction.intentId !== context.expectedIntentId || transaction.approvalId !== context.expectedApprovalId || transaction.approvalBindingId !== context.expectedApprovalBindingId) throw new InvalidTransitionError("ProofSpend application transaction evidence", from, to);
 }
+
+function requiredApprovalPolicy(operationType: NonNullable<TransactionRecord["arcTransaction"]>["operationType"]): { actionKind: ApprovalRecord["actionKind"]; actorType: "FOUNDER" | "EVALUATOR" } {
+  if (operationType === "JOB_EVALUATE") return { actionKind: "JOB_EVALUATION", actorType: "EVALUATOR" };
+  return { actionKind: "RELEASE_APPROVAL", actorType: "FOUNDER" };
+}
+function assertFiniteTime(value: string | null): number | null {
+  if (value === null) return null;
+  const time = Date.parse(value);
+  return Number.isFinite(time) ? time : null;
+}
+export async function transitionApplicationSubmission(context: TransitionContext) {
+  const from = "PREPARED"; const to = "SUBMITTED";
+  const authority = applicationAuthority[`${from}->${to}`] ?? { actorTypes: ["ADAPTER"], identifier: "authorizedAdapterId" as const };
+  if (!authority.actorTypes.includes(context.actor.actorType) || context[authority.identifier] === undefined || context.actor.actorId !== context[authority.identifier]) throw new InvalidTransitionError("ProofSpend application authority", from, to);
+  const transaction = TransactionRecordSchema.safeParse(context.submissionTransaction);
+  const binding = ExecutionAuthorizationBindingSchema.safeParse(context.executionBinding);
+  const approval = ApprovalRecordSchema.safeParse(context.approvalDecision);
+  const submission = SubmissionOperationRecordSchema.safeParse(context.submissionOperation);
+  if (!transaction.success || !binding.success || !approval.success || !submission.success) throw new InvalidTransitionError("ProofSpend application submission evidence", from, to);
+  const arcTransaction = transaction.data.arcTransaction;
+  const executionIntent = CanonicalExecutionIntentSchema.parse(binding.data.executionIntent);
+  const policy = arcTransaction === null ? null : requiredApprovalPolicy(arcTransaction.operationType);
+  const decidedAt = assertFiniteTime(approval.data.decidedAt);
+  const occurredAt = assertFiniteTime(context.occurredAt);
+  const expiresAt = assertFiniteTime(approval.data.expiresAt);
+  const recomputedHash = await hashCanonicalExecutionIntent(executionIntent);
+  if (transaction.data.operationState !== "SUBMITTED" || arcTransaction?.status !== "SUBMITTED" || binding.data.status !== "CONSUMED" || binding.data.consumedAt === null || binding.data.consumedByTransactionId !== transaction.data.id || binding.data.transactionRecordId !== transaction.data.id || binding.data.releaseRequestId !== transaction.data.releaseRequestId || binding.data.intentId !== transaction.data.intentId || binding.data.approvalId !== transaction.data.approvalId || transaction.data.approvalBindingId !== binding.data.id || submission.data.transactionId !== transaction.data.id || context.idempotencyKey === undefined || submission.data.idempotencyKey !== context.idempotencyKey || context.aggregateId !== transaction.data.releaseRequestId || transaction.data.id !== context.expectedTransactionId || transaction.data.projectId !== context.expectedProjectId || transaction.data.releaseRequestId !== context.expectedReleaseRequestId || transaction.data.intentId !== context.expectedIntentId || transaction.data.approvalId !== context.expectedApprovalId || transaction.data.approvalBindingId !== context.expectedApprovalBindingId || approval.data.decision !== "APPROVED" || approval.data.id !== transaction.data.approvalId || approval.data.id !== binding.data.approvalId || approval.data.aggregateId !== context.aggregateId || approval.data.aggregateId !== transaction.data.releaseRequestId || approval.data.intentId !== transaction.data.intentId || approval.data.intentId !== binding.data.intentId || approval.data.intentId !== executionIntent.intentId || approval.data.approver === null || policy === null || approval.data.actionKind !== policy.actionKind || approval.data.authorizedActorType !== policy.actorType || approval.data.approver.actorType !== approval.data.authorizedActorType || approval.data.approver.actorId !== approval.data.authorizedActorId || decidedAt === null || occurredAt === null || expiresAt === null || decidedAt > occurredAt || occurredAt >= expiresAt || decidedAt > expiresAt || executionIntent.transactionRecordId !== transaction.data.id || executionIntent.projectId !== transaction.data.projectId || executionIntent.releaseRequestId !== transaction.data.releaseRequestId || executionIntent.asset !== transaction.data.amount.asset || executionIntent.atomicAmount !== transaction.data.amount.atomicUnits || executionIntent.operationType !== arcTransaction.operationType || executionIntent.protocolTarget.destination !== transaction.data.destinationReference || executionIntent.protocolTarget.network !== arcTransaction.network || executionIntent.protocolTarget.chainId !== arcTransaction.chainId || recomputedHash !== approval.data.exactIntentHash || recomputedHash !== binding.data.exactIntentHash) throw new InvalidTransitionError("ProofSpend application submission evidence", from, to);
+  return { state: to, auditEvent: event(context, from, to) } as const;
+}
+
 export function transitionAgenticJob(from: AgenticJobStatus, to: AgenticJobStatus, context: TransitionContext) {
   if (!jobTransitions[from].includes(to)) throw new InvalidTransitionError("agentic job", from, to);
   const authority = jobAuthority[`${from}->${to}`];
@@ -113,7 +134,9 @@ export function transitionAgenticJob(from: AgenticJobStatus, to: AgenticJobStatu
   if (to === "COMPLETED" || to === "REJECTED") {
     const approval = ApprovalRecordSchema.safeParse(context.jobApprovalDecision);
     const decision = to === "COMPLETED" ? "APPROVED" : "REJECTED";
-    if (!approval.success || approval.data.actionKind !== "JOB_EVALUATION" || approval.data.aggregateId !== context.aggregateId || approval.data.decision !== decision || approval.data.approver?.actorType !== "EVALUATOR" || approval.data.approver.actorId !== context.actor.actorId || (to === "COMPLETED" && (target.data.deliverableReference === null || target.data.transaction?.status !== "CONFIRMED" || target.data.transaction.operationType !== "JOB_EVALUATE")) || (to === "REJECTED" && target.data.reasonReference === null)) throw new InvalidTransitionError("agentic job evaluation evidence", from, to);
+    const transaction = target.data.transaction;
+    const evaluationEvidence = context.jobEvaluationEvidence;
+    if (!approval.success || evaluationEvidence === undefined || approval.data.actionKind !== "JOB_EVALUATION" || approval.data.aggregateId !== target.data.jobId || approval.data.aggregateId !== context.aggregateId || approval.data.decision !== decision || approval.data.approver?.actorType !== "EVALUATOR" || approval.data.approver.actorId !== context.actor.actorId || approval.data.authorizedActorId !== context.authorizedEvaluatorId || transaction === null || transaction.status !== "CONFIRMED" || transaction.operationType !== "JOB_EVALUATE" || transaction.network !== target.data.network || transaction.chainId !== target.data.chainId || transaction.transactionHash === null || evaluationEvidence.jobId !== target.data.jobId || evaluationEvidence.approvalId !== approval.data.id || evaluationEvidence.decision !== decision || evaluationEvidence.transactionHash !== transaction.transactionHash || (to === "COMPLETED" && target.data.deliverableReference === null) || (to === "REJECTED" && target.data.reasonReference === null)) throw new InvalidTransitionError("agentic job evaluation evidence", from, to);
   }
   return { status: to, auditEvent: event(context, from, to) } as const;
 }
