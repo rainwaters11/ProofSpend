@@ -262,8 +262,12 @@ describe("protocol-safe mocks and privacy", () => {
   it("transitions only mock jobs without contract behavior", () => {
     const job = { standard: "ERC-8183" as const, network: "synthetic:arc-testnet", chainId: "synthetic:chain", contractAddress: "mock:not-a-contract", jobId: "mock:job", clientAddress: "mock:client", providerAddress: "mock:provider", evaluatorAddress: "mock:evaluator", budget: usdc("250000000"), expiresAt: "2026-02-01T00:00:00.000Z", descriptionReference: "mock:description", deliverableReference: null, reasonReference: null, status: "OPEN" as const, transaction: null, isMock: true };
     expect(AgenticJobRefSchema.parse(job)).toEqual(job);
+    const adapter = new MockAgenticJobAdapter(); const authority = { ...context, aggregateId: job.jobId, actor: { actorId: "adapter", actorType: "ADAPTER" as const }, authorizedAdapterId: "adapter" };
+    expect(() => adapter.transition(job, "FUNDED", authority)).toThrow(InvalidTransitionError);
     const funded = mockJob("FUNDED", mockTransaction("CONFIRMED", "JOB_FUND"));
-    expect(new MockAgenticJobAdapter().transition(job, "FUNDED", { ...context, aggregateId: job.jobId, actor: { actorId: "adapter", actorType: "ADAPTER" }, authorizedAdapterId: "adapter", jobEvidence: funded }).job.status).toBe("FUNDED"); expect(job.status).toBe("OPEN");
+    expect(adapter.transition(job, "FUNDED", { ...authority, jobEvidence: funded }).job.status).toBe("FUNDED"); expect(job.status).toBe("OPEN");
+    expect(() => adapter.transition(funded, "SUBMITTED", authority)).toThrow(InvalidTransitionError);
+    expect(() => adapter.transition(funded, "SUBMITTED", { ...authority, jobEvidence: { ...mockJob("SUBMITTED", mockTransaction("SUBMITTED", "JOB_SUBMIT")), deliverableReference: null } })).toThrow(InvalidTransitionError);
     expect(() => AgenticJobRefSchema.parse({ ...job, network: "ARC_TESTNET", chainId: "5042002", contractAddress: "0x1111111111111111111111111111111111111111", jobId: "1", clientAddress: "0x2222222222222222222222222222222222222222", providerAddress: "0x3333333333333333333333333333333333333333", evaluatorAddress: "0x4444444444444444444444444444444444444444", descriptionReference: "description", isMock: false })).toThrow(/deferred to Issue #8/);
   });
   it("requires every protocol-reference field", () => {
