@@ -112,6 +112,17 @@ describe("separate state machines", () => {
     await expect(submitForOperation("REFUND", "FOUNDER")).resolves.toMatchObject({ state: "SUBMITTED" });
     await expect(submitForOperation("JOB_FUND", "FOUNDER")).resolves.toMatchObject({ state: "SUBMITTED" });
     await expect(submitForOperation("JOB_EVALUATE", "EVALUATOR")).resolves.toMatchObject({ state: "SUBMITTED" });
+    await expect(submitForOperation("JOB_FUND", "EVALUATOR")).rejects.toThrow(InvalidTransitionError);
+    await expect(submitForOperation("JOB_EVALUATE", "FOUNDER")).rejects.toThrow(InvalidTransitionError);
+    await expect(transitionApplicationSubmission({ ...submitted, approvalDecision: { ...approvalDecision, actionKind: "JOB_EVALUATION", authorizedActorType: "EVALUATOR", authorizedActorId: "evaluator:1", approver: { actorId: "evaluator:1", actorType: "EVALUATOR" as const } } })).rejects.toThrow(InvalidTransitionError);
+    const jobFundIntent = CanonicalExecutionIntentSchema.parse({ ...executionIntent, operationType: "JOB_FUND", protocolTarget: erc8183Target("JOB_FUND") });
+    const jobEvaluateIntent = CanonicalExecutionIntentSchema.parse({ ...executionIntent, actionKind: "JOB_EVALUATION", operationType: "JOB_EVALUATE", protocolTarget: erc8183Target("JOB_EVALUATE") });
+    expect(CanonicalExecutionIntentSchema.safeParse({ ...jobFundIntent, actionKind: "JOB_EVALUATION" }).success).toBe(false);
+    expect(CanonicalExecutionIntentSchema.safeParse({ ...jobEvaluateIntent, actionKind: "RELEASE_APPROVAL" }).success).toBe(false);
+    expect(CanonicalExecutionIntentSchema.safeParse({ ...jobFundIntent, protocolTarget: erc8183Target("JOB_EVALUATE") }).success).toBe(false);
+    expect(CanonicalExecutionIntentSchema.safeParse({ ...jobEvaluateIntent, protocolTarget: erc8183Target("JOB_FUND") }).success).toBe(false);
+    expect(await hashCanonicalExecutionIntent({ ...jobFundIntent, actionKind: "JOB_EVALUATION" } as unknown as typeof jobFundIntent)).not.toBe(await hashCanonicalExecutionIntent(jobFundIntent));
+    expect(await hashCanonicalExecutionIntent({ ...jobFundIntent, protocolTarget: erc8183Target("JOB_EVALUATE") } as unknown as typeof jobFundIntent)).not.toBe(await hashCanonicalExecutionIntent(jobFundIntent));
     for (const operationType of ["JOB_CREATE", "JOB_SUBMIT", "IDENTITY_REGISTRATION", "REPUTATION_WRITE"] as const) {
       await expect(submitForOperation(operationType, "FOUNDER")).rejects.toThrow(InvalidTransitionError);
       await expect(submitForOperation(operationType, "EVALUATOR")).rejects.toThrow(InvalidTransitionError);
@@ -137,6 +148,11 @@ describe("separate state machines", () => {
     expect(() => transitionApplication("SUBMITTED", "CONFIRMED", { ...confirmation, confirmationTransaction: { ...transaction, releaseRequestId: "release:other" } })).toThrow(InvalidTransitionError);
     expect(() => transitionApplication("SUBMITTED", "CONFIRMED", { ...confirmation, confirmationTransaction: { ...transaction, id: "transaction:other" } })).toThrow(InvalidTransitionError);
     expect(() => transitionApplication("SUBMITTED", "CONFIRMED", { ...confirmation, aggregateId: "release:other" })).toThrow(InvalidTransitionError);
+    for (const operationType of ["JOB_FUND", "JOB_EVALUATE", "JOB_SUBMIT", "REFUND"] as const) {
+      const otherOperation = TransactionRecordSchema.parse({ ...transaction, arcTransaction: mockTransaction("CONFIRMED", operationType) });
+      expect(() => transitionApplication("SUBMITTED", "CONFIRMED", { ...confirmation, confirmationTransaction: otherOperation, expectedOperationType: operationType })).toThrow(InvalidTransitionError);
+    }
+    expect(transitionApplication("SUBMITTED", "CONFIRMED", { ...confirmation, expectedOperationType: "REFUND" }).state).toBe("CONFIRMED");
     expect(transitionApplication("SUBMITTED", "CONFIRMED", confirmation).state).toBe("CONFIRMED");
     for (const actorType of ["AI", "FOUNDER", "EVALUATOR"] as const) expect(() => transitionApplication("SUBMITTED", "CONFIRMED", { ...confirmation, actor: { actorId: "adapter:authorized", actorType } })).toThrow(InvalidTransitionError);
     expect(() => transitionApplication("SUBMITTED", "CONFIRMED", { ...confirmation, actor: { actorId: "adapter:other", actorType: "ADAPTER" } })).toThrow(InvalidTransitionError);
@@ -492,7 +508,7 @@ describe("persisted relationship integrity", () => {
   it("commits every ERC-8183 protocol target field in canonical hashes", async () => {
     const { binding } = await authorizationFixture();
     const target = { kind: "ERC8183" as const, standard: "ERC-8183" as const, network: "ARC_TESTNET" as const, chainId: "synthetic:chain", contractReference: "mock:contract", jobId: "mock:job", method: "JOB_FUND" as const, parameterCommitment: `sha256:${"a".repeat(64)}`, clientReference: "mock:client", providerReference: "mock:provider", evaluatorReference: "mock:evaluator", destination: "mock:escrow" };
-    const intent = { ...binding.executionIntent, actionKind: "JOB_EVALUATION" as const, operationType: "JOB_FUND" as const, protocolTarget: target };
+    const intent = { ...binding.executionIntent, actionKind: "RELEASE_APPROVAL" as const, operationType: "JOB_FUND" as const, protocolTarget: target };
     expect(CanonicalExecutionIntentSchema.parse(intent)).toBeDefined();
     expect(() => CanonicalExecutionIntentSchema.parse({ ...intent, protocolTarget: { kind: "ERC8183", standard: "ERC-8183" } })).toThrow();
     expect(() => CanonicalExecutionIntentSchema.parse({ ...binding.executionIntent, protocolTarget: target })).toThrow();

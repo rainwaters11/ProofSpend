@@ -164,8 +164,13 @@ const Erc8183ProtocolTargetSchema = z.object({
 }).strict();
 export const ProtocolTargetSchema = z.discriminatedUnion("kind", [DestinationProtocolTargetSchema, Erc8183ProtocolTargetSchema]);
 export const CanonicalExecutionIntentSchema = z.object({ version: z.literal(1), actionKind: ApprovalActionKindSchema, projectId: Id, releaseRequestId: Id, transactionRecordId: Id, intentId: Id, asset: z.literal(LAUNCHVAULT_SETTLEMENT_ASSET), atomicAmount: AtomicUnitsSchema, operationType: TransactionOperationTypeSchema, protocolTarget: ProtocolTargetSchema }).superRefine((value, context) => {
+  const supportedActionPolicy = { SETTLEMENT: "RELEASE_APPROVAL", REFUND: "RELEASE_APPROVAL", JOB_FUND: "RELEASE_APPROVAL", JOB_EVALUATE: "JOB_EVALUATION" } as const;
   const isJobOperation = ["JOB_FUND", "JOB_SUBMIT", "JOB_EVALUATE"].includes(value.operationType);
   if (isJobOperation !== (value.protocolTarget.kind === "ERC8183")) context.addIssue({ code: "custom", message: "Execution operation and protocol target are incompatible." });
+  const expectedActionKind = supportedActionPolicy[value.operationType as keyof typeof supportedActionPolicy];
+  if (expectedActionKind === undefined) context.addIssue({ code: "custom", message: `${value.operationType} execution authorization is deferred to its owning issue.` });
+  else if (value.actionKind !== expectedActionKind) context.addIssue({ code: "custom", message: `${value.operationType} requires ${expectedActionKind} authorization.` });
+  if (value.protocolTarget.kind === "ERC8183" && (value.operationType !== "JOB_FUND" && value.operationType !== "JOB_EVALUATE" || value.protocolTarget.method !== value.operationType)) context.addIssue({ code: "custom", message: "ERC-8183 execution method must match the supported operation type." });
 });
 export type CanonicalExecutionIntent = z.infer<typeof CanonicalExecutionIntentSchema>;
 export const ExecutionAuthorizationBindingSchema = z.object({ id: Id, releaseRequestId: Id, approvalId: Id, intentId: Id, exactIntentHash: Hash, transactionRecordId: Id, executionIntent: CanonicalExecutionIntentSchema, status: z.enum(["ACTIVE", "CONSUMED", "REVOKED"]), consumedAt: Time.nullable(), consumedByTransactionId: Id.nullable(), createdAt: Time }).superRefine((value, context) => {
