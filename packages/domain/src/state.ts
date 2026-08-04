@@ -1,4 +1,4 @@
-import { ExecutionAuthorizationBindingSchema, ReconciliationRecordSchema, SettlementRecordSchema, SubmissionOperationRecordSchema, TransactionRecordSchema, type Actor, type AgenticJobStatus, type AuditEvent, type ExecutionAuthorizationBinding, type ReconciliationRecord, type SettlementRecord, type SubmissionOperationRecord, type TransactionRecord } from "./models";
+import { AgenticJobRefSchema, ApprovalRecordSchema, ExecutionAuthorizationBindingSchema, ReconciliationRecordSchema, SettlementRecordSchema, SubmissionOperationRecordSchema, TransactionRecordSchema, type Actor, type AgenticJobRef, type AgenticJobStatus, type ApprovalRecord, type AuditEvent, type ExecutionAuthorizationBinding, type ReconciliationRecord, type SettlementRecord, type SubmissionOperationRecord, type TransactionRecord } from "./models";
 import { validateReconciliation } from "./integrity";
 
 export class InvalidTransitionError extends Error {
@@ -20,9 +20,11 @@ export interface TransitionContext {
   aggregateType: string; aggregateId: string; eventId: string; occurredAt: string; actor: Actor;
   authorizedSystemId?: string; authorizedApproverId?: string; authorizedAdapterId?: string; authorizedEvaluatorId?: string; idempotencyKey?: string;
   confirmationTransaction?: TransactionRecord; expectedTransactionId?: string; expectedProjectId?: string; expectedReleaseRequestId?: string; expectedOperationType?: NonNullable<TransactionRecord["arcTransaction"]>["operationType"];
-  expectedIntentId?: string; expectedApprovalId?: string; expectedApprovalBindingId?: string;
+  expectedIntentId?: string; expectedApprovalId?: string; expectedApprovalBindingId?: string; expectedExactIntentHash?: string;
   submissionTransaction?: TransactionRecord; executionBinding?: ExecutionAuthorizationBinding; submissionOperation?: SubmissionOperationRecord;
   reconciliationTransaction?: TransactionRecord; reconciliationSettlement?: SettlementRecord; reconciliationRecord?: ReconciliationRecord;
+  approvalDecision?: ApprovalRecord; lifecycleTransaction?: TransactionRecord;
+  jobEvidence?: AgenticJobRef; currentJobEvidence?: AgenticJobRef; jobApprovalDecision?: ApprovalRecord;
 }
 type ApplicationEdge = `${ProofSpendApplicationState}->${ProofSpendApplicationState}`;
 type AuthorityRule = { actorTypes: readonly Actor["actorType"][]; identifier: "authorizedSystemId" | "authorizedApproverId" | "authorizedAdapterId" };
@@ -59,6 +61,13 @@ export function transitionApplication(from: ProofSpendApplicationState, to: Proo
   if (!applicationTransitions[from].includes(to)) throw new InvalidTransitionError("ProofSpend application", from, to);
   const authority = applicationAuthority[`${from}->${to}`];
   if (authority === undefined || !authority.actorTypes.includes(context.actor.actorType) || context[authority.identifier] === undefined || context.actor.actorId !== context[authority.identifier]) throw new InvalidTransitionError("ProofSpend application authority", from, to);
+  if (from === "APPROVAL_PENDING" && (to === "APPROVED" || to === "REJECTED")) {
+    const approval = ApprovalRecordSchema.safeParse(context.approvalDecision);
+    const expectedDecision = to === "APPROVED" ? "APPROVED" : "REJECTED";
+    if (!approval.success || approval.data.aggregateId !== context.aggregateId || approval.data.intentId !== context.expectedIntentId || approval.data.id !== context.expectedApprovalId || approval.data.exactIntentHash !== context.expectedExactIntentHash || approval.data.decision !== expectedDecision || approval.data.approver === null || approval.data.decidedAt === null || approval.data.approver.actorType !== approval.data.authorizedActorType || approval.data.approver.actorId !== approval.data.authorizedActorId || context.actor.actorType !== approval.data.approver.actorType || context.actor.actorId !== approval.data.approver.actorId) throw new InvalidTransitionError("ProofSpend application approval evidence", from, to);
+  }
+  if (from === "APPROVED" && to === "PREPARED") validateLifecycleTransaction(context, "PREPARED", from, to);
+  if ((from === "PREPARED" || from === "SUBMITTED") && to === "FAILED") validateLifecycleTransaction(context, "FAILED", from, to);
   if (from === "PREPARED" && to === "SUBMITTED") {
     const transaction = TransactionRecordSchema.safeParse(context.submissionTransaction);
     const binding = ExecutionAuthorizationBindingSchema.safeParse(context.executionBinding);
@@ -71,7 +80,7 @@ export function transitionApplication(from: ProofSpendApplicationState, to: Proo
   if (from === "SUBMITTED" && to === "CONFIRMED") {
     const parsed = TransactionRecordSchema.safeParse(context.confirmationTransaction);
     const transaction = parsed.success ? parsed.data : null;
-    if (transaction === null || transaction.operationState !== "CONFIRMED" || transaction.arcTransaction?.status !== "CONFIRMED" || context.expectedTransactionId === undefined || context.expectedProjectId === undefined || context.expectedReleaseRequestId === undefined || context.expectedOperationType === undefined || transaction.id !== context.expectedTransactionId || transaction.projectId !== context.expectedProjectId || transaction.releaseRequestId !== context.expectedReleaseRequestId || transaction.arcTransaction.operationType !== context.expectedOperationType) throw new InvalidTransitionError("ProofSpend application confirmation evidence", from, to);
+    if (transaction === null || transaction.operationState !== "CONFIRMED" || transaction.arcTransaction?.status !== "CONFIRMED" || context.expectedTransactionId === undefined || context.expectedProjectId === undefined || context.expectedReleaseRequestId === undefined || context.expectedOperationType === undefined || context.aggregateId !== transaction.releaseRequestId || transaction.id !== context.expectedTransactionId || transaction.projectId !== context.expectedProjectId || transaction.releaseRequestId !== context.expectedReleaseRequestId || transaction.arcTransaction.operationType !== context.expectedOperationType) throw new InvalidTransitionError("ProofSpend application confirmation evidence", from, to);
   }
   if (from === "CONFIRMED" && to === "RECONCILED") {
     const transaction = TransactionRecordSchema.safeParse(context.reconciliationTransaction);
@@ -82,10 +91,30 @@ export function transitionApplication(from: ProofSpendApplicationState, to: Proo
   }
   return { state: to, auditEvent: event(context, from, to) } as const;
 }
+function validateLifecycleTransaction(context: TransitionContext, status: "PREPARED" | "FAILED", from: string, to: string): void {
+  const parsed = TransactionRecordSchema.safeParse(context.lifecycleTransaction);
+  const transaction = parsed.success ? parsed.data : null;
+  if (transaction === null || transaction.operationState !== status || transaction.arcTransaction?.status !== status || transaction.releaseRequestId !== context.aggregateId || transaction.id !== context.expectedTransactionId || transaction.projectId !== context.expectedProjectId || transaction.releaseRequestId !== context.expectedReleaseRequestId || transaction.intentId !== context.expectedIntentId || transaction.approvalId !== context.expectedApprovalId || transaction.approvalBindingId !== context.expectedApprovalBindingId) throw new InvalidTransitionError("ProofSpend application transaction evidence", from, to);
+}
 export function transitionAgenticJob(from: AgenticJobStatus, to: AgenticJobStatus, context: TransitionContext) {
   if (!jobTransitions[from].includes(to)) throw new InvalidTransitionError("agentic job", from, to);
   const authority = jobAuthority[`${from}->${to}`];
   if (authority === undefined || context.actor.actorType !== authority.actorType || context[authority.identifier] === undefined || context.actor.actorId !== context[authority.identifier]) throw new InvalidTransitionError("agentic job authority", from, to);
+  if (to === "EXPIRED") {
+    const current = AgenticJobRefSchema.safeParse(context.currentJobEvidence);
+    const occurredAt = Date.parse(context.occurredAt);
+    if (!current.success || !current.data.isMock || current.data.jobId !== context.aggregateId || current.data.status !== from || !Number.isFinite(occurredAt) || occurredAt < Date.parse(current.data.expiresAt)) throw new InvalidTransitionError("agentic job expiry evidence", from, to);
+    return { status: to, auditEvent: event(context, from, to) } as const;
+  }
+  const target = AgenticJobRefSchema.safeParse(context.jobEvidence);
+  if (!target.success || !target.data.isMock || target.data.jobId !== context.aggregateId || target.data.status !== to) throw new InvalidTransitionError("agentic job lifecycle evidence", from, to);
+  if (to === "FUNDED" && (target.data.transaction?.isMock !== true || target.data.transaction.status !== "CONFIRMED" || target.data.transaction.operationType !== "JOB_FUND")) throw new InvalidTransitionError("agentic job funding evidence", from, to);
+  if (to === "SUBMITTED" && (target.data.deliverableReference === null || target.data.transaction?.isMock !== true || !["SUBMITTED", "CONFIRMED"].includes(target.data.transaction.status) || target.data.transaction.operationType !== "JOB_SUBMIT")) throw new InvalidTransitionError("agentic job submission evidence", from, to);
+  if (to === "COMPLETED" || to === "REJECTED") {
+    const approval = ApprovalRecordSchema.safeParse(context.jobApprovalDecision);
+    const decision = to === "COMPLETED" ? "APPROVED" : "REJECTED";
+    if (!approval.success || approval.data.actionKind !== "JOB_EVALUATION" || approval.data.aggregateId !== context.aggregateId || approval.data.decision !== decision || approval.data.approver?.actorType !== "EVALUATOR" || approval.data.approver.actorId !== context.actor.actorId || (to === "COMPLETED" && (target.data.deliverableReference === null || target.data.transaction?.status !== "CONFIRMED" || target.data.transaction.operationType !== "JOB_EVALUATE")) || (to === "REJECTED" && target.data.reasonReference === null)) throw new InvalidTransitionError("agentic job evaluation evidence", from, to);
+  }
   return { status: to, auditEvent: event(context, from, to) } as const;
 }
 export function mapAgenticJobToApplication(status: AgenticJobStatus): ProofSpendApplicationState | null {

@@ -1,4 +1,4 @@
-import { CanonicalExecutionIntentSchema, LedgerEntrySchema, type ApprovalRecord, type CanonicalExecutionIntent, type ExecutionAuthorizationBinding, type LedgerEntry, type ReconciliationRecord, type ReleaseRequest, type SettlementRecord, type TransactionRecord } from "./models";
+import { ApprovalRecordSchema, CanonicalExecutionIntentSchema, ExecutionAuthorizationBindingSchema, LedgerEntrySchema, ReleaseRequestSchema, SettlementRecordSchema, TransactionRecordSchema, type ApprovalRecord, type CanonicalExecutionIntent, type ExecutionAuthorizationBinding, type LedgerEntry, type ReconciliationRecord, type ReleaseRequest, type SettlementRecord, type TransactionRecord } from "./models";
 
 export class RelationshipIntegrityError extends Error { constructor(message: string) { super(message); this.name = "RelationshipIntegrityError"; } }
 const assert = (condition: boolean, message: string): void => { if (!condition) throw new RelationshipIntegrityError(message); };
@@ -32,11 +32,13 @@ function requiredApprovalPolicy(intent: CanonicalExecutionIntent): { actionKind:
 }
 
 export async function validateExecutionAuthorization(approval: ApprovalRecord, release: ReleaseRequest, transaction: TransactionRecord, binding: ExecutionAuthorizationBinding, asOf: string): Promise<true> {
+  approval = ApprovalRecordSchema.parse(approval); release = ReleaseRequestSchema.parse(release); transaction = TransactionRecordSchema.parse(transaction); binding = ExecutionAuthorizationBindingSchema.parse(binding);
   assert(release.state === "PREPARED", "Pre-submission authorization requires a PREPARED release.");
   if (transaction.operationState !== "PREPARED" || transaction.arcTransaction === null || transaction.arcTransaction.status !== "PREPARED") throw new RelationshipIntegrityError("Pre-submission authorization requires compatible PREPARED transaction evidence.");
   assert(transaction.arcTransaction.transactionHash === null && transaction.arcTransaction.blockNumber === null && transaction.arcTransaction.blockHash === null && transaction.arcTransaction.explorerUrl === null, "PREPARED transaction cannot contain submission or confirmation evidence.");
   assert(binding.status === "ACTIVE" && binding.consumedAt === null && binding.consumedByTransactionId === null, "Execution authorization binding is not active.");
   assert(binding.releaseRequestId === release.id && binding.approvalId === approval.id && binding.transactionRecordId === transaction.id, "Authorization binding record IDs do not match.");
+  assert(approval.aggregateId === release.id && approval.intentId === binding.intentId, "Approval subject does not match the release intent.");
   assert(release.approvalId === approval.id && transaction.approvalId === approval.id && transaction.approvalBindingId === binding.id, "Release or transaction does not reference the approval and authorization binding.");
   assert(approval.decision === "APPROVED", "Execution requires an approved decision.");
   const intent = CanonicalExecutionIntentSchema.parse(binding.executionIntent);
@@ -77,6 +79,7 @@ export function validateLedgerReversal(reversal: LedgerEntry, targetEntry: Ledge
 }
 
 export function validateReleaseConfirmation(release: ReleaseRequest, settlement: SettlementRecord): true {
+  release = ReleaseRequestSchema.parse(release); settlement = SettlementRecordSchema.parse(settlement);
   assert(release.state === "CONFIRMED" && release.settlementId === settlement.id, "Confirmed release must reference the settlement.");
   assert(settlement.releaseRequestId === release.id && settlement.projectId === release.projectId, "Settlement relationship does not match release.");
   assert(settlement.amount.asset === release.amount.asset && settlement.amount.atomicUnits === release.amount.atomicUnits, "Settlement amount does not match release.");

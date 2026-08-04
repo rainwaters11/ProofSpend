@@ -104,7 +104,7 @@ export const TransactionRecordSchema = z.object({ id: Id, projectId: Id, release
 });
 export type TransactionRecord = z.infer<typeof TransactionRecordSchema>;
 export const ApprovalActionKindSchema = z.enum(["RELEASE_APPROVAL", "MILESTONE_EVALUATION", "JOB_EVALUATION"]);
-const ApprovalRecordBaseSchema = z.object({ id: Id, exactIntentHash: Hash, idempotencyKey: Id, decision: z.enum(["PENDING", "APPROVED", "REJECTED"]), approver: ActorSchema.nullable(), expiresAt: Time, decidedAt: Time.nullable() });
+const ApprovalRecordBaseSchema = z.object({ id: Id, aggregateId: Id, intentId: Id, exactIntentHash: Hash, idempotencyKey: Id, decision: z.enum(["PENDING", "APPROVED", "REJECTED"]), approver: ActorSchema.nullable(), expiresAt: Time, decidedAt: Time.nullable() });
 export const ApprovalRecordSchema = z.discriminatedUnion("actionKind", [
   ApprovalRecordBaseSchema.extend({ actionKind: z.literal("RELEASE_APPROVAL"), authorizedActorType: z.literal("FOUNDER"), authorizedActorId: Id }),
   ApprovalRecordBaseSchema.extend({ actionKind: z.literal("MILESTONE_EVALUATION"), authorizedActorType: z.literal("EVALUATOR"), authorizedActorId: Id }),
@@ -126,7 +126,7 @@ export const MilestoneRequirementSchema = z.discriminatedUnion("kind", [
   RequirementBaseSchema.extend({ kind: z.literal("FOUNDER_CONFIRMATION"), requiredCount: z.never().optional(), spendLimit: z.never().optional() }),
 ]);
 export type MilestoneRequirement = z.infer<typeof MilestoneRequirementSchema>;
-export const MilestoneSchema = z.object({ id: Id, projectId: Id, title: z.string().min(1), proposedAmount: MoneyAmountSchema, status: z.enum(["INCOMPLETE", "NEEDS_REVIEW", "ELIGIBLE", "APPROVAL_PENDING", "APPROVED", "REJECTED"]), requirementIds: z.array(Id), dueAt: Time.nullable() });
+export const MilestoneSchema = z.object({ id: Id, projectId: Id, title: z.string().min(1), proposedAmount: SettlementMoneyAmountSchema, status: z.enum(["INCOMPLETE", "NEEDS_REVIEW", "ELIGIBLE", "APPROVAL_PENDING", "APPROVED", "REJECTED"]), requirementIds: z.array(Id), dueAt: Time.nullable() });
 export type Milestone = z.infer<typeof MilestoneSchema>;
 export const EvidenceItemSchema = z.object({ id: Id, projectId: Id, kind: z.enum(["RECEIPT", "SCREENSHOT", "INVOICE", "DELIVERABLE", "STATEMENT", "CONFIRMATION"]), sourceHash: Hash, storageRef: z.string().min(1), visibility: z.literal("FOUNDER_PRIVATE"), submittedAt: Time });
 export type EvidenceItem = z.infer<typeof EvidenceItemSchema>;
