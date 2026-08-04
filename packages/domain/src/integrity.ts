@@ -57,12 +57,6 @@ export async function validateExecutionAuthorization(approval: ApprovalRecord, r
   return true;
 }
 
-export function consumeExecutionAuthorizationBinding(binding: ExecutionAuthorizationBinding, transactionId: string, consumedAt: string): ExecutionAuthorizationBinding {
-  assert(binding.status === "ACTIVE" && binding.consumedAt === null && binding.consumedByTransactionId === null, "Execution authorization binding has already been consumed or revoked.");
-  assert(binding.transactionRecordId === transactionId, "Binding cannot be consumed by an unrelated transaction.");
-  return { ...binding, status: "CONSUMED", consumedAt, consumedByTransactionId: transactionId };
-}
-
 export function validateLedgerReversal(reversal: LedgerEntry, targetEntry: LedgerEntry | null | undefined, acceptedReversals: readonly LedgerEntry[] = []): true {
   const parsedReversal = LedgerEntrySchema.parse(reversal);
   assert(parsedReversal.kind === "REVERSAL", "Ledger relationship validation requires a reversal entry.");

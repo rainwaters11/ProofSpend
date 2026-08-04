@@ -1,5 +1,4 @@
 import { ExecutionAuthorizationBindingSchema, type AuditEvent, type ExecutionAuthorizationBinding } from "./models";
-import { consumeExecutionAuthorizationBinding } from "./integrity";
 
 export class DuplicateRecordError extends Error { constructor(id: string) { super(`Record ${id} already exists.`); this.name = "DuplicateRecordError"; } }
 export class IdempotencyConflictError extends Error { constructor(key: string) { super(`Idempotency key ${key} was reused for a different action.`); this.name = "IdempotencyConflictError"; } }
@@ -25,7 +24,9 @@ export class ExecutionAuthorizationBindingRepository {
   get(id: string): ExecutionAuthorizationBinding | undefined { const value = this.#records.get(id); return value ? clone(value) : undefined; }
   consume(id: string, transactionId: string, consumedAt: string): ExecutionAuthorizationBinding {
     const stored = this.#records.get(id); if (!stored) throw new Error(`Authorization binding ${id} does not exist.`);
-    const consumed = ExecutionAuthorizationBindingSchema.parse(consumeExecutionAuthorizationBinding(stored, transactionId, consumedAt));
+    if (stored.status !== "ACTIVE" || stored.consumedAt !== null || stored.consumedByTransactionId !== null) throw new Error(`Authorization binding ${id} has already been consumed or revoked.`);
+    if (stored.transactionRecordId !== transactionId) throw new Error(`Authorization binding ${id} cannot be consumed by an unrelated transaction.`);
+    const consumed = ExecutionAuthorizationBindingSchema.parse({ ...stored, status: "CONSUMED", consumedAt, consumedByTransactionId: transactionId });
     this.#records.set(id, clone(consumed)); return clone(consumed);
   }
 }

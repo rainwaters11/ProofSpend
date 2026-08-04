@@ -5,11 +5,11 @@ import {
   AllocationOperationRecordSchema, AllocationRuleSchema, ApprovalRecordSchema, ArcTransactionRefSchema, CanonicalExecutionIntentSchema, compareMoney,
   createPawPovAiSeed, EvidenceItemSchema, filterBackerDisclosure, IdempotencyConflictError, InMemoryAuditRepository,
   ExecutionAuthorizationBindingRepository, InMemoryIdempotencyRepository, InMemoryRepository, InvalidTransitionError, LaunchVaultSchema, mapAgenticJobToApplication,
-  LedgerEntrySchema, MilestoneRequirementSchema,
+  LedgerEntrySchema, MilestoneRequirementSchema, type LedgerEntry,
   MockAgenticJobAdapter, MockIdentityAdapter, MockWalletReferenceAdapter, money, MoneyAmountSchema, MoneyError,
   RecoveryOperationRecordSchema, ReleaseRequestSchema, ReserveSchema, SettlementMoneyAmountSchema, SettlementRecordSchema, SubmissionOperationRecordSchema, subtractMoney,
   ReconciliationRecordSchema, TransactionRecordSchema, transitionAgenticJob, transitionApplication,
-  consumeExecutionAuthorizationBinding, hashCanonicalExecutionIntent, serializeCanonicalExecutionIntent, validateExecutionAuthorization, validateLedgerReversal, validateReconciliation, validateReleaseConfirmation,
+  hashCanonicalExecutionIntent, serializeCanonicalExecutionIntent, validateExecutionAuthorization, validateLedgerReversal, validateReconciliation, validateReleaseConfirmation,
 } from "../src";
 
 const context = { aggregateType: "milestone", aggregateId: "m1", eventId: "event:1", occurredAt: "2026-01-01T00:00:00.000Z", actor: { actorId: "system", actorType: "SYSTEM" as const } };
@@ -308,14 +308,11 @@ describe("persisted relationship integrity", () => {
     await expect(validateExecutionAuthorization(approval, { ...release, approvalId: "approval:other" }, transaction, binding, context.occurredAt)).rejects.toThrow();
     expect(() => TransactionRecordSchema.parse({ ...transaction, approvalBindingId: null })).toThrow();
   });
-  it("is a PREPARED-only gate and consumes an active binding once", async () => {
+  it("is a PREPARED-only authorization gate", async () => {
     const { approval, release, transaction, binding } = await authorizationFixture();
     for (const operationState of ["SUBMITTED", "CONFIRMED", "FAILED", "RECONCILED"] as const) await expect(validateExecutionAuthorization(approval, release, { ...transaction, operationState }, binding, context.occurredAt)).rejects.toThrow();
     await expect(validateExecutionAuthorization(approval, { ...release, state: "APPROVED" }, transaction, binding, context.occurredAt)).rejects.toThrow();
     for (const status of ["CONSUMED", "REVOKED"] as const) await expect(validateExecutionAuthorization(approval, release, transaction, { ...binding, status }, context.occurredAt)).rejects.toThrow();
-    const consumed = consumeExecutionAuthorizationBinding(binding, transaction.id, context.occurredAt);
-    expect(consumed).toMatchObject({ status: "CONSUMED", consumedByTransactionId: transaction.id });
-    expect(() => consumeExecutionAuthorizationBinding(consumed, transaction.id, context.occurredAt)).toThrow();
   });
   it("derives approval policy internally and fails closed for deferred operations", async () => {
     const { approval, release, transaction, binding } = await authorizationFixture();
@@ -367,7 +364,8 @@ describe("persisted relationship integrity", () => {
   }
   it("accepts MATCHED only for exact amounts and Arc evidence", () => {
     const { transaction, settlement, reconciliation } = reconciliationFixture("MATCHED"); expect(validateReconciliation(transaction, settlement, reconciliation, "adapter:authorized")).toBe(true);
-    for (const changed of [{ ...settlement, amount: usdc("101") }, { ...settlement, amount: money("EURC", "100") }, { ...settlement, transaction: { ...settlement.transaction!, transactionHash: "mock:different" } }, { ...settlement, transaction: { ...settlement.transaction!, blockHash: "mock:different" } }, { ...settlement, transaction: { ...settlement.transaction!, operationType: "REFUND" as const } }]) expect(() => validateReconciliation(transaction, changed, reconciliation, "adapter:authorized")).toThrow();
+    expect(SettlementRecordSchema.safeParse({ ...settlement, amount: money("EURC", "100") }).success).toBe(false);
+    for (const changed of [{ ...settlement, amount: usdc("101") }, { ...settlement, transaction: { ...settlement.transaction!, transactionHash: "mock:different" } }, { ...settlement, transaction: { ...settlement.transaction!, blockHash: "mock:different" } }, { ...settlement, transaction: { ...settlement.transaction!, operationType: "REFUND" as const } }]) expect(() => validateReconciliation(transaction, changed, reconciliation, "adapter:authorized")).toThrow();
   });
   it.each(["MISMATCH", "REQUIRES_REVIEW"] as const)("persists %s without advancing lifecycle state", (result: "MISMATCH" | "REQUIRES_REVIEW") => { const value = reconciliationFixture(result); expect(validateReconciliation(value.transaction, value.settlement, value.reconciliation, "adapter:authorized")).toBe(true); expect(() => validateReconciliation({ ...value.transaction, operationState: "RECONCILED", reconciliationId: value.reconciliation.id }, value.settlement, value.reconciliation, "adapter:authorized")).toThrow(); });
   it("requires the exact authorized adapter", () => {
@@ -391,7 +389,7 @@ describe("append-only ledger reversal relationships", () => {
     expect(() => validateLedgerReversal(reversal, null)).toThrow();
     expect(() => validateLedgerReversal(reversal, { ...target, vaultId: "vault:other" })).toThrow();
     expect(() => validateLedgerReversal({ ...reversal, amount: usdc("11") }, target)).toThrow();
-    const prior = { ...reversal, id: "ledger:prior", amount: usdc("10") };
+    const prior: Extract<LedgerEntry, { kind: "REVERSAL" }> = { ...reversal, id: "ledger:prior", amount: usdc("10") };
     expect(() => validateLedgerReversal(reversal, target, [prior])).toThrow();
     expect(() => validateLedgerReversal(reversal, target, [{ ...prior, reversesEntryId: "ledger:other" }])).toThrow();
     expect(() => validateLedgerReversal(reversal, target, [{ ...prior, vaultId: "vault:other" }])).toThrow();
