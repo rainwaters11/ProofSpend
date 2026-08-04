@@ -1,4 +1,4 @@
-import { ApprovalRecordSchema, CanonicalExecutionIntentSchema, ExecutionAuthorizationBindingSchema, LedgerEntrySchema, ReleaseRequestSchema, SettlementRecordSchema, TransactionRecordSchema, type ApprovalRecord, type CanonicalExecutionIntent, type ExecutionAuthorizationBinding, type LedgerEntry, type ReconciliationRecord, type ReleaseRequest, type SettlementRecord, type TransactionRecord } from "./models";
+import { ApprovalRecordSchema, CanonicalExecutionIntentSchema, ExecutionAuthorizationBindingSchema, LedgerEntrySchema, ReleaseRequestSchema, SettlementRecordSchema, TransactionRecordSchema, ReconciliationRecordSchema, type ApprovalRecord, type CanonicalExecutionIntent, type ExecutionAuthorizationBinding, type LedgerEntry, type ReconciliationRecord, type ReleaseRequest, type SettlementRecord, type TransactionRecord } from "./models";
 
 export class RelationshipIntegrityError extends Error { constructor(message: string) { super(message); this.name = "RelationshipIntegrityError"; } }
 const assert = (condition: boolean, message: string): void => { if (!condition) throw new RelationshipIntegrityError(message); };
@@ -89,23 +89,25 @@ export function validateReleaseConfirmation(release: ReleaseRequest, settlement:
 }
 
 export function validateReconciliation(transaction: TransactionRecord, settlement: SettlementRecord, reconciliation: ReconciliationRecord, authorizedAdapterId?: string): true {
-  assert(authorizedAdapterId !== undefined && reconciliation.actor.actorType === "ADAPTER" && reconciliation.actor.actorId === authorizedAdapterId, "Reconciliation requires the exact authorized adapter.");
-  assert(reconciliation.transactionRecordId === transaction.id && reconciliation.settlementId === settlement.id, "Reconciliation targets unrelated records.");
-  assert(transaction.projectId === settlement.projectId && reconciliation.projectId === transaction.projectId, "Reconciliation project IDs do not match.");
-  assert(transaction.releaseRequestId === settlement.releaseRequestId, "Transaction and settlement release relationships do not match.");
-  assert(transaction.arcTransaction?.status === "CONFIRMED", "Reconciled transaction must retain confirmed Arc evidence.");
-  assert(settlement.transaction?.status === "CONFIRMED" && (settlement.transaction.operationType === "SETTLEMENT" || settlement.transaction.operationType === "REFUND"), "Reconciled settlement evidence is incompatible.");
-  assert(reconciliation.evidenceReference.length > 0 && reconciliation.result.length > 0, "Reconciliation result and evidence must be persisted.");
-  if (reconciliation.result !== "MATCHED") {
-    assert(transaction.operationState !== "RECONCILED" && settlement.state !== "RECONCILED" && transaction.reconciliationId === null && settlement.reconciliationId === null, "Divergent reconciliation cannot advance lifecycle state.");
+  const parsedTransaction = TransactionRecordSchema.parse(transaction);
+  const parsedSettlement = SettlementRecordSchema.parse(settlement);
+  const parsedReconciliation = ReconciliationRecordSchema.parse(reconciliation);
+  assert(authorizedAdapterId !== undefined && parsedReconciliation.actor.actorType === "ADAPTER" && parsedReconciliation.actor.actorId === authorizedAdapterId, "Reconciliation requires the exact authorized adapter.");
+  assert(parsedReconciliation.transactionRecordId === parsedTransaction.id && parsedReconciliation.settlementId === parsedSettlement.id, "Reconciliation targets unrelated records.");
+  assert(parsedTransaction.projectId === parsedSettlement.projectId && parsedReconciliation.projectId === parsedTransaction.projectId, "Reconciliation project IDs do not match.");
+  assert(parsedTransaction.releaseRequestId === parsedSettlement.releaseRequestId, "Transaction and settlement release relationships do not match.");
+  assert(parsedTransaction.arcTransaction?.status === "CONFIRMED", "Reconciled transaction must retain confirmed Arc evidence.");
+  assert(parsedSettlement.transaction?.status === "CONFIRMED" && (parsedSettlement.transaction.operationType === "SETTLEMENT" || parsedSettlement.transaction.operationType === "REFUND"), "Reconciled settlement evidence is incompatible.");
+  if (parsedReconciliation.result !== "MATCHED") {
+    assert(parsedTransaction.operationState !== "RECONCILED" && parsedSettlement.state !== "RECONCILED" && parsedTransaction.reconciliationId === null && parsedSettlement.reconciliationId === null, "Divergent reconciliation cannot advance lifecycle state.");
     return true;
   }
-  assert(transaction.operationState === "RECONCILED" && settlement.state === "RECONCILED", "Matched reconciliation requires both records to be reconciled.");
-  assert(transaction.reconciliationId === reconciliation.id && settlement.reconciliationId === reconciliation.id, "Records do not reference reconciliation.");
-  assert(transaction.amount.asset === settlement.amount.asset && transaction.amount.atomicUnits === settlement.amount.atomicUnits, "Matched reconciliation amounts differ.");
-  const left = transaction.arcTransaction; const right = settlement.transaction;
+  assert(parsedTransaction.operationState === "RECONCILED" && parsedSettlement.state === "RECONCILED", "Matched reconciliation requires both records to be reconciled.");
+  assert(parsedTransaction.reconciliationId === parsedReconciliation.id && parsedSettlement.reconciliationId === parsedReconciliation.id, "Records do not reference reconciliation.");
+  assert(parsedTransaction.amount.asset === parsedSettlement.amount.asset && parsedTransaction.amount.atomicUnits === parsedSettlement.amount.atomicUnits, "Matched reconciliation amounts differ.");
+  const left = parsedTransaction.arcTransaction; const right = parsedSettlement.transaction;
   if (left === null || right === null) throw new RelationshipIntegrityError("Matched reconciliation requires Arc evidence on both records.");
   assert(left.network === right.network && left.chainId === right.chainId && left.transactionHash === right.transactionHash && left.blockNumber === right.blockNumber && left.blockHash === right.blockHash && left.operationType === right.operationType && left.status === "CONFIRMED" && right.status === "CONFIRMED", "Matched reconciliation Arc evidence differs.");
-  assert((settlement.state === "RECONCILED") && (right.operationType === "SETTLEMENT" || right.operationType === "REFUND"), "Matched operation is incompatible with settlement.");
+  assert((parsedSettlement.state === "RECONCILED") && (right.operationType === "SETTLEMENT" || right.operationType === "REFUND"), "Matched operation is incompatible with settlement.");
   return true;
 }
