@@ -71,7 +71,7 @@ export function transitionApplication(from: ProofSpendApplicationState, to: Proo
   if (from === "SUBMITTED" && to === "CONFIRMED") {
     const parsed = TransactionRecordSchema.safeParse(context.confirmationTransaction);
     const transaction = parsed.success ? parsed.data : null;
-    if (transaction === null || transaction.operationState !== "CONFIRMED" || transaction.arcTransaction?.status !== "CONFIRMED" || context.expectedTransactionId === undefined || context.expectedProjectId === undefined || context.expectedReleaseRequestId === undefined || context.aggregateId !== transaction.releaseRequestId || transaction.id !== context.expectedTransactionId || transaction.projectId !== context.expectedProjectId || transaction.releaseRequestId !== context.expectedReleaseRequestId || transaction.arcTransaction.operationType !== "SETTLEMENT") throw new InvalidTransitionError("ProofSpend application confirmation evidence", from, to);
+    if (transaction === null || transaction.operationState !== "CONFIRMED" || transaction.arcTransaction?.status !== "CONFIRMED" || context.expectedTransactionId === undefined || context.expectedProjectId === undefined || context.expectedReleaseRequestId === undefined || context.expectedIntentId === undefined || context.expectedApprovalId === undefined || context.expectedApprovalBindingId === undefined || context.aggregateId !== transaction.releaseRequestId || transaction.id !== context.expectedTransactionId || transaction.projectId !== context.expectedProjectId || transaction.releaseRequestId !== context.expectedReleaseRequestId || transaction.intentId !== context.expectedIntentId || transaction.approvalId !== context.expectedApprovalId || transaction.approvalBindingId !== context.expectedApprovalBindingId || transaction.arcTransaction.operationType !== "SETTLEMENT") throw new InvalidTransitionError("ProofSpend application confirmation evidence", from, to);
   }
   if (from === "CONFIRMED" && to === "RECONCILED") {
     const transaction = TransactionRecordSchema.safeParse(context.reconciliationTransaction);
@@ -125,6 +125,21 @@ export async function transitionApplicationSubmission(context: TransitionContext
   return { state: to, auditEvent: event(context, from, to) } as const;
 }
 
+const immutableJobFieldsMatch = (current: AgenticJobRef, target: AgenticJobRef): boolean =>
+  current.standard === target.standard &&
+  current.network === target.network &&
+  current.chainId === target.chainId &&
+  current.contractAddress === target.contractAddress &&
+  current.jobId === target.jobId &&
+  current.clientAddress === target.clientAddress &&
+  current.providerAddress === target.providerAddress &&
+  current.evaluatorAddress === target.evaluatorAddress &&
+  current.budget.asset === target.budget.asset &&
+  current.budget.atomicUnits === target.budget.atomicUnits &&
+  current.expiresAt === target.expiresAt &&
+  current.descriptionReference === target.descriptionReference &&
+  current.isMock === target.isMock;
+
 export function transitionAgenticJob(from: AgenticJobStatus, to: AgenticJobStatus, context: TransitionContext) {
   if (!jobTransitions[from].includes(to)) throw new InvalidTransitionError("agentic job", from, to);
   const authority = jobAuthority[`${from}->${to}`];
@@ -135,10 +150,11 @@ export function transitionAgenticJob(from: AgenticJobStatus, to: AgenticJobStatu
     if (!current.success || !current.data.isMock || current.data.jobId !== context.aggregateId || current.data.status !== from || !Number.isFinite(occurredAt) || occurredAt < Date.parse(current.data.expiresAt)) throw new InvalidTransitionError("agentic job expiry evidence", from, to);
     return { status: to, auditEvent: event(context, from, to) } as const;
   }
+  const current = AgenticJobRefSchema.safeParse(context.currentJobEvidence);
   const target = AgenticJobRefSchema.safeParse(context.jobEvidence);
-  if (!target.success || !target.data.isMock || target.data.jobId !== context.aggregateId || target.data.status !== to) throw new InvalidTransitionError("agentic job lifecycle evidence", from, to);
-  if (to === "FUNDED" && (target.data.transaction?.isMock !== true || target.data.transaction.status !== "CONFIRMED" || target.data.transaction.operationType !== "JOB_FUND")) throw new InvalidTransitionError("agentic job funding evidence", from, to);
-  if (to === "SUBMITTED" && (target.data.deliverableReference === null || target.data.transaction?.isMock !== true || !["SUBMITTED", "CONFIRMED"].includes(target.data.transaction.status) || target.data.transaction.operationType !== "JOB_SUBMIT")) throw new InvalidTransitionError("agentic job submission evidence", from, to);
+  if (!current.success || !target.success || !current.data.isMock || !target.data.isMock || current.data.jobId !== context.aggregateId || target.data.jobId !== context.aggregateId || current.data.status !== from || target.data.status !== to || !immutableJobFieldsMatch(current.data, target.data)) throw new InvalidTransitionError("agentic job lifecycle evidence", from, to);
+  if (to === "FUNDED" && (target.data.deliverableReference !== null || target.data.reasonReference !== null || target.data.transaction?.isMock !== true || target.data.transaction.status !== "CONFIRMED" || target.data.transaction.operationType !== "JOB_FUND")) throw new InvalidTransitionError("agentic job funding evidence", from, to);
+  if (to === "SUBMITTED" && (target.data.deliverableReference === null || target.data.reasonReference !== null || target.data.transaction?.isMock !== true || !["SUBMITTED", "CONFIRMED"].includes(target.data.transaction.status) || target.data.transaction.operationType !== "JOB_SUBMIT")) throw new InvalidTransitionError("agentic job submission evidence", from, to);
   if (to === "COMPLETED" || to === "REJECTED") {
     const approval = ApprovalRecordSchema.safeParse(context.jobApprovalDecision);
     const decision = to === "COMPLETED" ? "APPROVED" : "REJECTED";
@@ -147,7 +163,9 @@ export function transitionAgenticJob(from: AgenticJobStatus, to: AgenticJobStatu
     const decidedAt = approval.success ? assertFiniteTime(approval.data.decidedAt) : null;
     const occurredAt = assertFiniteTime(context.occurredAt);
     const expiresAt = approval.success ? assertFiniteTime(approval.data.expiresAt) : null;
-    if (!approval.success || !evaluationEvidence.success || approval.data.actionKind !== "JOB_EVALUATION" || approval.data.aggregateId !== target.data.jobId || approval.data.aggregateId !== context.aggregateId || approval.data.decision !== decision || approval.data.approver?.actorType !== "EVALUATOR" || approval.data.approver.actorId !== context.actor.actorId || approval.data.authorizedActorId !== context.authorizedEvaluatorId || decidedAt === null || occurredAt === null || expiresAt === null || decidedAt > occurredAt || occurredAt >= expiresAt || transaction === null || transaction.status !== "CONFIRMED" || transaction.operationType !== "JOB_EVALUATE" || transaction.transactionHash === null || evaluationEvidence.data.jobId !== target.data.jobId || evaluationEvidence.data.approvalId !== approval.data.id || evaluationEvidence.data.intentId !== approval.data.intentId || evaluationEvidence.data.exactIntentHash !== approval.data.exactIntentHash || evaluationEvidence.data.decision !== decision || evaluationEvidence.data.transactionHash !== transaction.transactionHash || evaluationEvidence.data.transactionNetwork !== transaction.network || evaluationEvidence.data.transactionChainId !== transaction.chainId || (to === "COMPLETED" && target.data.deliverableReference === null) || (to === "REJECTED" && target.data.reasonReference === null)) throw new InvalidTransitionError("agentic job evaluation evidence", from, to);
+    const deliverablePreserved = current.data.deliverableReference !== null && target.data.deliverableReference === current.data.deliverableReference;
+    const terminalFieldsValid = to === "COMPLETED" ? target.data.reasonReference === null : target.data.reasonReference !== null;
+    if (!approval.success || !evaluationEvidence.success || !deliverablePreserved || !terminalFieldsValid || approval.data.actionKind !== "JOB_EVALUATION" || approval.data.aggregateId !== target.data.jobId || approval.data.aggregateId !== context.aggregateId || approval.data.decision !== decision || approval.data.approver?.actorType !== "EVALUATOR" || approval.data.approver.actorId !== context.actor.actorId || approval.data.authorizedActorId !== context.authorizedEvaluatorId || decidedAt === null || occurredAt === null || expiresAt === null || decidedAt > occurredAt || occurredAt >= expiresAt || transaction === null || transaction.status !== "CONFIRMED" || transaction.operationType !== "JOB_EVALUATE" || transaction.transactionHash === null || evaluationEvidence.data.jobId !== target.data.jobId || evaluationEvidence.data.approvalId !== approval.data.id || evaluationEvidence.data.intentId !== approval.data.intentId || evaluationEvidence.data.exactIntentHash !== approval.data.exactIntentHash || evaluationEvidence.data.decision !== decision || evaluationEvidence.data.transactionHash !== transaction.transactionHash || evaluationEvidence.data.transactionNetwork !== transaction.network || evaluationEvidence.data.transactionChainId !== transaction.chainId) throw new InvalidTransitionError("agentic job evaluation evidence", from, to);
   }
   return { status: to, auditEvent: event(context, from, to) } as const;
 }
