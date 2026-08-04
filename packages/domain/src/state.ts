@@ -1,4 +1,4 @@
-import { AgenticJobRefSchema, ApprovalRecordSchema, CanonicalExecutionIntentSchema, ExecutionAuthorizationBindingSchema, ReconciliationRecordSchema, SettlementRecordSchema, SubmissionOperationRecordSchema, TransactionRecordSchema, type Actor, type AgenticJobRef, type AgenticJobStatus, type ApprovalRecord, type AuditEvent, type ExecutionAuthorizationBinding, type ReconciliationRecord, type SettlementRecord, type SubmissionOperationRecord, type TransactionRecord } from "./models";
+import { AgenticJobRefSchema, ApprovalRecordSchema, CanonicalExecutionIntentSchema, ExecutionAuthorizationBindingSchema, JobEvaluationEvidenceSchema, ReconciliationRecordSchema, SettlementRecordSchema, SubmissionOperationRecordSchema, TransactionRecordSchema, type Actor, type AgenticJobRef, type AgenticJobStatus, type ApprovalRecord, type AuditEvent, type ExecutionAuthorizationBinding, type JobEvaluationEvidence, type ReconciliationRecord, type SettlementRecord, type SubmissionOperationRecord, type TransactionRecord } from "./models";
 import { hashCanonicalExecutionIntent, validateReconciliation } from "./integrity";
 
 export class InvalidTransitionError extends Error {
@@ -25,7 +25,7 @@ export interface TransitionContext {
   reconciliationTransaction?: TransactionRecord; reconciliationSettlement?: SettlementRecord; reconciliationRecord?: ReconciliationRecord;
   approvalDecision?: ApprovalRecord; lifecycleTransaction?: TransactionRecord;
   jobEvidence?: AgenticJobRef; currentJobEvidence?: AgenticJobRef; jobApprovalDecision?: ApprovalRecord;
-  jobEvaluationEvidence?: { jobId: string; approvalId: string; decision: "APPROVED" | "REJECTED"; transactionHash: string };
+  jobEvaluationEvidence?: JobEvaluationEvidence;
 }
 type ApplicationEdge = `${ProofSpendApplicationState}->${ProofSpendApplicationState}`;
 type AuthorityRule = { actorTypes: readonly Actor["actorType"][]; identifier: "authorizedSystemId" | "authorizedApproverId" | "authorizedAdapterId" };
@@ -135,8 +135,8 @@ export function transitionAgenticJob(from: AgenticJobStatus, to: AgenticJobStatu
     const approval = ApprovalRecordSchema.safeParse(context.jobApprovalDecision);
     const decision = to === "COMPLETED" ? "APPROVED" : "REJECTED";
     const transaction = target.data.transaction;
-    const evaluationEvidence = context.jobEvaluationEvidence;
-    if (!approval.success || evaluationEvidence === undefined || approval.data.actionKind !== "JOB_EVALUATION" || approval.data.aggregateId !== target.data.jobId || approval.data.aggregateId !== context.aggregateId || approval.data.decision !== decision || approval.data.approver?.actorType !== "EVALUATOR" || approval.data.approver.actorId !== context.actor.actorId || approval.data.authorizedActorId !== context.authorizedEvaluatorId || transaction === null || transaction.status !== "CONFIRMED" || transaction.operationType !== "JOB_EVALUATE" || transaction.network !== target.data.network || transaction.chainId !== target.data.chainId || transaction.transactionHash === null || evaluationEvidence.jobId !== target.data.jobId || evaluationEvidence.approvalId !== approval.data.id || evaluationEvidence.decision !== decision || evaluationEvidence.transactionHash !== transaction.transactionHash || (to === "COMPLETED" && target.data.deliverableReference === null) || (to === "REJECTED" && target.data.reasonReference === null)) throw new InvalidTransitionError("agentic job evaluation evidence", from, to);
+    const evaluationEvidence = JobEvaluationEvidenceSchema.safeParse(context.jobEvaluationEvidence);
+    if (!approval.success || !evaluationEvidence.success || approval.data.actionKind !== "JOB_EVALUATION" || approval.data.aggregateId !== target.data.jobId || approval.data.aggregateId !== context.aggregateId || approval.data.decision !== decision || approval.data.approver?.actorType !== "EVALUATOR" || approval.data.approver.actorId !== context.actor.actorId || approval.data.authorizedActorId !== context.authorizedEvaluatorId || transaction === null || transaction.status !== "CONFIRMED" || transaction.operationType !== "JOB_EVALUATE" || transaction.transactionHash === null || evaluationEvidence.data.jobId !== target.data.jobId || evaluationEvidence.data.approvalId !== approval.data.id || evaluationEvidence.data.intentId !== approval.data.intentId || evaluationEvidence.data.exactIntentHash !== approval.data.exactIntentHash || evaluationEvidence.data.decision !== decision || evaluationEvidence.data.transactionHash !== transaction.transactionHash || evaluationEvidence.data.transactionNetwork !== transaction.network || evaluationEvidence.data.transactionChainId !== transaction.chainId || (to === "COMPLETED" && target.data.deliverableReference === null) || (to === "REJECTED" && target.data.reasonReference === null)) throw new InvalidTransitionError("agentic job evaluation evidence", from, to);
   }
   return { status: to, auditEvent: event(context, from, to) } as const;
 }
