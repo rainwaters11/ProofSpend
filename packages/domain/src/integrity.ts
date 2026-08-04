@@ -1,4 +1,4 @@
-import { LedgerEntrySchema, type ApprovalRecord, type CanonicalExecutionIntent, type ExecutionAuthorizationBinding, type LedgerEntry, type ReconciliationRecord, type ReleaseRequest, type SettlementRecord, type TransactionRecord } from "./models";
+import { CanonicalExecutionIntentSchema, LedgerEntrySchema, type ApprovalRecord, type CanonicalExecutionIntent, type ExecutionAuthorizationBinding, type LedgerEntry, type ReconciliationRecord, type ReleaseRequest, type SettlementRecord, type TransactionRecord } from "./models";
 
 export class RelationshipIntegrityError extends Error { constructor(message: string) { super(message); this.name = "RelationshipIntegrityError"; } }
 const assert = (condition: boolean, message: string): void => { if (!condition) throw new RelationshipIntegrityError(message); };
@@ -39,14 +39,14 @@ export async function validateExecutionAuthorization(approval: ApprovalRecord, r
   assert(binding.releaseRequestId === release.id && binding.approvalId === approval.id && binding.transactionRecordId === transaction.id, "Authorization binding record IDs do not match.");
   assert(release.approvalId === approval.id && transaction.approvalId === approval.id && transaction.approvalBindingId === binding.id, "Release or transaction does not reference the approval and authorization binding.");
   assert(approval.decision === "APPROVED", "Execution requires an approved decision.");
-  const policy = requiredApprovalPolicy(binding.executionIntent);
+  const intent = CanonicalExecutionIntentSchema.parse(binding.executionIntent);
+  const policy = requiredApprovalPolicy(intent);
   assert(approval.actionKind === policy.actionKind && approval.authorizedActorType === policy.actorType && approval.approver?.actorType === policy.actorType && approval.approver.actorId === approval.authorizedActorId, "Approval policy or exact authorized actor does not match.");
   assert(Date.parse(approval.expiresAt) > Date.parse(asOf), "Approval is expired.");
   assert(release.intentId === binding.intentId && transaction.intentId === binding.intentId, "Release and transaction intent IDs do not match binding.");
   assert(release.projectId === transaction.projectId, "Release and transaction projects do not match.");
   assert(release.id === transaction.releaseRequestId, "Transaction references an unrelated release.");
   assert(release.amount.asset === transaction.amount.asset && release.amount.atomicUnits === transaction.amount.atomicUnits, "Release and transaction amounts do not match exactly.");
-  const intent = binding.executionIntent;
   assert(intent.version === 1, "Canonical execution intent version is unsupported.");
   assert(intent.actionKind === approval.actionKind && intent.projectId === release.projectId && intent.releaseRequestId === release.id && intent.transactionRecordId === transaction.id && intent.intentId === release.intentId, "Canonical execution identifiers or action do not match persisted records.");
   assert(intent.asset === release.amount.asset && intent.atomicAmount === release.amount.atomicUnits, "Canonical execution amount does not match persisted amount.");
