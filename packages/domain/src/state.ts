@@ -1,4 +1,4 @@
-import type { Actor, AgenticJobStatus, AuditEvent } from "./models";
+import { TransactionRecordSchema, type Actor, type AgenticJobStatus, type AuditEvent, type TransactionRecord } from "./models";
 
 export class InvalidTransitionError extends Error {
   constructor(readonly machine: string, readonly from: string, readonly to: string) {
@@ -18,6 +18,7 @@ const jobTransitions: Record<AgenticJobStatus, readonly AgenticJobStatus[]> = {
 export interface TransitionContext {
   aggregateType: string; aggregateId: string; eventId: string; occurredAt: string; actor: Actor;
   authorizedSystemId?: string; authorizedApproverId?: string; authorizedAdapterId?: string; authorizedEvaluatorId?: string; idempotencyKey?: string;
+  confirmationTransaction?: TransactionRecord; expectedTransactionId?: string; expectedProjectId?: string; expectedReleaseRequestId?: string; expectedOperationType?: NonNullable<TransactionRecord["arcTransaction"]>["operationType"];
 }
 type ApplicationEdge = `${ProofSpendApplicationState}->${ProofSpendApplicationState}`;
 type AuthorityRule = { actorTypes: readonly Actor["actorType"][]; identifier: "authorizedSystemId" | "authorizedApproverId" | "authorizedAdapterId" };
@@ -54,6 +55,11 @@ export function transitionApplication(from: ProofSpendApplicationState, to: Proo
   if (!applicationTransitions[from].includes(to)) throw new InvalidTransitionError("ProofSpend application", from, to);
   const authority = applicationAuthority[`${from}->${to}`];
   if (authority === undefined || !authority.actorTypes.includes(context.actor.actorType) || context[authority.identifier] === undefined || context.actor.actorId !== context[authority.identifier]) throw new InvalidTransitionError("ProofSpend application authority", from, to);
+  if (from === "SUBMITTED" && to === "CONFIRMED") {
+    const parsed = TransactionRecordSchema.safeParse(context.confirmationTransaction);
+    const transaction = parsed.success ? parsed.data : null;
+    if (transaction === null || transaction.operationState !== "CONFIRMED" || transaction.arcTransaction?.status !== "CONFIRMED" || context.expectedTransactionId === undefined || context.expectedProjectId === undefined || context.expectedReleaseRequestId === undefined || context.expectedOperationType === undefined || transaction.id !== context.expectedTransactionId || transaction.projectId !== context.expectedProjectId || transaction.releaseRequestId !== context.expectedReleaseRequestId || transaction.arcTransaction.operationType !== context.expectedOperationType) throw new InvalidTransitionError("ProofSpend application confirmation evidence", from, to);
+  }
   return { state: to, auditEvent: event(context, from, to) } as const;
 }
 export function transitionAgenticJob(from: AgenticJobStatus, to: AgenticJobStatus, context: TransitionContext) {

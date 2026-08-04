@@ -69,13 +69,24 @@ describe("separate state machines", () => {
     expect(transitionApplication("PREPARED", "SUBMITTED", { ...context, actor: { actorId: "adapter:authorized", actorType: "ADAPTER" }, authorizedAdapterId: "adapter:authorized" }).state).toBe("SUBMITTED");
     expect(() => transitionApplication("PREPARED", "SUBMITTED", { ...context, actor: { actorId: "adapter:other", actorType: "ADAPTER" }, authorizedAdapterId: "adapter:authorized" })).toThrow(InvalidTransitionError);
   });
+  it("requires exact confirmed transaction evidence before application confirmation", () => {
+    const transaction = TransactionRecordSchema.parse({ id: "transaction:confirmation", projectId: "project:1", releaseRequestId: "release:1", intentId: "intent:1", destinationReference: "mock:recipient", approvalId: "approval:1", approvalBindingId: "binding:1", reconciliationId: null, idempotencyKey: "transaction:confirmation:key", amount: usdc("1"), operationState: "CONFIRMED", arcTransaction: mockTransaction("CONFIRMED"), createdAt: context.occurredAt, updatedAt: context.occurredAt });
+    const confirmation = { ...context, actor: { actorId: "adapter:authorized", actorType: "ADAPTER" as const }, authorizedAdapterId: "adapter:authorized", confirmationTransaction: transaction, expectedTransactionId: transaction.id, expectedProjectId: transaction.projectId, expectedReleaseRequestId: transaction.releaseRequestId, expectedOperationType: transaction.arcTransaction!.operationType };
+    expect(() => transitionApplication("SUBMITTED", "CONFIRMED", { ...confirmation, confirmationTransaction: undefined })).toThrow(InvalidTransitionError);
+    for (const status of ["PREPARED", "SUBMITTED", "FAILED"] as const) expect(() => transitionApplication("SUBMITTED", "CONFIRMED", { ...confirmation, confirmationTransaction: { ...transaction, operationState: status, arcTransaction: mockTransaction(status) } })).toThrow(InvalidTransitionError);
+    expect(() => transitionApplication("SUBMITTED", "CONFIRMED", { ...confirmation, confirmationTransaction: { ...transaction, releaseRequestId: "release:other" } })).toThrow(InvalidTransitionError);
+    expect(() => transitionApplication("SUBMITTED", "CONFIRMED", { ...confirmation, confirmationTransaction: { ...transaction, id: "transaction:other" } })).toThrow(InvalidTransitionError);
+    expect(transitionApplication("SUBMITTED", "CONFIRMED", confirmation).state).toBe("CONFIRMED");
+    for (const actorType of ["AI", "FOUNDER", "EVALUATOR"] as const) expect(() => transitionApplication("SUBMITTED", "CONFIRMED", { ...confirmation, actor: { actorId: "adapter:authorized", actorType } })).toThrow(InvalidTransitionError);
+    expect(() => transitionApplication("SUBMITTED", "CONFIRMED", { ...confirmation, actor: { actorId: "adapter:other", actorType: "ADAPTER" } })).toThrow(InvalidTransitionError);
+  });
   it.each([
     ["INCOMPLETE", "NEEDS_REVIEW", "SYSTEM", "authorizedSystemId"], ["NEEDS_REVIEW", "INCOMPLETE", "SYSTEM", "authorizedSystemId"],
     ["NEEDS_REVIEW", "ELIGIBLE", "SYSTEM", "authorizedSystemId"], ["NEEDS_REVIEW", "REJECTED", "SYSTEM", "authorizedSystemId"],
     ["ELIGIBLE", "APPROVAL_PENDING", "SYSTEM", "authorizedSystemId"], ["APPROVAL_PENDING", "APPROVED", "FOUNDER", "authorizedApproverId"],
     ["APPROVAL_PENDING", "REJECTED", "EVALUATOR", "authorizedApproverId"], ["APPROVED", "PREPARED", "ADAPTER", "authorizedAdapterId"],
     ["PREPARED", "SUBMITTED", "ADAPTER", "authorizedAdapterId"], ["PREPARED", "FAILED", "ADAPTER", "authorizedAdapterId"],
-    ["SUBMITTED", "CONFIRMED", "ADAPTER", "authorizedAdapterId"], ["SUBMITTED", "FAILED", "ADAPTER", "authorizedAdapterId"],
+    ["SUBMITTED", "FAILED", "ADAPTER", "authorizedAdapterId"],
     ["CONFIRMED", "RECONCILED", "ADAPTER", "authorizedAdapterId"],
   ] as const)("authorizes the complete %s -> %s matrix", (from: "INCOMPLETE" | "NEEDS_REVIEW" | "ELIGIBLE" | "APPROVAL_PENDING" | "APPROVED" | "PREPARED" | "SUBMITTED" | "CONFIRMED", to: "INCOMPLETE" | "NEEDS_REVIEW" | "ELIGIBLE" | "APPROVAL_PENDING" | "APPROVED" | "PREPARED" | "SUBMITTED" | "CONFIRMED" | "REJECTED" | "FAILED" | "RECONCILED", actorType: "SYSTEM" | "FOUNDER" | "EVALUATOR" | "ADAPTER", identifier: string) => {
     const actor = { actorId: "authorized", actorType }; const authorized = { [identifier]: actor.actorId };
@@ -151,6 +162,18 @@ describe("repositories and idempotency", () => {
     expect(() => repository.execute("scope", "key", "different", () => "never")).toThrow(IdempotencyConflictError);
     await expect(rejected).rejects.toThrow("failed"); await expect(repository.execute("scope", "key", "first", () => { executions += 1; return "retried"; })).rejects.toThrow("failed"); expect(executions).toBe(1);
   });
+  it("tombstones uncloneable resolved results for every concurrent caller", async () => {
+    const repository = new InMemoryIdempotencyRepository(); let executions = 0;
+    const action = async () => { executions += 1; return { uncloneable: () => "value" }; };
+    const first = repository.execute("scope", "uncloneable", "same", action);
+    const second = repository.execute("scope", "uncloneable", "same", action);
+    const settled = await Promise.allSettled([first, second]);
+    expect(settled.every((result) => result.status === "rejected")).toBe(true);
+    expect(executions).toBe(1);
+    await expect(repository.execute("scope", "uncloneable", "same", action)).rejects.toBeDefined();
+    expect(executions).toBe(1);
+    expect(() => repository.execute("scope", "uncloneable", "different", action)).toThrow(IdempotencyConflictError);
+  });
 });
 
 describe("protocol-safe mocks and privacy", () => {
@@ -212,6 +235,7 @@ describe("lifecycle evidence schemas", () => {
   it("requires authorized completed approvals and empty pending decisions", () => {
     const base = { id: "approval:1", actionKind: "RELEASE_APPROVAL", authorizedActorType: "FOUNDER", authorizedActorId: "founder:1", exactIntentHash: `sha256:${"e".repeat(64)}`, idempotencyKey: "approval:key", expiresAt: context.occurredAt };
     expect(ApprovalRecordSchema.parse({ ...base, decision: "APPROVED", approver: { actorId: "founder:1", actorType: "FOUNDER" }, decidedAt: context.occurredAt })).toBeDefined();
+    expect(() => ApprovalRecordSchema.parse({ ...base, expiresAt: "2025-12-31T23:59:59.000Z", decision: "APPROVED", approver: { actorId: "founder:1", actorType: "FOUNDER" }, decidedAt: context.occurredAt })).toThrow(/after expiration/);
     expect(() => ApprovalRecordSchema.parse({ ...base, decision: "REJECTED", approver: { actorId: "founder:other", actorType: "FOUNDER" }, decidedAt: context.occurredAt })).toThrow();
     const evaluation = { ...base, actionKind: "JOB_EVALUATION", authorizedActorType: "EVALUATOR", authorizedActorId: "evaluator:1" };
     expect(ApprovalRecordSchema.parse({ ...evaluation, decision: "APPROVED", approver: { actorId: "evaluator:1", actorType: "EVALUATOR" }, decidedAt: context.occurredAt })).toBeDefined();
@@ -309,6 +333,17 @@ describe("persisted relationship integrity", () => {
     await expect(validateExecutionAuthorization(approval, release, transaction, binding, "2028-01-01T00:00:00.000Z")).rejects.toThrow();
     await expect(validateExecutionAuthorization(approval, { ...release, approvalId: "approval:other" }, transaction, binding, context.occurredAt)).rejects.toThrow();
     expect(() => TransactionRecordSchema.parse({ ...transaction, approvalBindingId: null })).toThrow();
+  });
+  it("enforces approval decision chronology at authorization time", async () => {
+    const { approval, release, transaction, binding } = await authorizationFixture();
+    const authorize = (decidedAt: string, asOf: string, expiresAt = approval.expiresAt) => validateExecutionAuthorization({ ...approval, decidedAt, expiresAt }, release, transaction, binding, asOf);
+    await expect(authorize("2025-12-31T23:59:59.000Z", context.occurredAt)).resolves.toBe(true);
+    await expect(authorize(context.occurredAt, context.occurredAt)).resolves.toBe(true);
+    await expect(authorize("2026-01-01T00:00:01.000Z", context.occurredAt)).rejects.toThrow(/decidedAt/);
+    await expect(authorize("2027-01-01T00:00:01.000Z", context.occurredAt)).rejects.toThrow(/decidedAt/);
+    await expect(authorize(context.occurredAt, approval.expiresAt)).rejects.toThrow(/decidedAt/);
+    await expect(authorize(context.occurredAt, "2027-01-01T00:00:01.000Z")).rejects.toThrow(/decidedAt/);
+    await expect(authorize(context.occurredAt, "not-a-timestamp")).rejects.toThrow(/timestamp/);
   });
   it("is a PREPARED-only authorization gate", async () => {
     const { approval, release, transaction, binding } = await authorizationFixture();

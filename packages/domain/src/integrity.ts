@@ -42,7 +42,11 @@ export async function validateExecutionAuthorization(approval: ApprovalRecord, r
   const intent = CanonicalExecutionIntentSchema.parse(binding.executionIntent);
   const policy = requiredApprovalPolicy(intent);
   assert(approval.actionKind === policy.actionKind && approval.authorizedActorType === policy.actorType && approval.approver?.actorType === policy.actorType && approval.approver.actorId === approval.authorizedActorId, "Approval policy or exact authorized actor does not match.");
-  assert(Date.parse(approval.expiresAt) > Date.parse(asOf), "Approval is expired.");
+  const decidedAt = approval.decidedAt === null ? Number.NaN : Date.parse(approval.decidedAt);
+  const authorizationAt = Date.parse(asOf);
+  const expiresAt = Date.parse(approval.expiresAt);
+  assert(Number.isFinite(decidedAt) && Number.isFinite(authorizationAt) && Number.isFinite(expiresAt), "Approval chronology requires valid timestamps.");
+  assert(decidedAt <= authorizationAt && authorizationAt < expiresAt && decidedAt <= expiresAt, "Execution authorization must satisfy decidedAt <= asOf < expiresAt.");
   assert(release.intentId === binding.intentId && transaction.intentId === binding.intentId, "Release and transaction intent IDs do not match binding.");
   assert(release.projectId === transaction.projectId, "Release and transaction projects do not match.");
   assert(release.id === transaction.releaseRequestId, "Transaction references an unrelated release.");

@@ -48,7 +48,13 @@ export class InMemoryIdempotencyRepository {
     let resolveAction!: (value: T | PromiseLike<T>) => void; let rejectAction!: (reason?: unknown) => void;
     const promise = new Promise<T>((resolve, reject) => { resolveAction = resolve; rejectAction = reject; });
     destination.set(key, { fingerprint, status: "IN_FLIGHT", promise }); this.#entries.set(scope, destination);
-    Promise.resolve().then(action).then((result) => { const saved = clone(result); destination.set(key, { fingerprint, status: "RESOLVED", result: saved }); resolveAction(saved); }, (error: unknown) => { destination.set(key, { fingerprint, status: "REJECTED", error }); rejectAction(error); });
+    Promise.resolve().then(action).then((result) => {
+      try {
+        const saved = clone(result); destination.set(key, { fingerprint, status: "RESOLVED", result: saved }); resolveAction(saved);
+      } catch (error: unknown) {
+        destination.set(key, { fingerprint, status: "REJECTED", error }); rejectAction(error);
+      }
+    }, (error: unknown) => { destination.set(key, { fingerprint, status: "REJECTED", error }); rejectAction(error); });
     return promise.then(clone);
   }
 }

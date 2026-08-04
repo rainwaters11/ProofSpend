@@ -112,6 +112,7 @@ export const ApprovalRecordSchema = z.discriminatedUnion("actionKind", [
 ]).superRefine((value, context) => {
   if (value.decision === "PENDING" && (value.approver !== null || value.decidedAt !== null)) context.addIssue({ code: "custom", message: "Pending approval cannot contain a completed approver or decision timestamp." });
   if (value.decision !== "PENDING" && (value.approver === null || value.approver.actorType !== value.authorizedActorType || value.approver.actorId !== value.authorizedActorId || value.decidedAt === null)) context.addIssue({ code: "custom", message: "Completed approval requires the exact authorized actor and decision timestamp." });
+  if (value.decision !== "PENDING" && value.decidedAt !== null && Date.parse(value.decidedAt) > Date.parse(value.expiresAt)) context.addIssue({ code: "custom", message: "Approval decision cannot occur after expiration." });
 });
 export type ApprovalRecord = z.infer<typeof ApprovalRecordSchema>;
 export const AuditEventSchema = z.object({ id: Id, aggregateType: z.string().min(1), aggregateId: Id, eventType: z.string().min(1), actor: ActorSchema, idempotencyKey: Id.nullable(), occurredAt: Time, details: z.record(z.string(), z.union([z.string(), z.boolean(), z.null()])) });
