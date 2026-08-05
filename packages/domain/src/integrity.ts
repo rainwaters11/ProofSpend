@@ -129,8 +129,8 @@ export async function validateExecutionAuthorization(approval: ApprovalRecord, r
       target.evaluatorReference === job.evaluatorAddress &&
       target.destination === job.contractAddress &&
       target.network === priorJobTransaction?.network &&
-      target.chainId === priorJobTransaction.chainId &&
-      transaction.arcTransaction.isMock === priorJobTransaction.isMock,
+      target.chainId === priorJobTransaction?.chainId &&
+      transaction.arcTransaction.isMock === priorJobTransaction?.isMock,
       "Terminal execution target does not match the release's exact ERC-8183 job contract and parties."
     );
     const expectedDecision = intent.operationType === "JOB_EVALUATE" ? "APPROVED" : "REJECTED";
