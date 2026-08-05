@@ -50,7 +50,12 @@ function requiredApprovalPolicy(intent: CanonicalExecutionIntent): ExecutionAppr
   throw new RelationshipIntegrityError(`Release execution authorization cannot authorize job-scoped ${intent.operationType} writes.`);
 }
 
-export async function validateExecutionAuthorization(approval: ApprovalRecord, release: ReleaseRequest, transaction: TransactionRecord, binding: ExecutionAuthorizationBinding, asOf: string): Promise<true> {
+export interface TerminalJobExecutionContext {
+  settlement: SettlementRecord;
+  parameters: JobParameterCommitmentInput;
+}
+
+export async function validateExecutionAuthorization(approval: ApprovalRecord, release: ReleaseRequest, transaction: TransactionRecord, binding: ExecutionAuthorizationBinding, asOf: string, terminalJobContext?: TerminalJobExecutionContext): Promise<true> {
   approval = ApprovalRecordSchema.parse(approval); release = ReleaseRequestSchema.parse(release); transaction = TransactionRecordSchema.parse(transaction); binding = ExecutionAuthorizationBindingSchema.parse(binding);
   assert(release.state === "PREPARED", "Pre-submission authorization requires a PREPARED release.");
   if (transaction.operationState !== "PREPARED" || transaction.arcTransaction === null || transaction.arcTransaction.status !== "PREPARED") throw new RelationshipIntegrityError("Pre-submission authorization requires compatible PREPARED transaction evidence.");
@@ -84,7 +89,64 @@ export async function validateExecutionAuthorization(approval: ApprovalRecord, r
   assert(intent.asset === release.amount.asset && intent.atomicAmount === release.amount.atomicUnits, "Canonical execution amount does not match persisted amount.");
   assert(intent.operationType === transaction.arcTransaction.operationType && intent.protocolTarget.destination === transaction.destinationReference, "Canonical execution operation or destination does not match transaction.");
   assert(intent.protocolTarget.network === transaction.arcTransaction.network && intent.protocolTarget.chainId === transaction.arcTransaction.chainId, "Canonical execution network does not match transaction.");
-  if (intent.protocolTarget.kind === "DESTINATION") assert(intent.protocolTarget.isMock === transaction.arcTransaction.isMock, "Canonical destination mode does not match transaction mode.");
+  if (intent.protocolTarget.kind === "DESTINATION") {
+    assert(intent.protocolTarget.isMock === transaction.arcTransaction.isMock, "Canonical destination mode does not match transaction mode.");
+  } else {
+    assert(terminalJobContext !== undefined, "Terminal ERC-8183 execution requires release-linked job evidence and parameter commitment inputs.");
+    const settlement = SettlementRecordSchema.parse(terminalJobContext.settlement);
+    const job = settlement.job;
+    const settlementTransaction = settlement.transaction;
+    const target = intent.protocolTarget;
+    const parameters = terminalJobContext.parameters;
+    assert(job !== null && settlementTransaction !== null, "Terminal ERC-8183 execution requires a job-backed pending settlement transaction.");
+    assert(settlement.releaseRequestId === release.id && settlement.projectId === release.projectId, "Terminal job evidence does not belong to the prepared release.");
+    assert(settlement.amount.asset === release.amount.asset && settlement.amount.atomicUnits === release.amount.atomicUnits, "Terminal job settlement amount does not match the prepared release.");
+    assert(
+      settlementTransaction.network === transaction.arcTransaction.network &&
+      settlementTransaction.chainId === transaction.arcTransaction.chainId &&
+      settlementTransaction.transactionHash === transaction.arcTransaction.transactionHash &&
+      settlementTransaction.status === transaction.arcTransaction.status &&
+      settlementTransaction.blockNumber === transaction.arcTransaction.blockNumber &&
+      settlementTransaction.blockHash === transaction.arcTransaction.blockHash &&
+      settlementTransaction.explorerUrl === transaction.arcTransaction.explorerUrl &&
+      settlementTransaction.operationType === transaction.arcTransaction.operationType &&
+      settlementTransaction.isMock === transaction.arcTransaction.isMock,
+      "Terminal job settlement transaction does not match the prepared transaction."
+    );
+    const priorJobTransaction = job.transaction;
+    const compatibleJobState =
+      (intent.operationType === "JOB_EVALUATE" && settlement.state === "PENDING" && job.status === "SUBMITTED" && priorJobTransaction?.status === "CONFIRMED" && priorJobTransaction.operationType === "JOB_SUBMIT") ||
+      (intent.operationType === "JOB_REJECT" && settlement.state === "REFUND_PENDING" &&
+        ((job.status === "FUNDED" && priorJobTransaction?.status === "CONFIRMED" && priorJobTransaction.operationType === "JOB_FUND") ||
+         (job.status === "SUBMITTED" && priorJobTransaction?.status === "CONFIRMED" && priorJobTransaction.operationType === "JOB_SUBMIT")));
+    assert(compatibleJobState, "Terminal job operation is incompatible with the release's current ERC-8183 job state.");
+    assert(
+      target.standard === job.standard &&
+      target.contractReference === job.contractAddress &&
+      target.jobId === job.jobId &&
+      target.clientReference === job.clientAddress &&
+      target.providerReference === job.providerAddress &&
+      target.evaluatorReference === job.evaluatorAddress &&
+      target.destination === job.contractAddress &&
+      target.network === priorJobTransaction?.network &&
+      target.chainId === priorJobTransaction.chainId &&
+      transaction.arcTransaction.isMock === priorJobTransaction.isMock,
+      "Terminal execution target does not match the release's exact ERC-8183 job contract and parties."
+    );
+    const expectedDecision = intent.operationType === "JOB_EVALUATE" ? "APPROVED" : "REJECTED";
+    assert(
+      parameters.operationType === intent.operationType &&
+      parameters.jobId === job.jobId &&
+      parameters.asset === job.budget.asset &&
+      parameters.atomicAmount === job.budget.atomicUnits &&
+      parameters.deliverableReference === job.deliverableReference &&
+      parameters.decision === expectedDecision &&
+      (intent.operationType !== "JOB_REJECT" || (parameters.reasonReference !== null && parameters.reasonReference.trim().length > 0)),
+      "Terminal job parameter commitment inputs do not match the release's current job evidence."
+    );
+    const recomputedParameterCommitment = await hashJobParameterCommitment(parameters);
+    assert(recomputedParameterCommitment === target.parameterCommitment, "Terminal job parameter commitment does not match the exact ERC-8183 job target.");
+  }
   const recomputedHash = await hashCanonicalExecutionIntent(intent);
   assert(recomputedHash === approval.exactIntentHash && recomputedHash === binding.exactIntentHash, "Recomputed exact intent hash does not match approval and binding.");
   return true;
