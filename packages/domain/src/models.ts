@@ -54,6 +54,7 @@ export const ArcTransactionRefSchema = z.object({
   if (value.status === "SUBMITTED" && (value.blockNumber !== null || value.blockHash !== null)) context.addIssue({ code: "custom", message: "Submitted transaction cannot contain confirmation block evidence." });
   if (value.status === "CONFIRMED" && (value.transactionHash === null || value.blockNumber === null || value.blockHash === null)) context.addIssue({ code: "custom", message: "Confirmed transaction requires transaction hash, block number, and block hash." });
   if (value.status === "FAILED" && (value.blockNumber !== null || value.blockHash !== null)) context.addIssue({ code: "custom", message: "Failed transaction cannot contain confirmation block evidence." });
+  if (value.transactionHash === null && value.explorerUrl !== null) context.addIssue({ code: "custom", message: "A transaction without a hash cannot have an explorer URL." });
   const references = [value.chainId, value.transactionHash, value.blockHash].filter((item): item is string => item !== null);
   if (value.isMock && references.some((item) => !isSynthetic(item))) context.addIssue({ code: "custom", message: "Every mock transaction reference must be visibly synthetic." });
   if (value.isMock && value.explorerUrl !== null) context.addIssue({ code: "custom", message: "Mock transactions cannot have a live explorer URL." });
@@ -101,6 +102,10 @@ export const TransactionRecordSchema = z.object({ id: Id, projectId: Id, release
   if (["PREPARED", "SUBMITTED", "CONFIRMED", "FAILED", "RECONCILED"].includes(value.operationState) && (value.approvalId === null || value.approvalBindingId === null)) context.addIssue({ code: "custom", message: `${value.operationState} transaction requires persisted approval and binding references.` });
   if (value.operationState === "INTENT_PERSISTED" && (value.approvalId !== null || value.approvalBindingId !== null)) context.addIssue({ code: "custom", message: "Persisted intent cannot claim completed approval binding." });
   if (value.operationState === "RECONCILED" ? value.reconciliationId === null : value.reconciliationId !== null) context.addIssue({ code: "custom", message: "Transaction reconciliation reference must match RECONCILED state." });
+  if (value.arcTransaction !== null && ["SETTLEMENT", "REFUND"].includes(value.arcTransaction.operationType)) {
+    if (value.arcTransaction.isMock && !isSynthetic(value.destinationReference)) context.addIssue({ code: "custom", message: "Mock value-moving transactions require a visibly synthetic destination." });
+    if (!value.arcTransaction.isMock && !EvmAddress.test(value.destinationReference)) context.addIssue({ code: "custom", message: "Live value-moving transactions require a canonical EVM destination address." });
+  }
 });
 export type TransactionRecord = z.infer<typeof TransactionRecordSchema>;
 export const ApprovalActionKindSchema = z.enum(["RELEASE_APPROVAL", "MILESTONE_EVALUATION", "JOB_SUBMISSION", "JOB_EVALUATION"]);
@@ -156,7 +161,12 @@ export const SettlementRecordSchema = z.object({ id: Id, projectId: Id, releaseR
   if (value.state === "RECONCILED" ? value.reconciliationId === null : value.reconciliationId !== null) context.addIssue({ code: "custom", message: "Settlement reconciliation reference must match RECONCILED state." });
 });
 export type SettlementRecord = z.infer<typeof SettlementRecordSchema>;
-const DestinationProtocolTargetSchema = z.object({ kind: z.literal("DESTINATION"), destination: Id, network: z.literal(ARC_TESTNET_NETWORK), chainId: Id }).strict();
+const DestinationProtocolTargetSchema = z.object({
+  kind: z.literal("DESTINATION"),
+  destination: Id.refine((value) => isSynthetic(value) || EvmAddress.test(value), "Destination must be visibly synthetic or a canonical EVM address."),
+  network: z.literal(ARC_TESTNET_NETWORK),
+  chainId: Id,
+}).strict();
 const Erc8183ProtocolTargetSchema = z.object({
   kind: z.literal("ERC8183"), standard: z.literal("ERC-8183"), network: z.literal(ARC_TESTNET_NETWORK), chainId: Id.refine(isSynthetic),
   contractReference: Id.refine(isSynthetic, "Issue #2 ERC-8183 contract references must be visibly synthetic."), jobId: Id.refine(isSynthetic, "Issue #2 job IDs must be visibly synthetic."),
