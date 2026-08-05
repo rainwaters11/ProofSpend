@@ -81,7 +81,11 @@ export function transitionApplication(from: ProofSpendApplicationState, to: Proo
     if (!approval.success || policy === null || approval.data.actionKind !== policy.actionKind || approval.data.authorizedActorType !== policy.actorType || approval.data.aggregateId !== context.aggregateId || approval.data.intentId !== context.expectedIntentId || approval.data.id !== context.expectedApprovalId || approval.data.exactIntentHash !== context.expectedExactIntentHash || approval.data.decision !== expectedDecision || approval.data.approver === null || approval.data.decidedAt === null || approval.data.approver.actorType !== approval.data.authorizedActorType || approval.data.approver.actorId !== approval.data.authorizedActorId || context.actor.actorType !== approval.data.approver.actorType || context.actor.actorId !== approval.data.approver.actorId || decidedAt === null || occurredAt === null || expiresAt === null || decidedAt > occurredAt || occurredAt >= expiresAt) throw new InvalidTransitionError("ProofSpend application approval evidence", from, to);
   }
   if (from === "APPROVED" && to === "PREPARED") validateLifecycleTransaction(context, "PREPARED", from, to);
-  if ((from === "PREPARED" || from === "SUBMITTED") && to === "FAILED") validateLifecycleTransaction(context, "FAILED", from, to);
+  if (from === "PREPARED" && to === "FAILED") validateLifecycleTransaction(context, "FAILED", from, to);
+  if (from === "SUBMITTED" && to === "FAILED") {
+    validateLifecycleTransaction(context, "FAILED", from, to);
+    validateFailedSubmissionEvidence(context, from, to);
+  }
   if (from === "SUBMITTED" && to === "CONFIRMED") {
     const release = ReleaseRequestSchema.safeParse(context.currentReleaseRequest);
     const submitted = TransactionRecordSchema.safeParse(context.submissionTransaction);
@@ -103,6 +107,41 @@ function validateLifecycleTransaction(context: TransitionContext, status: "PREPA
   const parsed = TransactionRecordSchema.safeParse(context.lifecycleTransaction);
   const transaction = parsed.success ? parsed.data : null;
   if (transaction === null || transaction.operationState !== status || transaction.arcTransaction?.status !== status || transaction.releaseRequestId !== context.aggregateId || transaction.id !== context.expectedTransactionId || transaction.projectId !== context.expectedProjectId || transaction.releaseRequestId !== context.expectedReleaseRequestId || transaction.intentId !== context.expectedIntentId || transaction.approvalId !== context.expectedApprovalId || transaction.approvalBindingId !== context.expectedApprovalBindingId || (context.expectedOperationType !== "SETTLEMENT" && context.expectedOperationType !== "REFUND") || transaction.arcTransaction.operationType !== context.expectedOperationType) throw new InvalidTransitionError("ProofSpend application transaction evidence", from, to);
+}
+
+function validateFailedSubmissionEvidence(context: TransitionContext, from: string, to: string): void {
+  const failed = TransactionRecordSchema.safeParse(context.lifecycleTransaction);
+  const submitted = TransactionRecordSchema.safeParse(context.submissionTransaction);
+  const submission = SubmissionOperationRecordSchema.safeParse(context.submissionOperation);
+  const failedTransaction = failed.success ? failed.data : null;
+  const submittedTransaction = submitted.success ? submitted.data : null;
+  const failedArc = failedTransaction?.arcTransaction ?? null;
+  const submittedArc = submittedTransaction?.arcTransaction ?? null;
+  if (
+    failedTransaction === null || submittedTransaction === null || !submission.success ||
+    failedTransaction.operationState !== "FAILED" || failedArc?.status !== "FAILED" ||
+    submittedTransaction.operationState !== "SUBMITTED" || submittedArc?.status !== "SUBMITTED" ||
+    context.idempotencyKey === undefined || submission.data.idempotencyKey !== context.idempotencyKey ||
+    submission.data.transactionId !== submittedTransaction.id ||
+    !arcTransactionEvidenceMatches(submission.data.arcTransaction, submittedArc) ||
+    failedTransaction.id !== submittedTransaction.id ||
+    failedTransaction.projectId !== submittedTransaction.projectId ||
+    failedTransaction.releaseRequestId !== submittedTransaction.releaseRequestId ||
+    failedTransaction.intentId !== submittedTransaction.intentId ||
+    failedTransaction.approvalId !== submittedTransaction.approvalId ||
+    failedTransaction.approvalBindingId !== submittedTransaction.approvalBindingId ||
+    failedTransaction.reconciliationId !== submittedTransaction.reconciliationId ||
+    failedTransaction.idempotencyKey !== submittedTransaction.idempotencyKey ||
+    failedTransaction.amount.asset !== submittedTransaction.amount.asset ||
+    failedTransaction.amount.atomicUnits !== submittedTransaction.amount.atomicUnits ||
+    failedTransaction.destinationReference !== submittedTransaction.destinationReference ||
+    failedArc.transactionHash !== submittedArc.transactionHash ||
+    failedArc.network !== submittedArc.network ||
+    failedArc.chainId !== submittedArc.chainId ||
+    failedArc.explorerUrl !== submittedArc.explorerUrl ||
+    failedArc.operationType !== submittedArc.operationType ||
+    failedArc.isMock !== submittedArc.isMock
+  ) throw new InvalidTransitionError("ProofSpend failed submission evidence", from, to);
 }
 
 function requiredApprovalPolicy(operationType: NonNullable<TransactionRecord["arcTransaction"]>["operationType"]): { actionKind: "RELEASE_APPROVAL"; actorType: "FOUNDER" } | null {
