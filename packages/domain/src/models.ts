@@ -238,7 +238,7 @@ export const CanonicalExecutionIntentSchema = z.object({ version: z.literal(1), 
   const expectedActionKind = supportedActionPolicy[value.operationType as keyof typeof supportedActionPolicy];
   if (expectedActionKind === undefined) context.addIssue({ code: "custom", message: `${value.operationType} execution authorization is deferred to its owning issue.` });
   else if (value.actionKind !== expectedActionKind) context.addIssue({ code: "custom", message: `${value.operationType} requires ${expectedActionKind} authorization.` });
-  if (usesErc8183Target) {
+  if (value.protocolTarget.kind === "ERC8183") {
     const expectedMethod = value.operationType === "REFUND" ? "CLAIM_REFUND" : isJobOperation ? value.operationType : null;
     if (expectedMethod === null || value.protocolTarget.method !== expectedMethod) context.addIssue({ code: "custom", message: "ERC-8183 execution method must match the supported operation type." });
   }
