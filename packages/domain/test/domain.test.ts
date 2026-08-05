@@ -21,7 +21,7 @@ const mockTransaction = (status: "NONE" | "PREPARED" | "SUBMITTED" | "CONFIRMED"
   status, blockNumber: status === "CONFIRMED" ? "1" : null, blockHash: status === "CONFIRMED" ? "mock:block" : null,
   explorerUrl: null, operationType, isMock: true,
 });
-const mockJob = (status: "OPEN" | "FUNDED" | "SUBMITTED" | "COMPLETED" | "REJECTED" | "EXPIRED", transaction: ArcTransactionRef | null = null) => AgenticJobRefSchema.parse({ standard: "ERC-8183", network: "mock:network", chainId: "mock:chain", contractAddress: "mock:contract", jobId: "mock:job", clientAddress: "mock:client", providerAddress: "mock:provider", evaluatorAddress: "mock:evaluator", budget: usdc("1"), expiresAt: "2026-02-01T00:00:00.000Z", descriptionReference: "mock:description", deliverableReference: ["SUBMITTED", "COMPLETED", "REJECTED"].includes(status) ? "mock:deliverable" : null, reasonReference: status === "REJECTED" ? "mock:reason" : null, status, transaction, isMock: true });
+const mockJob = (status: "OPEN" | "FUNDED" | "SUBMITTED" | "COMPLETED" | "REJECTED" | "EXPIRED", transaction: ArcTransactionRef | null = null, escrowTransaction: ArcTransactionRef | null = null) => AgenticJobRefSchema.parse({ standard: "ERC-8183", network: "mock:network", chainId: "mock:chain", contractAddress: "mock:contract", jobId: "mock:job", clientAddress: "mock:client", providerAddress: "mock:provider", evaluatorAddress: "mock:evaluator", budget: usdc("1"), expiresAt: "2026-02-01T00:00:00.000Z", descriptionReference: "mock:description", deliverableReference: ["SUBMITTED", "COMPLETED"].includes(status) || (status === "REJECTED" && escrowTransaction?.operationType === "JOB_SUBMIT") ? "mock:deliverable" : null, reasonReference: status === "REJECTED" ? "mock:reason" : null, status, transaction, escrowTransaction, isMock: true });
 const jobFundingAuthorization = async (job: ReturnType<typeof mockJob>, transactionId = "transaction:job-fund") => {
   if (job.transaction === null) throw new Error("Job funding authorization requires transaction evidence.");
   const intentId = "intent:job-fund";
@@ -143,11 +143,12 @@ describe("separate state machines", () => {
     const completed = mockJob("COMPLETED", mockTransaction("CONFIRMED", "JOB_EVALUATE"));
     const completedWithReason = AgenticJobRefSchema.parse({ ...completed, reasonReference: "mock:completion-attestation" });
     const rejected = mockJob("REJECTED", mockTransaction("CONFIRMED", "JOB_REJECT"));
-    const rejectedBeforeSubmission = AgenticJobRefSchema.parse({ ...rejected, deliverableReference: null });
+    const fundedRejected = mockJob("REJECTED", mockTransaction("CONFIRMED", "JOB_REJECT"), funded.transaction);
+    const submittedRejected = mockJob("REJECTED", mockTransaction("CONFIRMED", "JOB_REJECT"), submitted.transaction);
     const reasonlessRejected = AgenticJobRefSchema.parse({ ...rejected, reasonReference: null });
     const expiredFunded = AgenticJobRefSchema.parse({ ...funded, status: "EXPIRED", transaction: mockTransaction("CONFIRMED", "REFUND") });
     const expiredSubmitted = AgenticJobRefSchema.parse({ ...submitted, status: "EXPIRED", transaction: mockTransaction("CONFIRMED", "REFUND") });
-    for (const job of [open, funded, submitted, completed, completedWithReason, rejected, rejectedBeforeSubmission, reasonlessRejected, expiredFunded, expiredSubmitted]) expect(AgenticJobRefSchema.parse(job)).toEqual(job);
+    for (const job of [open, funded, submitted, completed, completedWithReason, rejected, fundedRejected, submittedRejected, reasonlessRejected, expiredFunded, expiredSubmitted]) expect(AgenticJobRefSchema.parse(job)).toEqual(job);
     for (const invalid of [
       { ...open, status: "FUNDED" as const },
       { ...open, status: "EXPIRED" as const },
@@ -158,6 +159,9 @@ describe("separate state machines", () => {
       { ...funded, status: "EXPIRED" as const },
       { ...submitted, status: "EXPIRED" as const },
       { ...submitted, status: "EXPIRED" as const, reasonReference: "mock:forged-reason", transaction: mockTransaction("CONFIRMED", "REFUND") },
+      { ...rejected, escrowTransaction: mockTransaction("CONFIRMED", "JOB_SUBMIT") },
+      { ...rejected, escrowTransaction: mockTransaction("SUBMITTED", "JOB_FUND") },
+      { ...submitted, escrowTransaction: funded.transaction },
     ]) expect(AgenticJobRefSchema.safeParse(invalid).success).toBe(false);
   });
   it("emits an audit event for a successful application transition", () => {
@@ -359,7 +363,7 @@ describe("separate state machines", () => {
     const unconfirmedSubmittedCurrent = { ...submittedCurrent, transaction: mockTransaction("SUBMITTED", "JOB_SUBMIT") } as typeof submittedCurrent;
     const completed = mockJob("COMPLETED", mockTransaction("CONFIRMED", "JOB_EVALUATE"));
     const completedWithReason = AgenticJobRefSchema.parse({ ...completed, reasonReference: "mock:completion-attestation" });
-    const rejected = mockJob("REJECTED", mockTransaction("CONFIRMED", "JOB_REJECT"));
+    const rejected = mockJob("REJECTED", mockTransaction("CONFIRMED", "JOB_REJECT"), submittedCurrent.transaction);
     const reasonlessRejected = AgenticJobRefSchema.parse({ ...rejected, reasonReference: null });
     const completedAuthorization = await jobEvaluationAuthorization(completed, "APPROVED");
     const completedWithReasonAuthorization = await jobEvaluationAuthorization(completedWithReason, "APPROVED", "transaction:job-evaluate:approved-with-reason");
@@ -427,7 +431,7 @@ describe("separate state machines", () => {
     await expect(transitionAgenticJob("OPEN", "REJECTED", { ...openContext, ...openEvaluatorAuthorization, authorizedApproverId: undefined })).rejects.toThrow(InvalidTransitionError);
 
     const funded = mockJob("FUNDED", mockTransaction("CONFIRMED", "JOB_FUND"));
-    const fundedRejected = AgenticJobRefSchema.parse({ ...openRejected });
+    const fundedRejected = AgenticJobRefSchema.parse({ ...openRejected, escrowTransaction: funded.transaction });
     const fundedAuthorization = await jobEvaluationAuthorization(fundedRejected, "REJECTED");
     const fundedContext = { ...context, aggregateId: funded.jobId, actor: adapter, authorizedAdapterId: adapter.actorId, currentJobEvidence: funded, jobEvidence: fundedRejected, ...fundedAuthorization };
     expect(fundedAuthorization.jobApprovalDecision.decision).toBe("APPROVED");
@@ -758,7 +762,8 @@ describe("lifecycle evidence schemas", () => {
     const completedJob = mockJob("COMPLETED", mockTransaction("CONFIRMED", "JOB_EVALUATE"));
     const completedJobWithReason = AgenticJobRefSchema.parse({ ...completedJob, reasonReference: "mock:completion-attestation" });
     const submittedJob = mockJob("SUBMITTED", mockTransaction("CONFIRMED", "JOB_SUBMIT"));
-    const rejectedJob = mockJob("REJECTED", mockTransaction("CONFIRMED", "JOB_REJECT"));
+    const openRejectedJob = mockJob("REJECTED", mockTransaction("CONFIRMED", "JOB_REJECT"));
+    const rejectedJob = mockJob("REJECTED", mockTransaction("CONFIRMED", "JOB_REJECT"), mockTransaction("CONFIRMED", "JOB_SUBMIT"));
     const expiredJob = AgenticJobRefSchema.parse({ ...mockJob("FUNDED", mockTransaction("CONFIRMED", "JOB_FUND")), status: "EXPIRED", transaction: mockTransaction("CONFIRMED", "REFUND") });
     expect(SettlementRecordSchema.parse({ ...base, state: "CONFIRMED", job: completedJob, transaction: mockTransaction("CONFIRMED") })).toBeDefined();
     expect(SettlementRecordSchema.parse({ ...base, state: "CONFIRMED", job: completedJobWithReason, transaction: mockTransaction("CONFIRMED") })).toBeDefined();
@@ -766,6 +771,7 @@ describe("lifecycle evidence schemas", () => {
     expect(() => SettlementRecordSchema.parse({ ...base, state: "CONFIRMED", job: submittedJob, transaction: mockTransaction("CONFIRMED") })).toThrow();
     expect(SettlementRecordSchema.parse({ ...base, state: "REFUNDED", job: rejectedJob, transaction: mockTransaction("CONFIRMED", "REFUND") })).toBeDefined();
     expect(SettlementRecordSchema.parse({ ...base, state: "REFUNDED", job: rejectedJob, transaction: rejectedJob.transaction })).toBeDefined();
+    expect(() => SettlementRecordSchema.parse({ ...base, state: "REFUNDED", job: openRejectedJob, transaction: openRejectedJob.transaction })).toThrow();
     expect(() => SettlementRecordSchema.parse({ ...base, state: "REFUNDED", job: rejectedJob, transaction: { ...rejectedJob.transaction!, transactionHash: "mock:unrelated-rejection" } })).toThrow();
     expect(() => SettlementRecordSchema.parse({ ...base, state: "REFUNDED", job: rejectedJob, transaction: { ...rejectedJob.transaction!, blockHash: "mock:unrelated-block" } })).toThrow();
     expect(() => SettlementRecordSchema.parse({ ...base, state: "REFUNDED", job: null, transaction: rejectedJob.transaction })).toThrow();
@@ -893,7 +899,7 @@ describe("persisted relationship integrity", () => {
     const { release } = await authorizationFixture(); const confirmedSettlement = SettlementRecordSchema.parse({ id: "settlement:1", projectId: release.projectId, releaseRequestId: release.id, reconciliationId: null, idempotencyKey: "settlement:key", amount: release.amount, state: "CONFIRMED", job: null, transaction: mockTransaction("CONFIRMED"), updatedAt: context.occurredAt }); const confirmedRelease = ReleaseRequestSchema.parse({ ...release, state: "CONFIRMED", settlementId: confirmedSettlement.id });
     const refundedSettlement = SettlementRecordSchema.parse({ ...confirmedSettlement, state: "REFUNDED", transaction: mockTransaction("CONFIRMED", "REFUND") });
     const reconciledRefund = SettlementRecordSchema.parse({ ...refundedSettlement, state: "RECONCILED", reconciliationId: "reconciliation:refund" });
-    const rejectedJob = AgenticJobRefSchema.parse({ ...mockJob("REJECTED", mockTransaction("CONFIRMED", "JOB_REJECT")), budget: confirmedSettlement.amount });
+    const rejectedJob = AgenticJobRefSchema.parse({ ...mockJob("REJECTED", mockTransaction("CONFIRMED", "JOB_REJECT"), mockTransaction("CONFIRMED", "JOB_SUBMIT")), budget: confirmedSettlement.amount });
     const rejectionRefund = SettlementRecordSchema.parse({ ...confirmedSettlement, state: "REFUNDED", job: rejectedJob, transaction: rejectedJob.transaction });
     const reconciledRejectionRefund = SettlementRecordSchema.parse({ ...rejectionRefund, state: "RECONCILED", reconciliationId: "reconciliation:job-reject" });
     expect(validateReleaseConfirmation(confirmedRelease, confirmedSettlement)).toBe(true);
@@ -917,7 +923,7 @@ describe("persisted relationship integrity", () => {
   });
   it("reconciles atomic ERC-8183 rejection refunds", () => {
     const base = reconciliationFixture("MATCHED");
-    const rejectedJob = AgenticJobRefSchema.parse({ ...mockJob("REJECTED", mockTransaction("CONFIRMED", "JOB_REJECT")), budget: base.settlement.amount });
+    const rejectedJob = AgenticJobRefSchema.parse({ ...mockJob("REJECTED", mockTransaction("CONFIRMED", "JOB_REJECT"), mockTransaction("CONFIRMED", "JOB_SUBMIT")), budget: base.settlement.amount });
     const transaction = TransactionRecordSchema.parse({ ...base.transaction, arcTransaction: rejectedJob.transaction });
     const settlement = SettlementRecordSchema.parse({ ...base.settlement, job: rejectedJob, transaction: rejectedJob.transaction });
     expect(validateReconciliation(transaction, settlement, base.reconciliation, "adapter:authorized")).toBe(true);
@@ -1020,7 +1026,7 @@ describe("Backer-safe disclosure filtering", () => {
     expect(result.settlements.map((record) => record.id)).toEqual(["settlement:selected"]);
     expect(result.settlements[0]?.disposition).toBeNull();
     const reconciliationId = "reconciliation:disclosure";
-    const rejectedJob = mockJob("REJECTED", mockTransaction("CONFIRMED", "JOB_REJECT"));
+    const rejectedJob = mockJob("REJECTED", mockTransaction("CONFIRMED", "JOB_REJECT"), mockTransaction("CONFIRMED", "JOB_SUBMIT"));
     const reconciled = [
       { ...settlement, id: "settlement:paid", projectId: seed.project.id, reconciliationId, state: "RECONCILED" as const, transaction: mockTransaction("CONFIRMED", "SETTLEMENT") },
       { ...settlement, id: "settlement:refunded", projectId: seed.project.id, releaseRequestId: "release:2", reconciliationId, state: "RECONCILED" as const, transaction: mockTransaction("CONFIRMED", "REFUND") },
