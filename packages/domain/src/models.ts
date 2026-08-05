@@ -69,13 +69,22 @@ export const AgenticJobRefSchema = z.object({
   standard: z.literal("ERC-8183"), network: z.string().min(1), chainId: z.string().min(1), contractAddress: z.string().min(1), jobId: z.string().min(1),
   clientAddress: z.string().min(1), providerAddress: z.string().min(1), evaluatorAddress: z.string().min(1),
   budget: SettlementMoneyAmountSchema, expiresAt: Time, descriptionReference: z.string().min(1), deliverableReference: z.string().min(1).nullable(),
-  reasonReference: z.string().min(1).nullable(), status: AgenticJobStatusSchema, transaction: ArcTransactionRefSchema.nullable(), isMock: z.boolean(),
+  reasonReference: z.string().min(1).nullable(), status: AgenticJobStatusSchema, transaction: ArcTransactionRefSchema.nullable(), escrowTransaction: ArcTransactionRefSchema.nullable().default(null), isMock: z.boolean(),
 }).superRefine((value, context) => {
   if (!value.isMock) context.addIssue({ code: "custom", message: "Live ERC-8183 job behavior is deferred to Issue #8." });
   const references = [value.network, value.chainId, value.contractAddress, value.jobId, value.clientAddress, value.providerAddress, value.evaluatorAddress, value.descriptionReference, value.deliverableReference, value.reasonReference].filter((item): item is string => item !== null);
   if (value.isMock && references.some((item) => !isSynthetic(item))) context.addIssue({ code: "custom", message: "Every mock job reference must be visibly synthetic." });
   if (!value.isMock && references.some(isSynthetic)) context.addIssue({ code: "custom", message: "Synthetic job references cannot be marked live." });
   if (value.transaction !== null && value.transaction.isMock !== value.isMock) context.addIssue({ code: "custom", message: "Job and transaction mock/live indicators must match." });
+  const escrowTransaction = value.escrowTransaction;
+  if (escrowTransaction !== null && escrowTransaction.isMock !== value.isMock) context.addIssue({ code: "custom", message: "Job and prior escrow transaction mock/live indicators must match." });
+  const escrowEvidenceValid =
+    escrowTransaction === null ||
+    (value.status === "REJECTED" && escrowTransaction.status === "CONFIRMED" && (
+      (escrowTransaction.operationType === "JOB_FUND" && value.deliverableReference === null) ||
+      (escrowTransaction.operationType === "JOB_SUBMIT" && value.deliverableReference !== null)
+    ));
+  if (!escrowEvidenceValid) context.addIssue({ code: "custom", message: "Prior escrow evidence is valid only for a rejected job and must preserve its confirmed funded or submitted state." });
   const transaction = value.transaction;
   const statusEvidenceValid =
     (value.status === "OPEN" && value.deliverableReference === null && value.reasonReference === null && transaction === null) ||
@@ -168,12 +177,13 @@ export const ReleaseRequestSchema = z.object({ id: Id, projectId: Id, milestoneI
 export type ReleaseRequest = z.infer<typeof ReleaseRequestSchema>;
 export const SettlementRecordSchema = z.object({ id: Id, projectId: Id, releaseRequestId: Id, reconciliationId: Id.nullable(), idempotencyKey: Id, amount: SettlementMoneyAmountSchema, state: z.enum(["PENDING", "CONFIRMED", "REFUND_PENDING", "REFUNDED", "RECONCILED", "FAILED"]), job: AgenticJobRefSchema.nullable(), transaction: ArcTransactionRefSchema.nullable(), updatedAt: Time }).superRefine((value, context) => {
   const transaction = value.transaction;
+  const rejectionRefundEligible = value.job?.status === "REJECTED" && value.job.escrowTransaction !== null;
   const allowed =
     (value.state === "PENDING" && (transaction === null || (transaction.operationType === "SETTLEMENT" && ["PREPARED", "SUBMITTED"].includes(transaction.status)))) ||
     (value.state === "CONFIRMED" && transaction?.operationType === "SETTLEMENT" && transaction.status === "CONFIRMED") ||
     (value.state === "REFUND_PENDING" && (transaction === null || (transaction.operationType === "REFUND" && ["PREPARED", "SUBMITTED"].includes(transaction.status)))) ||
-    (value.state === "REFUNDED" && transaction?.status === "CONFIRMED" && (transaction.operationType === "REFUND" || (transaction.operationType === "JOB_REJECT" && value.job?.status === "REJECTED"))) ||
-    (value.state === "RECONCILED" && transaction?.status === "CONFIRMED" && (transaction.operationType === "SETTLEMENT" || transaction.operationType === "REFUND" || (transaction.operationType === "JOB_REJECT" && value.job?.status === "REJECTED"))) ||
+    (value.state === "REFUNDED" && transaction?.status === "CONFIRMED" && (transaction.operationType === "REFUND" || (transaction.operationType === "JOB_REJECT" && rejectionRefundEligible))) ||
+    (value.state === "RECONCILED" && transaction?.status === "CONFIRMED" && (transaction.operationType === "SETTLEMENT" || transaction.operationType === "REFUND" || (transaction.operationType === "JOB_REJECT" && rejectionRefundEligible))) ||
     (value.state === "FAILED" && (transaction === null || (transaction.status === "FAILED" && (transaction.operationType === "SETTLEMENT" || transaction.operationType === "REFUND"))));
   if (!allowed) context.addIssue({ code: "custom", message: `${value.state} settlement requires compatible persisted transaction evidence.` });
   if (value.job !== null && transaction?.status === "CONFIRMED") {
@@ -183,7 +193,7 @@ export const SettlementRecordSchema = z.object({ id: Id, projectId: Id, releaseR
     if (transaction.operationType === "JOB_REJECT") {
       const jobTransaction = value.job.transaction;
       if (
-        value.job.status !== "REJECTED" || jobTransaction === null ||
+        value.job.status !== "REJECTED" || value.job.escrowTransaction === null || jobTransaction === null ||
         jobTransaction.network !== transaction.network ||
         jobTransaction.chainId !== transaction.chainId ||
         jobTransaction.transactionHash !== transaction.transactionHash ||
