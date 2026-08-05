@@ -82,11 +82,8 @@ export const AgenticJobRefSchema = z.object({
     (value.status === "FUNDED" && value.deliverableReference === null && value.reasonReference === null && transaction?.operationType === "JOB_FUND" && transaction.status === "CONFIRMED") ||
     (value.status === "SUBMITTED" && value.deliverableReference !== null && value.reasonReference === null && transaction?.operationType === "JOB_SUBMIT" && (transaction.status === "SUBMITTED" || transaction.status === "CONFIRMED")) ||
     (value.status === "COMPLETED" && value.deliverableReference !== null && transaction?.operationType === "JOB_EVALUATE" && transaction.status === "CONFIRMED") ||
-    (value.status === "REJECTED" && value.reasonReference !== null && transaction?.operationType === "JOB_REJECT" && transaction.status === "CONFIRMED") ||
-    (value.status === "EXPIRED" && value.reasonReference === null && (
-      (value.deliverableReference === null && transaction?.operationType === "JOB_FUND" && transaction.status === "CONFIRMED") ||
-      (value.deliverableReference !== null && transaction?.operationType === "JOB_SUBMIT" && (transaction.status === "SUBMITTED" || transaction.status === "CONFIRMED"))
-    ));
+    (value.status === "REJECTED" && transaction?.operationType === "JOB_REJECT" && transaction.status === "CONFIRMED") ||
+    (value.status === "EXPIRED" && value.reasonReference === null && transaction?.operationType === "REFUND" && transaction.status === "CONFIRMED");
   if (!statusEvidenceValid) context.addIssue({ code: "custom", message: `${value.status} job requires status-specific deliverable, reason, and transaction evidence.` });
 });
 export type AgenticJobRef = z.infer<typeof AgenticJobRefSchema>;
@@ -224,6 +221,10 @@ export const AllocationOperationRecordSchema = z.object({ id: Id, reserveId: Id,
 export type AllocationOperationRecord = z.infer<typeof AllocationOperationRecordSchema>;
 export const SubmissionOperationRecordSchema = z.object({ id: Id, transactionId: Id, idempotencyKey: Id, arcTransaction: ArcTransactionRefSchema, createdAt: Time });
 export type SubmissionOperationRecord = z.infer<typeof SubmissionOperationRecordSchema>;
+export const JobRefundOperationRecordSchema = z.object({ id: Id, jobId: Id, transactionId: Id, idempotencyKey: Id, arcTransaction: ArcTransactionRefSchema, createdAt: Time }).superRefine((value, context) => {
+  if (value.arcTransaction.operationType !== "REFUND" || value.arcTransaction.status !== "CONFIRMED") context.addIssue({ code: "custom", message: "Job refund operation requires a confirmed REFUND transaction." });
+});
+export type JobRefundOperationRecord = z.infer<typeof JobRefundOperationRecordSchema>;
 export const JobEvaluationEvidenceSchema = z.object({ id: Id, jobId: Id, approvalId: Id, intentId: Id, exactIntentHash: Hash, decision: z.enum(["APPROVED", "REJECTED"]), transactionHash: z.string().min(1), transactionNetwork: z.literal(ARC_TESTNET_NETWORK), transactionChainId: z.string().min(1) });
 export type JobEvaluationEvidence = z.infer<typeof JobEvaluationEvidenceSchema>;
 export const RecoveryOperationRecordSchema = z.object({ id: Id, proofGapId: Id, idempotencyKey: Id, responseReference: z.string().min(1), createdAt: Time });
