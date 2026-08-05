@@ -1,7 +1,7 @@
 import { ApprovalRecordSchema, CanonicalExecutionIntentSchema, ExecutionAuthorizationBindingSchema, LedgerEntrySchema, ReleaseRequestSchema, SettlementRecordSchema, TransactionRecordSchema, ReconciliationRecordSchema, type ApprovalRecord, type CanonicalExecutionIntent, type ExecutionAuthorizationBinding, type LedgerEntry, type ReconciliationRecord, type ReleaseRequest, type SettlementRecord, type TransactionRecord } from "./models";
 
 export class RelationshipIntegrityError extends Error { constructor(message: string) { super(message); this.name = "RelationshipIntegrityError"; } }
-const assert = (condition: boolean, message: string): void => { if (!condition) throw new RelationshipIntegrityError(message); };
+function assert(condition: boolean, message: string): asserts condition { if (!condition) throw new RelationshipIntegrityError(message); }
 
 export function serializeCanonicalExecutionIntent(intent: CanonicalExecutionIntent): string {
   const target = intent.protocolTarget;
