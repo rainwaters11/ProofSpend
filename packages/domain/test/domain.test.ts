@@ -72,6 +72,12 @@ describe("atomic money", () => {
     expect(() => addMoney(money("USDC", "1"), money("EURC", "1"))).toThrow(MoneyError);
     expect(() => subtractMoney(money("USDC", "1"), money("USDC", "2"))).toThrow(MoneyError);
   });
+  it("revalidates hydrated operands before arithmetic", () => {
+    const negative = { asset: "USDC", atomicUnits: "-1" } as ReturnType<typeof money>;
+    expect(() => addMoney(negative, money("USDC", "1"))).toThrow();
+    expect(() => subtractMoney(money("USDC", "1"), negative)).toThrow();
+    expect(() => compareMoney(negative, money("USDC", "1"))).toThrow();
+  });
 });
 
 describe("separate state machines", () => {
@@ -94,9 +100,11 @@ describe("separate state machines", () => {
   });
   it.each(["FOUNDER", "EVALUATOR"] as const)("requires a persisted decision from the authorized %s", (actorType: "FOUNDER" | "EVALUATOR") => {
     const actor = { actorId: `authorized:${actorType}`, actorType }; const actionKind = actorType === "FOUNDER" ? "RELEASE_APPROVAL" : "MILESTONE_EVALUATION";
+    const aggregateType = actorType === "FOUNDER" ? "release" : "milestone";
     const approvalDecision = ApprovalRecordSchema.parse({ id: "approval:decision", aggregateId: context.aggregateId, intentId: "intent:decision", actionKind, authorizedActorType: actorType, authorizedActorId: actor.actorId, exactIntentHash: `sha256:${"a".repeat(64)}`, idempotencyKey: "approval:key", decision: "APPROVED", approver: actor, expiresAt: "2027-01-01T00:00:00.000Z", decidedAt: context.occurredAt });
-    const evidence = { ...context, actor, authorizedApproverId: actor.actorId, approvalDecision, expectedApprovalId: approvalDecision.id, expectedIntentId: approvalDecision.intentId, expectedExactIntentHash: approvalDecision.exactIntentHash };
+    const evidence = { ...context, aggregateType, actor, authorizedApproverId: actor.actorId, approvalDecision, expectedApprovalId: approvalDecision.id, expectedIntentId: approvalDecision.intentId, expectedExactIntentHash: approvalDecision.exactIntentHash };
     expect(transitionApplication("APPROVAL_PENDING", "APPROVED", evidence).state).toBe("APPROVED");
+    expect(() => transitionApplication("APPROVAL_PENDING", "APPROVED", { ...evidence, aggregateType: aggregateType === "release" ? "milestone" : "release" })).toThrow(InvalidTransitionError);
     const rejected = ApprovalRecordSchema.parse({ ...approvalDecision, decision: "REJECTED" });
     expect(transitionApplication("APPROVAL_PENDING", "REJECTED", { ...evidence, approvalDecision: rejected }).state).toBe("REJECTED");
     expect(() => transitionApplication("APPROVAL_PENDING", "APPROVED", { ...evidence, approvalDecision: undefined })).toThrow();
@@ -480,6 +488,8 @@ describe("lifecycle evidence schemas", () => {
     expect(() => TransactionRecordSchema.parse({ ...base, operationState: "SUBMITTED", arcTransaction: mockTransaction("PREPARED") })).toThrow();
     expect(TransactionRecordSchema.parse({ ...base, operationState: "SUBMITTED", arcTransaction: mockTransaction("SUBMITTED") })).toBeDefined();
     expect(TransactionRecordSchema.parse({ ...base, operationState: "RECONCILED", reconciliationId: "reconciliation:1", arcTransaction: mockTransaction("CONFIRMED") })).toBeDefined();
+    expect(TransactionRecordSchema.parse({ ...base, operationState: "FAILED", arcTransaction: mockTransaction("FAILED") })).toBeDefined();
+    expect(() => TransactionRecordSchema.parse({ ...base, approvalId: null, approvalBindingId: null, operationState: "FAILED", arcTransaction: mockTransaction("FAILED") })).toThrow();
     expect(() => TransactionRecordSchema.parse({ ...base, operationState: "FAILED", arcTransaction: mockTransaction("CONFIRMED") })).toThrow();
   });
   it("restricts LaunchVault value-moving records to USDC", async () => {
