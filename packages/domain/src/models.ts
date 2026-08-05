@@ -79,8 +79,8 @@ export const AgenticJobRefSchema = z.object({
   const escrowTransaction = value.escrowTransaction;
   if (escrowTransaction !== null && escrowTransaction.isMock !== value.isMock) context.addIssue({ code: "custom", message: "Job and prior escrow transaction mock/live indicators must match." });
   const escrowEvidenceValid =
-    escrowTransaction === null ||
-    (value.status === "REJECTED" && escrowTransaction.status === "CONFIRMED" && (
+    (escrowTransaction === null && (value.status !== "REJECTED" || value.deliverableReference === null)) ||
+    (value.status === "REJECTED" && escrowTransaction !== null && escrowTransaction.status === "CONFIRMED" && (
       (escrowTransaction.operationType === "JOB_FUND" && value.deliverableReference === null) ||
       (escrowTransaction.operationType === "JOB_SUBMIT" && value.deliverableReference !== null)
     ));
