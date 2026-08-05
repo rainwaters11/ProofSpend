@@ -190,24 +190,25 @@ export const SettlementRecordSchema = z.object({ id: Id, projectId: Id, releaseR
     jobTransaction.explorerUrl === transaction.explorerUrl &&
     jobTransaction.operationType === transaction.operationType &&
     jobTransaction.isMock === transaction.isMock;
-  const completionSettlementEligible = value.job?.status === "COMPLETED" && transactionMatchesJob;
-  const rejectionRefundEligible = value.job?.status === "REJECTED" && value.job.escrowTransaction !== null;
-  const expiredRefundEligible = value.job?.status === "EXPIRED" && value.job.escrowTransaction !== null && transactionMatchesJob;
-  const refundEligible = value.job === null || expiredRefundEligible || rejectionRefundEligible;
+  const completionSettlementEligible = value.job?.status === "COMPLETED" && transaction?.operationType === "JOB_EVALUATE" && transactionMatchesJob;
+  const rejectionRefundEligible = value.job?.status === "REJECTED" && value.job.escrowTransaction !== null && transaction?.operationType === "JOB_REJECT" && transactionMatchesJob;
+  const expiredRefundEligible = value.job?.status === "EXPIRED" && value.job.escrowTransaction !== null && transaction?.operationType === "REFUND" && transactionMatchesJob;
+  const genericSettlementEligible = value.job === null && transaction?.operationType === "SETTLEMENT";
+  const genericRefundEligible = value.job === null && transaction?.operationType === "REFUND";
   const allowed =
-    (value.state === "PENDING" && (transaction === null || (transaction.operationType === "SETTLEMENT" && ["PREPARED", "SUBMITTED"].includes(transaction.status)))) ||
-    (value.state === "CONFIRMED" && transaction?.status === "CONFIRMED" && (transaction.operationType === "SETTLEMENT" || (transaction.operationType === "JOB_EVALUATE" && completionSettlementEligible))) ||
-    (value.state === "REFUND_PENDING" && (transaction === null || (transaction.operationType === "REFUND" && ["PREPARED", "SUBMITTED"].includes(transaction.status)))) ||
-    (value.state === "REFUNDED" && transaction?.status === "CONFIRMED" && ((transaction.operationType === "REFUND" && refundEligible) || (transaction.operationType === "JOB_REJECT" && rejectionRefundEligible))) ||
-    (value.state === "RECONCILED" && transaction?.status === "CONFIRMED" && (transaction.operationType === "SETTLEMENT" || (transaction.operationType === "JOB_EVALUATE" && completionSettlementEligible) || (transaction.operationType === "REFUND" && refundEligible) || (transaction.operationType === "JOB_REJECT" && rejectionRefundEligible))) ||
-    (value.state === "FAILED" && (transaction === null || (transaction.status === "FAILED" && (transaction.operationType === "SETTLEMENT" || transaction.operationType === "REFUND"))));
+    (value.state === "PENDING" && (transaction === null || (genericSettlementEligible && ["PREPARED", "SUBMITTED"].includes(transaction.status)))) ||
+    (value.state === "CONFIRMED" && transaction?.status === "CONFIRMED" && (genericSettlementEligible || completionSettlementEligible)) ||
+    (value.state === "REFUND_PENDING" && (transaction === null || (genericRefundEligible && ["PREPARED", "SUBMITTED"].includes(transaction.status)))) ||
+    (value.state === "REFUNDED" && transaction?.status === "CONFIRMED" && (genericRefundEligible || expiredRefundEligible || rejectionRefundEligible)) ||
+    (value.state === "RECONCILED" && transaction?.status === "CONFIRMED" && (genericSettlementEligible || completionSettlementEligible || genericRefundEligible || expiredRefundEligible || rejectionRefundEligible)) ||
+    (value.state === "FAILED" && (transaction === null || (value.job === null && transaction.status === "FAILED" && (transaction.operationType === "SETTLEMENT" || transaction.operationType === "REFUND"))));
   if (!allowed) context.addIssue({ code: "custom", message: `${value.state} settlement requires compatible persisted transaction evidence.` });
   if (value.job !== null && transaction?.status === "CONFIRMED") {
     if (value.job.budget.asset !== value.amount.asset || value.job.budget.atomicUnits !== value.amount.atomicUnits) context.addIssue({ code: "custom", message: "Job-backed settlement amount must match the ERC-8183 job budget exactly." });
-    if (transaction.operationType === "SETTLEMENT" && value.job.status !== "COMPLETED") context.addIssue({ code: "custom", message: "Confirmed settlement requires a completed ERC-8183 job." });
+    if (transaction.operationType === "SETTLEMENT") context.addIssue({ code: "custom", message: "Job-backed completion must use the completed job's exact JOB_EVALUATE transaction." });
     if (transaction.operationType === "JOB_EVALUATE" && !completionSettlementEligible) context.addIssue({ code: "custom", message: "Confirmed evaluation settlement must match the completed job's exact Arc transaction evidence." });
-    if (transaction.operationType === "REFUND" && (value.job.status === "EXPIRED" ? !expiredRefundEligible : value.job.status === "REJECTED" ? value.job.escrowTransaction === null : true)) context.addIssue({ code: "custom", message: "Confirmed refund requires exact expired-job evidence or a rejected job with prior funded/submitted escrow evidence." });
-    if (transaction.operationType === "JOB_REJECT" && (value.job.status !== "REJECTED" || value.job.escrowTransaction === null || !transactionMatchesJob)) context.addIssue({ code: "custom", message: "Confirmed rejection refund must match the rejected job's exact Arc transaction evidence." });
+    if (transaction.operationType === "REFUND" && !expiredRefundEligible) context.addIssue({ code: "custom", message: "Job-backed REFUND evidence is reserved for the exact expired-job refund write." });
+    if (transaction.operationType === "JOB_REJECT" && !rejectionRefundEligible) context.addIssue({ code: "custom", message: "Confirmed rejection refund must match the rejected job's exact Arc transaction evidence." });
   }
   if (value.state === "RECONCILED" ? value.reconciliationId === null : value.reconciliationId !== null) context.addIssue({ code: "custom", message: "Settlement reconciliation reference must match RECONCILED state." });
 });
@@ -225,18 +226,22 @@ const DestinationProtocolTargetSchema = z.object({
 const Erc8183ProtocolTargetSchema = z.object({
   kind: z.literal("ERC8183"), standard: z.literal("ERC-8183"), network: z.literal(ARC_TESTNET_NETWORK), chainId: Id.refine(isSynthetic),
   contractReference: Id.refine(isSynthetic, "Issue #2 ERC-8183 contract references must be visibly synthetic."), jobId: Id.refine(isSynthetic, "Issue #2 job IDs must be visibly synthetic."),
-  method: z.enum(["JOB_FUND", "JOB_SUBMIT", "JOB_EVALUATE", "JOB_REJECT"]), parameterCommitment: Hash,
+  method: z.enum(["JOB_FUND", "JOB_SUBMIT", "JOB_EVALUATE", "JOB_REJECT", "CLAIM_REFUND"]), parameterCommitment: Hash,
   clientReference: Id.refine(isSynthetic), providerReference: Id.refine(isSynthetic), evaluatorReference: Id.refine(isSynthetic), destination: Id.refine(isSynthetic),
 }).strict();
 export const ProtocolTargetSchema = z.discriminatedUnion("kind", [DestinationProtocolTargetSchema, Erc8183ProtocolTargetSchema]);
 export const CanonicalExecutionIntentSchema = z.object({ version: z.literal(1), actionKind: ApprovalActionKindSchema, projectId: Id, releaseRequestId: Id, transactionRecordId: Id, intentId: Id, asset: z.literal(LAUNCHVAULT_SETTLEMENT_ASSET), atomicAmount: AtomicUnitsSchema, operationType: TransactionOperationTypeSchema, protocolTarget: ProtocolTargetSchema }).superRefine((value, context) => {
   const supportedActionPolicy = { SETTLEMENT: "RELEASE_APPROVAL", REFUND: "RELEASE_APPROVAL", JOB_FUND: "RELEASE_APPROVAL", JOB_SUBMIT: "JOB_SUBMISSION", JOB_EVALUATE: "JOB_EVALUATION", JOB_REJECT: "JOB_REJECTION" } as const;
   const isJobOperation = ["JOB_FUND", "JOB_SUBMIT", "JOB_EVALUATE", "JOB_REJECT"].includes(value.operationType);
-  if (isJobOperation !== (value.protocolTarget.kind === "ERC8183")) context.addIssue({ code: "custom", message: "Execution operation and protocol target are incompatible." });
+  const usesErc8183Target = value.protocolTarget.kind === "ERC8183";
+  if ((isJobOperation && !usesErc8183Target) || (usesErc8183Target && !isJobOperation && value.operationType !== "REFUND")) context.addIssue({ code: "custom", message: "Execution operation and protocol target are incompatible." });
   const expectedActionKind = supportedActionPolicy[value.operationType as keyof typeof supportedActionPolicy];
   if (expectedActionKind === undefined) context.addIssue({ code: "custom", message: `${value.operationType} execution authorization is deferred to its owning issue.` });
   else if (value.actionKind !== expectedActionKind) context.addIssue({ code: "custom", message: `${value.operationType} requires ${expectedActionKind} authorization.` });
-  if (value.protocolTarget.kind === "ERC8183" && (!["JOB_FUND", "JOB_SUBMIT", "JOB_EVALUATE", "JOB_REJECT"].includes(value.operationType) || value.protocolTarget.method !== value.operationType)) context.addIssue({ code: "custom", message: "ERC-8183 execution method must match the supported operation type." });
+  if (usesErc8183Target) {
+    const expectedMethod = value.operationType === "REFUND" ? "CLAIM_REFUND" : isJobOperation ? value.operationType : null;
+    if (expectedMethod === null || value.protocolTarget.method !== expectedMethod) context.addIssue({ code: "custom", message: "ERC-8183 execution method must match the supported operation type." });
+  }
 });
 export type CanonicalExecutionIntent = z.infer<typeof CanonicalExecutionIntentSchema>;
 export const ExecutionAuthorizationBindingSchema = z.object({ id: Id, releaseRequestId: Id, approvalId: Id, intentId: Id, exactIntentHash: Hash, transactionRecordId: Id, executionIntent: CanonicalExecutionIntentSchema, status: z.enum(["ACTIVE", "CONSUMED", "REVOKED"]), consumedAt: Time.nullable(), consumedByTransactionId: Id.nullable(), createdAt: Time }).superRefine((value, context) => {
