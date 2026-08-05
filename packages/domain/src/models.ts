@@ -204,7 +204,7 @@ export const SettlementRecordSchema = z.object({ id: Id, projectId: Id, releaseR
     (value.state === "REFUND_PENDING" && ((transaction === null && pendingJobEligible) || (genericRefundEligible && ["PREPARED", "SUBMITTED"].includes(transaction.status)))) ||
     (value.state === "REFUNDED" && transaction?.status === "CONFIRMED" && (genericRefundEligible || expiredRefundEligible || rejectionRefundEligible)) ||
     (value.state === "RECONCILED" && transaction?.status === "CONFIRMED" && (genericSettlementEligible || completionSettlementEligible || genericRefundEligible || expiredRefundEligible || rejectionRefundEligible)) ||
-    (value.state === "FAILED" && ((transaction === null && pendingJobEligible) || (value.job === null && transaction.status === "FAILED" && (transaction.operationType === "SETTLEMENT" || transaction.operationType === "REFUND"))));
+    (value.state === "FAILED" && ((transaction === null && pendingJobEligible) || (value.job === null && transaction?.status === "FAILED" && (transaction.operationType === "SETTLEMENT" || transaction.operationType === "REFUND"))));
   if (!allowed) context.addIssue({ code: "custom", message: `${value.state} settlement requires compatible persisted transaction evidence.` });
   if (value.job !== null && transaction?.status === "CONFIRMED") {
     if (value.job.budget.asset !== value.amount.asset || value.job.budget.atomicUnits !== value.amount.atomicUnits) context.addIssue({ code: "custom", message: "Job-backed settlement amount must match the ERC-8183 job budget exactly." });
