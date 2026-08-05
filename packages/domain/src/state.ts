@@ -245,6 +245,9 @@ export async function transitionAgenticJob(from: AgenticJobStatus, to: AgenticJo
   const current = AgenticJobRefSchema.safeParse(context.currentJobEvidence);
   const target = AgenticJobRefSchema.safeParse(context.jobEvidence);
   if (!current.success || !target.success || !current.data.isMock || !target.data.isMock || current.data.jobId !== context.aggregateId || target.data.jobId !== context.aggregateId || current.data.status !== from || target.data.status !== to || !immutableJobFieldsMatch(current.data, target.data)) throw new InvalidTransitionError("agentic job lifecycle evidence", from, to);
+  const occurredAt = Date.parse(context.occurredAt);
+  const expiresAt = Date.parse(current.data.expiresAt);
+  if (!Number.isFinite(occurredAt) || !Number.isFinite(expiresAt) || occurredAt >= expiresAt) throw new InvalidTransitionError("agentic job expiry gate", from, to);
   if (to === "FUNDED") {
     if (target.data.deliverableReference !== null || target.data.reasonReference !== null || target.data.transaction?.isMock !== true || target.data.transaction.status !== "CONFIRMED" || target.data.transaction.operationType !== "JOB_FUND") throw new InvalidTransitionError("agentic job funding evidence", from, to);
     await validateJobExecutionAuthorization(context, target.data, from, to, { actionKind: "RELEASE_APPROVAL", actorType: "FOUNDER", actorId: target.data.clientAddress, authorizedActorId: context.authorizedApproverId, decision: "APPROVED", operationType: "JOB_FUND" });
