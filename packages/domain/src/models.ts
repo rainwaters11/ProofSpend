@@ -180,7 +180,7 @@ export type ReleaseRequest = z.infer<typeof ReleaseRequestSchema>;
 export const SettlementRecordSchema = z.object({ id: Id, projectId: Id, releaseRequestId: Id, reconciliationId: Id.nullable(), idempotencyKey: Id, amount: SettlementMoneyAmountSchema, state: z.enum(["PENDING", "CONFIRMED", "REFUND_PENDING", "REFUNDED", "RECONCILED", "FAILED"]), job: AgenticJobRefSchema.nullable(), transaction: ArcTransactionRefSchema.nullable(), updatedAt: Time }).superRefine((value, context) => {
   const transaction = value.transaction;
   const rejectionRefundEligible = value.job?.status === "REJECTED" && value.job.escrowTransaction !== null;
-  const refundEligible = value.job === null || value.job.status === "EXPIRED" || rejectionRefundEligible;
+  const refundEligible = value.job === null || (value.job.status === "EXPIRED" && value.job.escrowTransaction !== null) || rejectionRefundEligible;
   const allowed =
     (value.state === "PENDING" && (transaction === null || (transaction.operationType === "SETTLEMENT" && ["PREPARED", "SUBMITTED"].includes(transaction.status)))) ||
     (value.state === "CONFIRMED" && transaction?.operationType === "SETTLEMENT" && transaction.status === "CONFIRMED") ||
