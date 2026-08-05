@@ -13,7 +13,7 @@ const applicationTransitions: Record<ProofSpendApplicationState, readonly ProofS
   SUBMITTED: ["CONFIRMED", "FAILED"], CONFIRMED: ["RECONCILED"], REJECTED: [], FAILED: [], RECONCILED: [],
 };
 const jobTransitions: Record<AgenticJobStatus, readonly AgenticJobStatus[]> = {
-  OPEN: ["FUNDED", "REJECTED", "EXPIRED"], FUNDED: ["SUBMITTED", "REJECTED", "EXPIRED"], SUBMITTED: ["COMPLETED", "REJECTED", "EXPIRED"],
+  OPEN: ["FUNDED", "REJECTED"], FUNDED: ["SUBMITTED", "REJECTED", "EXPIRED"], SUBMITTED: ["COMPLETED", "REJECTED", "EXPIRED"],
   COMPLETED: [], REJECTED: [], EXPIRED: [],
 };
 export interface TransitionContext {
@@ -57,8 +57,7 @@ const jobAuthority: Partial<Record<JobEdge, JobAuthorityRule>> = {
   "FUNDED->REJECTED": { actorType: "ADAPTER", identifier: "authorizedAdapterId" },
   "SUBMITTED->COMPLETED": { actorType: "ADAPTER", identifier: "authorizedAdapterId" },
   "SUBMITTED->REJECTED": { actorType: "ADAPTER", identifier: "authorizedAdapterId" },
-  "OPEN->EXPIRED": { actorType: "SYSTEM", identifier: "authorizedSystemId" },
-  "FUNDED->EXPIRED": { actorType: "SYSTEM", identifier: "authorizedSystemId" },
+   "FUNDED->EXPIRED": { actorType: "SYSTEM", identifier: "authorizedSystemId" },
   "SUBMITTED->EXPIRED": { actorType: "SYSTEM", identifier: "authorizedSystemId" },
 };
 function event(context: TransitionContext, from: string, to: string): AuditEvent {
@@ -222,7 +221,7 @@ async function validateJobExecutionAuthorization(context: TransitionContext, tar
     submission.data.transactionId !== context.expectedTransactionId ||
     submission.data.transactionId !== binding.data.transactionRecordId ||
     submission.data.idempotencyKey !== context.idempotencyKey ||
-    !["SUBMITTED", "CONFIRMED"].includes(submission.data.arcTransaction.status) ||
+    submission.data.arcTransaction.status !== target.transaction.status ||
     submission.data.arcTransaction.transactionHash !== target.transaction.transactionHash ||
     submission.data.arcTransaction.network !== target.transaction.network ||
     submission.data.arcTransaction.chainId !== target.transaction.chainId ||
