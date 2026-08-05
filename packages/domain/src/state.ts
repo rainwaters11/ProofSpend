@@ -29,6 +29,11 @@ export interface TransitionContext {
 }
 type ApplicationEdge = `${ProofSpendApplicationState}->${ProofSpendApplicationState}`;
 type AuthorityRule = { actorTypes: readonly Actor["actorType"][]; identifier: "authorizedSystemId" | "authorizedApproverId" | "authorizedAdapterId" };
+type ApplicationApprovalPolicy = { actionKind: "RELEASE_APPROVAL" | "MILESTONE_EVALUATION"; actorType: "FOUNDER" | "EVALUATOR" };
+const applicationApprovalPolicy: Readonly<Record<"release" | "milestone", ApplicationApprovalPolicy>> = {
+  release: { actionKind: "RELEASE_APPROVAL", actorType: "FOUNDER" },
+  milestone: { actionKind: "MILESTONE_EVALUATION", actorType: "EVALUATOR" },
+};
 const applicationAuthority: Partial<Record<ApplicationEdge, AuthorityRule>> = {
   "INCOMPLETE->NEEDS_REVIEW": { actorTypes: ["SYSTEM"], identifier: "authorizedSystemId" },
   "NEEDS_REVIEW->INCOMPLETE": { actorTypes: ["SYSTEM"], identifier: "authorizedSystemId" },
@@ -64,7 +69,12 @@ export function transitionApplication(from: ProofSpendApplicationState, to: Proo
   if (from === "APPROVAL_PENDING" && (to === "APPROVED" || to === "REJECTED")) {
     const approval = ApprovalRecordSchema.safeParse(context.approvalDecision);
     const expectedDecision = to === "APPROVED" ? "APPROVED" : "REJECTED";
-    if (!approval.success || approval.data.aggregateId !== context.aggregateId || approval.data.intentId !== context.expectedIntentId || approval.data.id !== context.expectedApprovalId || approval.data.exactIntentHash !== context.expectedExactIntentHash || approval.data.decision !== expectedDecision || approval.data.approver === null || approval.data.decidedAt === null || approval.data.approver.actorType !== approval.data.authorizedActorType || approval.data.approver.actorId !== approval.data.authorizedActorId || context.actor.actorType !== approval.data.approver.actorType || context.actor.actorId !== approval.data.approver.actorId) throw new InvalidTransitionError("ProofSpend application approval evidence", from, to);
+    const policy = context.aggregateType === "release"
+      ? applicationApprovalPolicy.release
+      : context.aggregateType === "milestone"
+        ? applicationApprovalPolicy.milestone
+        : null;
+    if (!approval.success || policy === null || approval.data.actionKind !== policy.actionKind || approval.data.authorizedActorType !== policy.actorType || approval.data.aggregateId !== context.aggregateId || approval.data.intentId !== context.expectedIntentId || approval.data.id !== context.expectedApprovalId || approval.data.exactIntentHash !== context.expectedExactIntentHash || approval.data.decision !== expectedDecision || approval.data.approver === null || approval.data.decidedAt === null || approval.data.approver.actorType !== approval.data.authorizedActorType || approval.data.approver.actorId !== approval.data.authorizedActorId || context.actor.actorType !== approval.data.approver.actorType || context.actor.actorId !== approval.data.approver.actorId) throw new InvalidTransitionError("ProofSpend application approval evidence", from, to);
   }
   if (from === "APPROVED" && to === "PREPARED") validateLifecycleTransaction(context, "PREPARED", from, to);
   if ((from === "PREPARED" || from === "SUBMITTED") && to === "FAILED") validateLifecycleTransaction(context, "FAILED", from, to);
