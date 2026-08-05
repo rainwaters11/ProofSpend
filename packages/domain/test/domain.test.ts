@@ -73,7 +73,7 @@ const jobClientRejectionAuthorization = async (job: ReturnType<typeof mockJob>, 
     protocolTarget: { kind: "ERC8183", standard: "ERC-8183", network: job.transaction.network, chainId: job.transaction.chainId, contractReference: job.contractAddress, jobId: job.jobId, method: "JOB_REJECT", parameterCommitment, clientReference: job.clientAddress, providerReference: job.providerAddress, evaluatorReference: job.evaluatorAddress, destination: job.contractAddress },
   });
   const exactIntentHash = await hashCanonicalExecutionIntent(executionIntent);
-  const jobApprovalDecision = ApprovalRecordSchema.parse({ id: approvalId, aggregateId: job.jobId, intentId, actionKind: "JOB_REJECTION", authorizedActorType: "FOUNDER", authorizedActorId: job.clientAddress, exactIntentHash, idempotencyKey: "approval:job-reject:client:key", decision: "REJECTED", approver: { actorId: job.clientAddress, actorType: "FOUNDER" }, expiresAt: "2027-01-01T00:00:00.000Z", decidedAt: context.occurredAt });
+  const jobApprovalDecision = ApprovalRecordSchema.parse({ id: approvalId, aggregateId: job.jobId, intentId, actionKind: "JOB_REJECTION", authorizedActorType: "FOUNDER", authorizedActorId: job.clientAddress, exactIntentHash, idempotencyKey: "approval:job-reject:client:key", decision: "APPROVED", approver: { actorId: job.clientAddress, actorType: "FOUNDER" }, expiresAt: "2027-01-01T00:00:00.000Z", decidedAt: context.occurredAt });
   const executionBinding = ExecutionAuthorizationBindingSchema.parse({ id: bindingId, releaseRequestId: job.jobId, approvalId, intentId, exactIntentHash, transactionRecordId: transactionId, executionIntent, status: "CONSUMED", consumedAt: context.occurredAt, consumedByTransactionId: transactionId, createdAt: context.occurredAt });
   const idempotencyKey = "submission:job-reject:client:key";
   const submissionOperation = SubmissionOperationRecordSchema.parse({ id: "submission:job-reject:client", transactionId, idempotencyKey, arcTransaction: job.transaction, createdAt: context.occurredAt });
@@ -94,7 +94,7 @@ const jobEvaluationAuthorization = async (job: ReturnType<typeof mockJob>, decis
     protocolTarget: { kind: "ERC8183", standard: "ERC-8183", network: job.transaction.network, chainId: job.transaction.chainId, contractReference: job.contractAddress, jobId: job.jobId, method: operationType, parameterCommitment, clientReference: job.clientAddress, providerReference: job.providerAddress, evaluatorReference: job.evaluatorAddress, destination: job.contractAddress },
   });
   const exactIntentHash = await hashCanonicalExecutionIntent(executionIntent);
-  const jobApprovalDecision = ApprovalRecordSchema.parse({ id: approvalId, aggregateId: job.jobId, intentId, actionKind, authorizedActorType: "EVALUATOR", authorizedActorId: job.evaluatorAddress, exactIntentHash, idempotencyKey: `approval:${decision}:key`, decision, approver: { actorId: job.evaluatorAddress, actorType: "EVALUATOR" }, expiresAt: "2027-01-01T00:00:00.000Z", decidedAt: context.occurredAt });
+  const jobApprovalDecision = ApprovalRecordSchema.parse({ id: approvalId, aggregateId: job.jobId, intentId, actionKind, authorizedActorType: "EVALUATOR", authorizedActorId: job.evaluatorAddress, exactIntentHash, idempotencyKey: `approval:${decision}:key`, decision: "APPROVED", approver: { actorId: job.evaluatorAddress, actorType: "EVALUATOR" }, expiresAt: "2027-01-01T00:00:00.000Z", decidedAt: context.occurredAt });
   const executionBinding = ExecutionAuthorizationBindingSchema.parse({ id: bindingId, releaseRequestId: job.jobId, approvalId, intentId, exactIntentHash, transactionRecordId: transactionId, executionIntent, status: "CONSUMED", consumedAt: context.occurredAt, consumedByTransactionId: transactionId, createdAt: context.occurredAt });
   const idempotencyKey = `submission:job-evaluate:${decision.toLowerCase()}:key`;
   const submissionOperation = SubmissionOperationRecordSchema.parse({ id: `submission:job-evaluate:${decision.toLowerCase()}`, transactionId, idempotencyKey, arcTransaction: job.transaction, createdAt: context.occurredAt });
@@ -388,7 +388,9 @@ describe("separate state machines", () => {
     const openRejected = AgenticJobRefSchema.parse({ ...mockJob("REJECTED", mockTransaction("CONFIRMED", "JOB_REJECT")), deliverableReference: null });
     const openAuthorization = await jobClientRejectionAuthorization(openRejected);
     const openContext = { ...context, aggregateId: open.jobId, actor: adapter, authorizedAdapterId: adapter.actorId, currentJobEvidence: open, jobEvidence: openRejected, ...openAuthorization };
+    expect(openAuthorization.jobApprovalDecision.decision).toBe("APPROVED");
     expect((await transitionAgenticJob("OPEN", "REJECTED", openContext)).status).toBe("REJECTED");
+    await expect(transitionAgenticJob("OPEN", "REJECTED", { ...openContext, jobApprovalDecision: { ...openAuthorization.jobApprovalDecision, decision: "REJECTED" } })).rejects.toThrow(InvalidTransitionError);
     await expect(transitionAgenticJob("OPEN", "REJECTED", { ...openContext, authorizedApproverId: "mock:other-client" })).rejects.toThrow(InvalidTransitionError);
     const openEvaluatorAuthorization = await jobEvaluationAuthorization(openRejected, "REJECTED");
     await expect(transitionAgenticJob("OPEN", "REJECTED", { ...openContext, ...openEvaluatorAuthorization, authorizedApproverId: undefined })).rejects.toThrow(InvalidTransitionError);
@@ -397,7 +399,10 @@ describe("separate state machines", () => {
     const fundedRejected = AgenticJobRefSchema.parse({ ...openRejected });
     const fundedAuthorization = await jobEvaluationAuthorization(fundedRejected, "REJECTED");
     const fundedContext = { ...context, aggregateId: funded.jobId, actor: adapter, authorizedAdapterId: adapter.actorId, currentJobEvidence: funded, jobEvidence: fundedRejected, ...fundedAuthorization };
+    expect(fundedAuthorization.jobApprovalDecision.decision).toBe("APPROVED");
+    expect(fundedAuthorization.jobEvaluationEvidence.decision).toBe("REJECTED");
     expect((await transitionAgenticJob("FUNDED", "REJECTED", fundedContext)).status).toBe("REJECTED");
+    await expect(transitionAgenticJob("FUNDED", "REJECTED", { ...fundedContext, jobApprovalDecision: { ...fundedAuthorization.jobApprovalDecision, decision: "REJECTED" } })).rejects.toThrow(InvalidTransitionError);
     await expect(transitionAgenticJob("FUNDED", "REJECTED", { ...fundedContext, authorizedEvaluatorId: "mock:other-evaluator" })).rejects.toThrow(InvalidTransitionError);
     await expect(transitionAgenticJob("FUNDED", "REJECTED", { ...fundedContext, jobEvaluationEvidence: undefined })).rejects.toThrow(InvalidTransitionError);
     await expect(transitionAgenticJob("FUNDED", "REJECTED", { ...fundedContext, jobEvidence: { ...fundedRejected, deliverableReference: "mock:forged-deliverable" } })).rejects.toThrow(InvalidTransitionError);
