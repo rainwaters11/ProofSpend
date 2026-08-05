@@ -18,7 +18,7 @@ const jobTransitions: Record<AgenticJobStatus, readonly AgenticJobStatus[]> = {
 };
 export interface TransitionContext {
   aggregateType: string; aggregateId: string; eventId: string; occurredAt: string; actor: Actor;
-  authorizedSystemId?: string; authorizedApproverId?: string; authorizedAdapterId?: string; authorizedEvaluatorId?: string; idempotencyKey?: string;
+  authorizedSystemId?: string; authorizedApproverId?: string; authorizedAdapterId?: string; authorizedProviderId?: string; authorizedEvaluatorId?: string; idempotencyKey?: string;
   confirmationTransaction?: TransactionRecord; expectedTransactionId?: string; expectedProjectId?: string; expectedReleaseRequestId?: string; expectedOperationType?: NonNullable<TransactionRecord["arcTransaction"]>["operationType"];
   expectedIntentId?: string; expectedApprovalId?: string; expectedApprovalBindingId?: string; expectedExactIntentHash?: string;
   submissionTransaction?: TransactionRecord; executionBinding?: ExecutionAuthorizationBinding; submissionOperation?: SubmissionOperationRecord;
@@ -88,13 +88,15 @@ function validateLifecycleTransaction(context: TransitionContext, status: "PREPA
   if (transaction === null || transaction.operationState !== status || transaction.arcTransaction?.status !== status || transaction.releaseRequestId !== context.aggregateId || transaction.id !== context.expectedTransactionId || transaction.projectId !== context.expectedProjectId || transaction.releaseRequestId !== context.expectedReleaseRequestId || transaction.intentId !== context.expectedIntentId || transaction.approvalId !== context.expectedApprovalId || transaction.approvalBindingId !== context.expectedApprovalBindingId) throw new InvalidTransitionError("ProofSpend application transaction evidence", from, to);
 }
 
-function requiredApprovalPolicy(operationType: NonNullable<TransactionRecord["arcTransaction"]>["operationType"]): { actionKind: ApprovalRecord["actionKind"]; actorType: "FOUNDER" | "EVALUATOR" } | null {
+function requiredApprovalPolicy(operationType: NonNullable<TransactionRecord["arcTransaction"]>["operationType"]): { actionKind: ApprovalRecord["actionKind"]; actorType: "FOUNDER" | "PROVIDER" | "EVALUATOR" } | null {
   switch (operationType) {
     case "SETTLEMENT": case "REFUND": case "JOB_FUND":
       return { actionKind: "RELEASE_APPROVAL", actorType: "FOUNDER" };
+    case "JOB_SUBMIT":
+      return { actionKind: "JOB_SUBMISSION", actorType: "PROVIDER" };
     case "JOB_EVALUATE":
       return { actionKind: "JOB_EVALUATION", actorType: "EVALUATOR" };
-    case "JOB_CREATE": case "JOB_SUBMIT": case "IDENTITY_REGISTRATION": case "REPUTATION_WRITE":
+    case "JOB_CREATE": case "IDENTITY_REGISTRATION": case "REPUTATION_WRITE":
       return null;
   }
   return null;
@@ -160,6 +162,61 @@ const mutableJobEvidenceMatches = (current: AgenticJobRef, target: AgenticJobRef
     transactionMatches;
 };
 
+function validateProviderSubmissionAuthorization(context: TransitionContext, target: AgenticJobRef, from: AgenticJobStatus, to: AgenticJobStatus): void {
+  const approval = ApprovalRecordSchema.safeParse(context.jobApprovalDecision);
+  const binding = ExecutionAuthorizationBindingSchema.safeParse(context.executionBinding);
+  if (!approval.success || !binding.success || target.transaction === null) throw new InvalidTransitionError("agentic job provider submission authorization", from, to);
+  const intent = binding.data.executionIntent;
+  const protocolTarget = intent.protocolTarget;
+  if (protocolTarget.kind !== "ERC8183") throw new InvalidTransitionError("agentic job provider submission authorization", from, to);
+  const decidedAt = assertFiniteTime(approval.data.decidedAt);
+  const consumedAt = assertFiniteTime(binding.data.consumedAt);
+  const occurredAt = assertFiniteTime(context.occurredAt);
+  const expiresAt = assertFiniteTime(approval.data.expiresAt);
+  if (
+    approval.data.actionKind !== "JOB_SUBMISSION" ||
+    approval.data.authorizedActorType !== "PROVIDER" ||
+    approval.data.authorizedActorId !== target.providerAddress ||
+    approval.data.authorizedActorId !== context.authorizedProviderId ||
+    approval.data.approver?.actorType !== "PROVIDER" ||
+    approval.data.approver.actorId !== approval.data.authorizedActorId ||
+    approval.data.aggregateId !== target.jobId ||
+    approval.data.aggregateId !== context.aggregateId ||
+    approval.data.decision !== "APPROVED" ||
+    approval.data.id !== context.expectedApprovalId ||
+    approval.data.id !== binding.data.approvalId ||
+    approval.data.intentId !== context.expectedIntentId ||
+    approval.data.intentId !== binding.data.intentId ||
+    approval.data.exactIntentHash !== context.expectedExactIntentHash ||
+    approval.data.exactIntentHash !== binding.data.exactIntentHash ||
+    binding.data.id !== context.expectedApprovalBindingId ||
+    binding.data.status !== "CONSUMED" ||
+    binding.data.releaseRequestId !== target.jobId ||
+    binding.data.releaseRequestId !== context.expectedReleaseRequestId ||
+    binding.data.transactionRecordId !== context.expectedTransactionId ||
+    binding.data.consumedByTransactionId !== context.expectedTransactionId ||
+    decidedAt === null || consumedAt === null || occurredAt === null || expiresAt === null ||
+    decidedAt > consumedAt || consumedAt > occurredAt || occurredAt >= expiresAt ||
+    intent.actionKind !== "JOB_SUBMISSION" ||
+    intent.projectId !== context.expectedProjectId ||
+    intent.releaseRequestId !== target.jobId ||
+    intent.transactionRecordId !== context.expectedTransactionId ||
+    intent.intentId !== context.expectedIntentId ||
+    intent.asset !== target.budget.asset ||
+    intent.atomicAmount !== target.budget.atomicUnits ||
+    intent.operationType !== "JOB_SUBMIT" ||
+    protocolTarget.method !== "JOB_SUBMIT" ||
+    protocolTarget.jobId !== target.jobId ||
+    protocolTarget.contractReference !== target.contractAddress ||
+    protocolTarget.clientReference !== target.clientAddress ||
+    protocolTarget.providerReference !== target.providerAddress ||
+    protocolTarget.evaluatorReference !== target.evaluatorAddress ||
+    protocolTarget.destination !== target.providerAddress ||
+    protocolTarget.network !== target.transaction.network ||
+    protocolTarget.chainId !== target.transaction.chainId
+  ) throw new InvalidTransitionError("agentic job provider submission authorization", from, to);
+}
+
 
 export function transitionAgenticJob(from: AgenticJobStatus, to: AgenticJobStatus, context: TransitionContext) {
   if (!jobTransitions[from].includes(to)) throw new InvalidTransitionError("agentic job", from, to);
@@ -177,7 +234,10 @@ export function transitionAgenticJob(from: AgenticJobStatus, to: AgenticJobStatu
   const target = AgenticJobRefSchema.safeParse(context.jobEvidence);
   if (!current.success || !target.success || !current.data.isMock || !target.data.isMock || current.data.jobId !== context.aggregateId || target.data.jobId !== context.aggregateId || current.data.status !== from || target.data.status !== to || !immutableJobFieldsMatch(current.data, target.data)) throw new InvalidTransitionError("agentic job lifecycle evidence", from, to);
   if (to === "FUNDED" && (target.data.deliverableReference !== null || target.data.reasonReference !== null || target.data.transaction?.isMock !== true || target.data.transaction.status !== "CONFIRMED" || target.data.transaction.operationType !== "JOB_FUND")) throw new InvalidTransitionError("agentic job funding evidence", from, to);
-  if (to === "SUBMITTED" && (target.data.deliverableReference === null || target.data.reasonReference !== null || target.data.transaction?.isMock !== true || !["SUBMITTED", "CONFIRMED"].includes(target.data.transaction.status) || target.data.transaction.operationType !== "JOB_SUBMIT")) throw new InvalidTransitionError("agentic job submission evidence", from, to);
+  if (to === "SUBMITTED") {
+    if (target.data.deliverableReference === null || target.data.reasonReference !== null || target.data.transaction?.isMock !== true || !["SUBMITTED", "CONFIRMED"].includes(target.data.transaction.status) || target.data.transaction.operationType !== "JOB_SUBMIT") throw new InvalidTransitionError("agentic job submission evidence", from, to);
+    validateProviderSubmissionAuthorization(context, target.data, from, to);
+  }
   if (to === "COMPLETED" || to === "REJECTED") {
     const approval = ApprovalRecordSchema.safeParse(context.jobApprovalDecision);
     const decision = to === "COMPLETED" ? "APPROVED" : "REJECTED";
