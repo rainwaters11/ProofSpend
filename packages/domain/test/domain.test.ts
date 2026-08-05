@@ -316,7 +316,20 @@ describe("separate state machines", () => {
     }
     const refundPrepared = TransactionRecordSchema.parse({ ...prepared, arcTransaction: mockTransaction("PREPARED", "REFUND") });
     expect(transitionApplication("APPROVED", "PREPARED", evidence(refundPrepared)).state).toBe("PREPARED");
-    const failed = makeTransaction("FAILED"); expect(transitionApplication("PREPARED", "FAILED", evidence(failed)).state).toBe("FAILED"); expect(transitionApplication("SUBMITTED", "FAILED", evidence(failed)).state).toBe("FAILED");
+    const failed = makeTransaction("FAILED");
+    expect(transitionApplication("PREPARED", "FAILED", evidence(failed)).state).toBe("FAILED");
+    const failedSubmission = TransactionRecordSchema.parse({ ...failed, arcTransaction: { ...mockTransaction("FAILED"), transactionHash: "mock:transaction" } });
+    const priorSubmittedTransaction = TransactionRecordSchema.parse({ ...failedSubmission, operationState: "SUBMITTED", arcTransaction: mockTransaction("SUBMITTED") });
+    const priorSubmissionOperation = SubmissionOperationRecordSchema.parse({ id: "submission:failed", transactionId: priorSubmittedTransaction.id, idempotencyKey: "submission:failed:key", arcTransaction: priorSubmittedTransaction.arcTransaction!, createdAt: context.occurredAt });
+    const failedSubmissionEvidence = { ...evidence(failedSubmission), submissionTransaction: priorSubmittedTransaction, submissionOperation: priorSubmissionOperation, idempotencyKey: priorSubmissionOperation.idempotencyKey };
+    expect(transitionApplication("SUBMITTED", "FAILED", failedSubmissionEvidence).state).toBe("FAILED");
+    expect(() => transitionApplication("SUBMITTED", "FAILED", { ...failedSubmissionEvidence, submissionTransaction: undefined })).toThrow(InvalidTransitionError);
+    expect(() => transitionApplication("SUBMITTED", "FAILED", { ...failedSubmissionEvidence, submissionOperation: undefined })).toThrow(InvalidTransitionError);
+    expect(() => transitionApplication("SUBMITTED", "FAILED", { ...failedSubmissionEvidence, idempotencyKey: "submission:other:key" })).toThrow(InvalidTransitionError);
+    expect(() => transitionApplication("SUBMITTED", "FAILED", { ...failedSubmissionEvidence, lifecycleTransaction: { ...failedSubmission, idempotencyKey: "transaction:other:key" } })).toThrow(InvalidTransitionError);
+    expect(() => transitionApplication("SUBMITTED", "FAILED", { ...failedSubmissionEvidence, lifecycleTransaction: { ...failedSubmission, arcTransaction: { ...failedSubmission.arcTransaction!, transactionHash: "mock:other-failure" } } })).toThrow(InvalidTransitionError);
+    expect(() => transitionApplication("SUBMITTED", "FAILED", { ...failedSubmissionEvidence, submissionTransaction: { ...priorSubmittedTransaction, arcTransaction: { ...priorSubmittedTransaction.arcTransaction!, transactionHash: "mock:other-submission" } } })).toThrow(InvalidTransitionError);
+    expect(() => transitionApplication("SUBMITTED", "FAILED", { ...failedSubmissionEvidence, submissionOperation: { ...priorSubmissionOperation, arcTransaction: { ...priorSubmissionOperation.arcTransaction, operationType: "REFUND" } } })).toThrow(InvalidTransitionError);
     expect(() => transitionApplication("PREPARED", "FAILED", { ...context, actor: adapter, authorizedAdapterId: adapter.actorId })).toThrow();
     expect(() => transitionApplication("PREPARED", "FAILED", { ...evidence(failed), lifecycleTransaction: prepared })).toThrow();
   });
