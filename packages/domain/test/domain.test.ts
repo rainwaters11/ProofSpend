@@ -402,6 +402,7 @@ describe("separate state machines", () => {
     await expect(transitionAgenticJob("SUBMITTED", "COMPLETED", { ...completedContext, jobEvidence: { ...completed, deliverableReference: "mock:replacement" } })).rejects.toThrow(InvalidTransitionError);
     await expect(transitionAgenticJob("SUBMITTED", "COMPLETED", { ...completedContext, jobEvidence: { ...completed, reasonReference: "mock:unapproved-attestation" } })).rejects.toThrow(InvalidTransitionError);
     await expect(transitionAgenticJob("SUBMITTED", "REJECTED", { ...rejectedContext, jobEvidence: { ...rejected, reasonReference: null } })).rejects.toThrow(InvalidTransitionError);
+    await expect(transitionAgenticJob("SUBMITTED", "REJECTED", { ...rejectedContext, jobEvidence: { ...rejected, escrowTransaction: { ...submittedCurrent.transaction!, transactionHash: "mock:forged-prior-submission" } } })).rejects.toThrow(InvalidTransitionError);
     await expect(transitionAgenticJob("SUBMITTED", "REJECTED", { ...rejectedContext, jobEvaluationEvidence: { ...rejectedAuthorization.jobEvaluationEvidence, transactionHash: "mock:other" } })).rejects.toThrow(InvalidTransitionError);
     const evaluationTarget = completedAuthorization.executionBinding.executionIntent.protocolTarget;
     if (evaluationTarget.kind !== "ERC8183") throw new Error("Expected an ERC-8183 evaluation target.");
@@ -444,6 +445,7 @@ describe("separate state machines", () => {
     await expect(transitionAgenticJob("FUNDED", "REJECTED", { ...fundedContext, authorizedEvaluatorId: "mock:other-evaluator" })).rejects.toThrow(InvalidTransitionError);
     await expect(transitionAgenticJob("FUNDED", "REJECTED", { ...fundedContext, jobEvaluationEvidence: undefined })).rejects.toThrow(InvalidTransitionError);
     await expect(transitionAgenticJob("FUNDED", "REJECTED", { ...fundedContext, jobEvidence: { ...fundedRejected, deliverableReference: "mock:forged-deliverable" } })).rejects.toThrow(InvalidTransitionError);
+    await expect(transitionAgenticJob("FUNDED", "REJECTED", { ...fundedContext, jobEvidence: { ...fundedRejected, escrowTransaction: { ...funded.transaction!, blockHash: "mock:forged-prior-funding-block" } } })).rejects.toThrow(InvalidTransitionError);
     await expect(transitionAgenticJob("FUNDED", "REJECTED", { ...fundedContext, ...await jobClientRejectionAuthorization(fundedRejected) })).rejects.toThrow(InvalidTransitionError);
   });
   it("evidence-gates funding, submission, and expiry", async () => {
