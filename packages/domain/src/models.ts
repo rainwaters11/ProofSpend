@@ -80,7 +80,7 @@ export const AgenticJobRefSchema = z.object({
   const statusEvidenceValid =
     (value.status === "OPEN" && value.deliverableReference === null && value.reasonReference === null && transaction === null) ||
     (value.status === "FUNDED" && value.deliverableReference === null && value.reasonReference === null && transaction?.operationType === "JOB_FUND" && transaction.status === "CONFIRMED") ||
-    (value.status === "SUBMITTED" && value.deliverableReference !== null && value.reasonReference === null && transaction?.operationType === "JOB_SUBMIT" && (transaction.status === "SUBMITTED" || transaction.status === "CONFIRMED")) ||
+    (value.status === "SUBMITTED" && value.deliverableReference !== null && value.reasonReference === null && transaction?.operationType === "JOB_SUBMIT" && transaction.status === "CONFIRMED") ||
     (value.status === "COMPLETED" && value.deliverableReference !== null && transaction?.operationType === "JOB_EVALUATE" && transaction.status === "CONFIRMED") ||
     (value.status === "REJECTED" && transaction?.operationType === "JOB_REJECT" && transaction.status === "CONFIRMED") ||
     (value.status === "EXPIRED" && value.reasonReference === null && transaction?.operationType === "REFUND" && transaction.status === "CONFIRMED");
@@ -172,14 +172,15 @@ export const SettlementRecordSchema = z.object({ id: Id, projectId: Id, releaseR
     (value.state === "PENDING" && (transaction === null || (transaction.operationType === "SETTLEMENT" && ["PREPARED", "SUBMITTED"].includes(transaction.status)))) ||
     (value.state === "CONFIRMED" && transaction?.operationType === "SETTLEMENT" && transaction.status === "CONFIRMED") ||
     (value.state === "REFUND_PENDING" && (transaction === null || (transaction.operationType === "REFUND" && ["PREPARED", "SUBMITTED"].includes(transaction.status)))) ||
-    (value.state === "REFUNDED" && transaction?.operationType === "REFUND" && transaction.status === "CONFIRMED") ||
-    (value.state === "RECONCILED" && transaction?.status === "CONFIRMED" && (transaction.operationType === "SETTLEMENT" || transaction.operationType === "REFUND")) ||
+    (value.state === "REFUNDED" && transaction?.status === "CONFIRMED" && (transaction.operationType === "REFUND" || (transaction.operationType === "JOB_REJECT" && value.job?.status === "REJECTED"))) ||
+    (value.state === "RECONCILED" && transaction?.status === "CONFIRMED" && (transaction.operationType === "SETTLEMENT" || transaction.operationType === "REFUND" || (transaction.operationType === "JOB_REJECT" && value.job?.status === "REJECTED"))) ||
     (value.state === "FAILED" && (transaction === null || (transaction.status === "FAILED" && (transaction.operationType === "SETTLEMENT" || transaction.operationType === "REFUND"))));
   if (!allowed) context.addIssue({ code: "custom", message: `${value.state} settlement requires compatible persisted transaction evidence.` });
   if (value.job !== null && transaction?.status === "CONFIRMED") {
     if (value.job.budget.asset !== value.amount.asset || value.job.budget.atomicUnits !== value.amount.atomicUnits) context.addIssue({ code: "custom", message: "Job-backed settlement amount must match the ERC-8183 job budget exactly." });
     if (transaction.operationType === "SETTLEMENT" && value.job.status !== "COMPLETED") context.addIssue({ code: "custom", message: "Confirmed settlement requires a completed ERC-8183 job." });
     if (transaction.operationType === "REFUND" && value.job.status !== "REJECTED" && value.job.status !== "EXPIRED") context.addIssue({ code: "custom", message: "Confirmed refund requires a rejected or expired ERC-8183 job." });
+    if (transaction.operationType === "JOB_REJECT" && value.job.status !== "REJECTED") context.addIssue({ code: "custom", message: "Confirmed rejection refund requires a rejected ERC-8183 job." });
   }
   if (value.state === "RECONCILED" ? value.reconciliationId === null : value.reconciliationId !== null) context.addIssue({ code: "custom", message: "Settlement reconciliation reference must match RECONCILED state." });
 });
