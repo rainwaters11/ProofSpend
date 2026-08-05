@@ -42,7 +42,7 @@ export const AgentReputationRefSchema = z.object({
   if (!value.isMock && (!EvmAddress.test(value.writerAddress) || !EvmAddress.test(value.agentOwnerAddress))) context.addIssue({ code: "custom", message: "Live reputation owner and writer must be EVM addresses." });
 });
 export type AgentReputationRef = z.infer<typeof AgentReputationRefSchema>;
-export const TransactionOperationTypeSchema = z.enum(["IDENTITY_REGISTRATION", "REPUTATION_WRITE", "JOB_CREATE", "JOB_FUND", "JOB_SUBMIT", "JOB_EVALUATE", "SETTLEMENT", "REFUND"]);
+export const TransactionOperationTypeSchema = z.enum(["IDENTITY_REGISTRATION", "REPUTATION_WRITE", "JOB_CREATE", "JOB_FUND", "JOB_SUBMIT", "JOB_EVALUATE", "JOB_REJECT", "SETTLEMENT", "REFUND"]);
 export const ArcTransactionRefSchema = z.object({
   network: z.literal(ARC_TESTNET_NETWORK), chainId: z.string().min(1), transactionHash: z.string().min(1).nullable(),
   status: z.enum(["NONE", "PREPARED", "SUBMITTED", "CONFIRMED", "FAILED"]), blockNumber: z.string().regex(/^\d+$/).nullable(),
@@ -82,7 +82,7 @@ export const AgenticJobRefSchema = z.object({
     (value.status === "FUNDED" && value.deliverableReference === null && value.reasonReference === null && transaction?.operationType === "JOB_FUND" && transaction.status === "CONFIRMED") ||
     (value.status === "SUBMITTED" && value.deliverableReference !== null && value.reasonReference === null && transaction?.operationType === "JOB_SUBMIT" && (transaction.status === "SUBMITTED" || transaction.status === "CONFIRMED")) ||
     (value.status === "COMPLETED" && value.deliverableReference !== null && value.reasonReference === null && transaction?.operationType === "JOB_EVALUATE" && transaction.status === "CONFIRMED") ||
-    (value.status === "REJECTED" && value.deliverableReference !== null && value.reasonReference !== null && transaction?.operationType === "JOB_EVALUATE" && transaction.status === "CONFIRMED") ||
+    (value.status === "REJECTED" && value.reasonReference !== null && transaction?.operationType === "JOB_REJECT" && transaction.status === "CONFIRMED") ||
     (value.status === "EXPIRED" && value.reasonReference === null && (
       (value.deliverableReference === null && transaction === null) ||
       (value.deliverableReference === null && transaction?.operationType === "JOB_FUND" && transaction.status === "CONFIRMED") ||
@@ -121,13 +121,14 @@ export const TransactionRecordSchema = z.object({ id: Id, projectId: Id, release
   }
 });
 export type TransactionRecord = z.infer<typeof TransactionRecordSchema>;
-export const ApprovalActionKindSchema = z.enum(["RELEASE_APPROVAL", "MILESTONE_EVALUATION", "JOB_SUBMISSION", "JOB_EVALUATION"]);
+export const ApprovalActionKindSchema = z.enum(["RELEASE_APPROVAL", "MILESTONE_EVALUATION", "JOB_SUBMISSION", "JOB_EVALUATION", "JOB_REJECTION"]);
 const ApprovalRecordBaseSchema = z.object({ id: Id, aggregateId: Id, intentId: Id, exactIntentHash: Hash, idempotencyKey: Id, decision: z.enum(["PENDING", "APPROVED", "REJECTED"]), approver: ActorSchema.nullable(), expiresAt: Time, decidedAt: Time.nullable() });
 export const ApprovalRecordSchema = z.discriminatedUnion("actionKind", [
   ApprovalRecordBaseSchema.extend({ actionKind: z.literal("RELEASE_APPROVAL"), authorizedActorType: z.literal("FOUNDER"), authorizedActorId: Id }),
   ApprovalRecordBaseSchema.extend({ actionKind: z.literal("MILESTONE_EVALUATION"), authorizedActorType: z.literal("EVALUATOR"), authorizedActorId: Id }),
   ApprovalRecordBaseSchema.extend({ actionKind: z.literal("JOB_SUBMISSION"), authorizedActorType: z.literal("PROVIDER"), authorizedActorId: Id }),
   ApprovalRecordBaseSchema.extend({ actionKind: z.literal("JOB_EVALUATION"), authorizedActorType: z.literal("EVALUATOR"), authorizedActorId: Id }),
+  ApprovalRecordBaseSchema.extend({ actionKind: z.literal("JOB_REJECTION"), authorizedActorType: z.enum(["FOUNDER", "EVALUATOR"]), authorizedActorId: Id }),
 ]).superRefine((value, context) => {
   if (value.decision === "PENDING" && (value.approver !== null || value.decidedAt !== null)) context.addIssue({ code: "custom", message: "Pending approval cannot contain a completed approver or decision timestamp." });
   if (value.decision !== "PENDING" && (value.approver === null || value.approver.actorType !== value.authorizedActorType || value.approver.actorId !== value.authorizedActorId || value.decidedAt === null)) context.addIssue({ code: "custom", message: "Completed approval requires the exact authorized actor and decision timestamp." });
@@ -200,18 +201,18 @@ const DestinationProtocolTargetSchema = z.object({
 const Erc8183ProtocolTargetSchema = z.object({
   kind: z.literal("ERC8183"), standard: z.literal("ERC-8183"), network: z.literal(ARC_TESTNET_NETWORK), chainId: Id.refine(isSynthetic),
   contractReference: Id.refine(isSynthetic, "Issue #2 ERC-8183 contract references must be visibly synthetic."), jobId: Id.refine(isSynthetic, "Issue #2 job IDs must be visibly synthetic."),
-  method: z.enum(["JOB_FUND", "JOB_SUBMIT", "JOB_EVALUATE"]), parameterCommitment: Hash,
+  method: z.enum(["JOB_FUND", "JOB_SUBMIT", "JOB_EVALUATE", "JOB_REJECT"]), parameterCommitment: Hash,
   clientReference: Id.refine(isSynthetic), providerReference: Id.refine(isSynthetic), evaluatorReference: Id.refine(isSynthetic), destination: Id.refine(isSynthetic),
 }).strict();
 export const ProtocolTargetSchema = z.discriminatedUnion("kind", [DestinationProtocolTargetSchema, Erc8183ProtocolTargetSchema]);
 export const CanonicalExecutionIntentSchema = z.object({ version: z.literal(1), actionKind: ApprovalActionKindSchema, projectId: Id, releaseRequestId: Id, transactionRecordId: Id, intentId: Id, asset: z.literal(LAUNCHVAULT_SETTLEMENT_ASSET), atomicAmount: AtomicUnitsSchema, operationType: TransactionOperationTypeSchema, protocolTarget: ProtocolTargetSchema }).superRefine((value, context) => {
-  const supportedActionPolicy = { SETTLEMENT: "RELEASE_APPROVAL", REFUND: "RELEASE_APPROVAL", JOB_FUND: "RELEASE_APPROVAL", JOB_SUBMIT: "JOB_SUBMISSION", JOB_EVALUATE: "JOB_EVALUATION" } as const;
-  const isJobOperation = ["JOB_FUND", "JOB_SUBMIT", "JOB_EVALUATE"].includes(value.operationType);
+  const supportedActionPolicy = { SETTLEMENT: "RELEASE_APPROVAL", REFUND: "RELEASE_APPROVAL", JOB_FUND: "RELEASE_APPROVAL", JOB_SUBMIT: "JOB_SUBMISSION", JOB_EVALUATE: "JOB_EVALUATION", JOB_REJECT: "JOB_REJECTION" } as const;
+  const isJobOperation = ["JOB_FUND", "JOB_SUBMIT", "JOB_EVALUATE", "JOB_REJECT"].includes(value.operationType);
   if (isJobOperation !== (value.protocolTarget.kind === "ERC8183")) context.addIssue({ code: "custom", message: "Execution operation and protocol target are incompatible." });
   const expectedActionKind = supportedActionPolicy[value.operationType as keyof typeof supportedActionPolicy];
   if (expectedActionKind === undefined) context.addIssue({ code: "custom", message: `${value.operationType} execution authorization is deferred to its owning issue.` });
   else if (value.actionKind !== expectedActionKind) context.addIssue({ code: "custom", message: `${value.operationType} requires ${expectedActionKind} authorization.` });
-  if (value.protocolTarget.kind === "ERC8183" && (!["JOB_FUND", "JOB_SUBMIT", "JOB_EVALUATE"].includes(value.operationType) || value.protocolTarget.method !== value.operationType)) context.addIssue({ code: "custom", message: "ERC-8183 execution method must match the supported operation type." });
+  if (value.protocolTarget.kind === "ERC8183" && (!["JOB_FUND", "JOB_SUBMIT", "JOB_EVALUATE", "JOB_REJECT"].includes(value.operationType) || value.protocolTarget.method !== value.operationType)) context.addIssue({ code: "custom", message: "ERC-8183 execution method must match the supported operation type." });
 });
 export type CanonicalExecutionIntent = z.infer<typeof CanonicalExecutionIntentSchema>;
 export const ExecutionAuthorizationBindingSchema = z.object({ id: Id, releaseRequestId: Id, approvalId: Id, intentId: Id, exactIntentHash: Hash, transactionRecordId: Id, executionIntent: CanonicalExecutionIntentSchema, status: z.enum(["ACTIVE", "CONSUMED", "REVOKED"]), consumedAt: Time.nullable(), consumedByTransactionId: Id.nullable(), createdAt: Time }).superRefine((value, context) => {
