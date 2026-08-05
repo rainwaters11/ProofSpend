@@ -308,7 +308,7 @@ describe("separate state machines", () => {
     expect(() => transitionApplication("APPROVED", "PREPARED", { ...evidence(prepared), expectedOperationType: undefined })).toThrow(InvalidTransitionError);
     expect(() => transitionApplication("APPROVED", "PREPARED", { ...evidence(prepared), expectedOperationType: "REFUND" })).toThrow(InvalidTransitionError);
     for (const operationType of ["JOB_CREATE", "JOB_FUND", "JOB_SUBMIT", "JOB_EVALUATE", "JOB_REJECT", "IDENTITY_REGISTRATION", "REPUTATION_WRITE"] as const) {
-      const unrelated = TransactionRecordSchema.parse({ ...prepared, arcTransaction: mockTransaction("PREPARED", operationType) });
+      const unrelated = TransactionRecordSchema.parse({ ...prepared, arcTransaction: { ...mockTransaction("PREPARED"), operationType } });
       expect(() => transitionApplication("APPROVED", "PREPARED", evidence(unrelated))).toThrow(InvalidTransitionError);
     }
     const refundPrepared = TransactionRecordSchema.parse({ ...prepared, arcTransaction: mockTransaction("PREPARED", "REFUND") });
