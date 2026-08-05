@@ -120,6 +120,7 @@ describe("separate state machines", () => {
       { ...executionIntent.protocolTarget, network: null },
       { ...executionIntent.protocolTarget, chainId: null },
       { ...executionIntent.protocolTarget, network: "OTHER_NETWORK" },
+      { ...executionIntent.protocolTarget, destination: "not-an-address" },
     ]) expect(CanonicalExecutionIntentSchema.safeParse({ ...executionIntent, protocolTarget }).success).toBe(false);
     const exactIntentHash = await hashCanonicalExecutionIntent(executionIntent);
     const approvalDecision = ApprovalRecordSchema.parse({ id: transaction.approvalId, aggregateId: transaction.releaseRequestId, intentId: transaction.intentId, actionKind: "RELEASE_APPROVAL", authorizedActorType: "FOUNDER", authorizedActorId: "founder:1", exactIntentHash, idempotencyKey: "approval:key", decision: "APPROVED", approver: { actorId: "founder:1", actorType: "FOUNDER" }, expiresAt: "2027-01-01T00:00:00.000Z", decidedAt: context.occurredAt });
@@ -491,6 +492,14 @@ describe("lifecycle evidence schemas", () => {
     expect(TransactionRecordSchema.parse({ ...base, operationState: "FAILED", arcTransaction: mockTransaction("FAILED") })).toBeDefined();
     expect(() => TransactionRecordSchema.parse({ ...base, approvalId: null, approvalBindingId: null, operationState: "FAILED", arcTransaction: mockTransaction("FAILED") })).toThrow();
     expect(() => TransactionRecordSchema.parse({ ...base, operationState: "FAILED", arcTransaction: mockTransaction("CONFIRMED") })).toThrow();
+
+    const liveDestination = `0x${"1".repeat(40)}`;
+    for (const operationType of ["SETTLEMENT", "REFUND"] as const) {
+      const arcTransaction = { ...liveTransaction, operationType };
+      expect(TransactionRecordSchema.parse({ ...base, destinationReference: liveDestination, operationState: "CONFIRMED", arcTransaction })).toBeDefined();
+      expect(() => TransactionRecordSchema.parse({ ...base, destinationReference: "mock:recipient", operationState: "CONFIRMED", arcTransaction })).toThrow();
+      expect(() => TransactionRecordSchema.parse({ ...base, destinationReference: liveDestination, operationState: "CONFIRMED", arcTransaction: mockTransaction("CONFIRMED", operationType) })).toThrow();
+    }
   });
   it("restricts LaunchVault value-moving records to USDC", async () => {
     const { vault } = createPawPovAiSeed();
@@ -511,6 +520,9 @@ describe("lifecycle evidence schemas", () => {
     expect(() => ArcTransactionRefSchema.parse({ ...liveTransaction, chainId: "1" })).toThrow();
     expect(() => ArcTransactionRefSchema.parse({ ...liveTransaction, transactionHash: "0x1234" })).toThrow();
     expect(() => ArcTransactionRefSchema.parse({ ...liveTransaction, explorerUrl: `${liveTransaction.explorerUrl}wrong` })).toThrow();
+    const failedWithoutHash = { ...liveTransaction, status: "FAILED" as const, transactionHash: null, blockNumber: null, blockHash: null, explorerUrl: null };
+    expect(ArcTransactionRefSchema.parse(failedWithoutHash)).toEqual(failedWithoutHash);
+    expect(() => ArcTransactionRefSchema.parse({ ...failedWithoutHash, explorerUrl: "https://testnet.arcscan.app/tx/unbound" })).toThrow();
   });
   it("requires truthful settlement, refund, and reconciliation evidence", () => {
     const base = { id: "settlement:1", projectId: "project:1", releaseRequestId: "release:1", reconciliationId: null, idempotencyKey: "settlement:key", amount: usdc("1"), job: null, updatedAt: context.occurredAt };
