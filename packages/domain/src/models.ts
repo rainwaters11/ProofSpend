@@ -81,7 +81,7 @@ export const AgenticJobRefSchema = z.object({
     (value.status === "OPEN" && value.deliverableReference === null && value.reasonReference === null && transaction === null) ||
     (value.status === "FUNDED" && value.deliverableReference === null && value.reasonReference === null && transaction?.operationType === "JOB_FUND" && transaction.status === "CONFIRMED") ||
     (value.status === "SUBMITTED" && value.deliverableReference !== null && value.reasonReference === null && transaction?.operationType === "JOB_SUBMIT" && (transaction.status === "SUBMITTED" || transaction.status === "CONFIRMED")) ||
-    (value.status === "COMPLETED" && value.deliverableReference !== null && value.reasonReference === null && transaction?.operationType === "JOB_EVALUATE" && transaction.status === "CONFIRMED") ||
+    (value.status === "COMPLETED" && value.deliverableReference !== null && transaction?.operationType === "JOB_EVALUATE" && transaction.status === "CONFIRMED") ||
     (value.status === "REJECTED" && value.reasonReference !== null && transaction?.operationType === "JOB_REJECT" && transaction.status === "CONFIRMED") ||
     (value.status === "EXPIRED" && value.reasonReference === null && (
       (value.deliverableReference === null && transaction === null) ||
