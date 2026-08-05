@@ -179,6 +179,10 @@ export const SettlementRecordSchema = z.object({ id: Id, projectId: Id, releaseR
     (value.state === "RECONCILED" && transaction?.status === "CONFIRMED" && (transaction.operationType === "SETTLEMENT" || transaction.operationType === "REFUND")) ||
     (value.state === "FAILED" && (transaction === null || (transaction.status === "FAILED" && (transaction.operationType === "SETTLEMENT" || transaction.operationType === "REFUND"))));
   if (!allowed) context.addIssue({ code: "custom", message: `${value.state} settlement requires compatible persisted transaction evidence.` });
+  if (value.job !== null && transaction?.status === "CONFIRMED") {
+    if (transaction.operationType === "SETTLEMENT" && value.job.status !== "COMPLETED") context.addIssue({ code: "custom", message: "Confirmed settlement requires a completed ERC-8183 job." });
+    if (transaction.operationType === "REFUND" && value.job.status !== "REJECTED" && value.job.status !== "EXPIRED") context.addIssue({ code: "custom", message: "Confirmed refund requires a rejected or expired ERC-8183 job." });
+  }
   if (value.state === "RECONCILED" ? value.reconciliationId === null : value.reconciliationId !== null) context.addIssue({ code: "custom", message: "Settlement reconciliation reference must match RECONCILED state." });
 });
 export type SettlementRecord = z.infer<typeof SettlementRecordSchema>;
