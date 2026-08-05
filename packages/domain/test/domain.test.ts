@@ -766,6 +766,8 @@ describe("lifecycle evidence schemas", () => {
     expect(() => SettlementRecordSchema.parse({ ...base, state: "CONFIRMED", job: submittedJob, transaction: mockTransaction("CONFIRMED") })).toThrow();
     expect(SettlementRecordSchema.parse({ ...base, state: "REFUNDED", job: rejectedJob, transaction: mockTransaction("CONFIRMED", "REFUND") })).toBeDefined();
     expect(SettlementRecordSchema.parse({ ...base, state: "REFUNDED", job: rejectedJob, transaction: rejectedJob.transaction })).toBeDefined();
+    expect(() => SettlementRecordSchema.parse({ ...base, state: "REFUNDED", job: rejectedJob, transaction: { ...rejectedJob.transaction!, transactionHash: "mock:unrelated-rejection" } })).toThrow();
+    expect(() => SettlementRecordSchema.parse({ ...base, state: "REFUNDED", job: rejectedJob, transaction: { ...rejectedJob.transaction!, blockHash: "mock:unrelated-block" } })).toThrow();
     expect(() => SettlementRecordSchema.parse({ ...base, state: "REFUNDED", job: null, transaction: rejectedJob.transaction })).toThrow();
     expect(() => SettlementRecordSchema.parse({ ...base, state: "REFUNDED", amount: usdc("2"), job: rejectedJob, transaction: mockTransaction("CONFIRMED", "REFUND") })).toThrow();
     expect(SettlementRecordSchema.parse({ ...base, state: "REFUNDED", job: expiredJob, transaction: mockTransaction("CONFIRMED", "REFUND") })).toBeDefined();
@@ -891,9 +893,14 @@ describe("persisted relationship integrity", () => {
     const { release } = await authorizationFixture(); const confirmedSettlement = SettlementRecordSchema.parse({ id: "settlement:1", projectId: release.projectId, releaseRequestId: release.id, reconciliationId: null, idempotencyKey: "settlement:key", amount: release.amount, state: "CONFIRMED", job: null, transaction: mockTransaction("CONFIRMED"), updatedAt: context.occurredAt }); const confirmedRelease = ReleaseRequestSchema.parse({ ...release, state: "CONFIRMED", settlementId: confirmedSettlement.id });
     const refundedSettlement = SettlementRecordSchema.parse({ ...confirmedSettlement, state: "REFUNDED", transaction: mockTransaction("CONFIRMED", "REFUND") });
     const reconciledRefund = SettlementRecordSchema.parse({ ...refundedSettlement, state: "RECONCILED", reconciliationId: "reconciliation:refund" });
+    const rejectedJob = AgenticJobRefSchema.parse({ ...mockJob("REJECTED", mockTransaction("CONFIRMED", "JOB_REJECT")), budget: confirmedSettlement.amount });
+    const rejectionRefund = SettlementRecordSchema.parse({ ...confirmedSettlement, state: "REFUNDED", job: rejectedJob, transaction: rejectedJob.transaction });
+    const reconciledRejectionRefund = SettlementRecordSchema.parse({ ...rejectionRefund, state: "RECONCILED", reconciliationId: "reconciliation:job-reject" });
     expect(validateReleaseConfirmation(confirmedRelease, confirmedSettlement)).toBe(true);
     expect(validateReleaseConfirmation(confirmedRelease, refundedSettlement)).toBe(true);
     expect(validateReleaseConfirmation(confirmedRelease, reconciledRefund)).toBe(true);
+    expect(validateReleaseConfirmation(confirmedRelease, rejectionRefund)).toBe(true);
+    expect(validateReleaseConfirmation(confirmedRelease, reconciledRejectionRefund)).toBe(true);
     expect(() => validateReleaseConfirmation(confirmedRelease, { ...confirmedSettlement, transaction: mockTransaction("SUBMITTED") })).toThrow();
     expect(() => validateReleaseConfirmation(confirmedRelease, { ...confirmedSettlement, transaction: mockTransaction("CONFIRMED", "REFUND") })).toThrow();
     expect(() => validateReleaseConfirmation(confirmedRelease, { ...confirmedSettlement, transaction: { status: "CONFIRMED", operationType: "SETTLEMENT" } } as never)).toThrow();
@@ -907,6 +914,14 @@ describe("persisted relationship integrity", () => {
     const { transaction, settlement, reconciliation } = reconciliationFixture("MATCHED"); expect(validateReconciliation(transaction, settlement, reconciliation, "adapter:authorized")).toBe(true);
     expect(SettlementRecordSchema.safeParse({ ...settlement, amount: money("EURC", "100") }).success).toBe(false);
     for (const changed of [{ ...settlement, amount: usdc("101") }, { ...settlement, transaction: { ...settlement.transaction!, transactionHash: "mock:different" } }, { ...settlement, transaction: { ...settlement.transaction!, blockHash: "mock:different" } }, { ...settlement, transaction: { ...settlement.transaction!, operationType: "REFUND" as const } }]) expect(() => validateReconciliation(transaction, changed, reconciliation, "adapter:authorized")).toThrow();
+  });
+  it("reconciles atomic ERC-8183 rejection refunds", () => {
+    const base = reconciliationFixture("MATCHED");
+    const rejectedJob = AgenticJobRefSchema.parse({ ...mockJob("REJECTED", mockTransaction("CONFIRMED", "JOB_REJECT")), budget: base.settlement.amount });
+    const transaction = TransactionRecordSchema.parse({ ...base.transaction, arcTransaction: rejectedJob.transaction });
+    const settlement = SettlementRecordSchema.parse({ ...base.settlement, job: rejectedJob, transaction: rejectedJob.transaction });
+    expect(validateReconciliation(transaction, settlement, base.reconciliation, "adapter:authorized")).toBe(true);
+    expect(() => validateReconciliation({ ...transaction, arcTransaction: { ...transaction.arcTransaction!, transactionHash: "mock:unrelated-rejection" } }, settlement, base.reconciliation, "adapter:authorized")).toThrow();
   });
   it("parses every reconciliation input before validating matched evidence", () => {
     const { transaction, settlement, reconciliation } = reconciliationFixture("MATCHED");
