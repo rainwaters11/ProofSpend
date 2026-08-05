@@ -180,7 +180,21 @@ export const SettlementRecordSchema = z.object({ id: Id, projectId: Id, releaseR
     if (value.job.budget.asset !== value.amount.asset || value.job.budget.atomicUnits !== value.amount.atomicUnits) context.addIssue({ code: "custom", message: "Job-backed settlement amount must match the ERC-8183 job budget exactly." });
     if (transaction.operationType === "SETTLEMENT" && value.job.status !== "COMPLETED") context.addIssue({ code: "custom", message: "Confirmed settlement requires a completed ERC-8183 job." });
     if (transaction.operationType === "REFUND" && value.job.status !== "REJECTED" && value.job.status !== "EXPIRED") context.addIssue({ code: "custom", message: "Confirmed refund requires a rejected or expired ERC-8183 job." });
-    if (transaction.operationType === "JOB_REJECT" && value.job.status !== "REJECTED") context.addIssue({ code: "custom", message: "Confirmed rejection refund requires a rejected ERC-8183 job." });
+    if (transaction.operationType === "JOB_REJECT") {
+      const jobTransaction = value.job.transaction;
+      if (
+        value.job.status !== "REJECTED" || jobTransaction === null ||
+        jobTransaction.network !== transaction.network ||
+        jobTransaction.chainId !== transaction.chainId ||
+        jobTransaction.transactionHash !== transaction.transactionHash ||
+        jobTransaction.status !== transaction.status ||
+        jobTransaction.blockNumber !== transaction.blockNumber ||
+        jobTransaction.blockHash !== transaction.blockHash ||
+        jobTransaction.explorerUrl !== transaction.explorerUrl ||
+        jobTransaction.operationType !== transaction.operationType ||
+        jobTransaction.isMock !== transaction.isMock
+      ) context.addIssue({ code: "custom", message: "Confirmed rejection refund must match the rejected job's exact Arc transaction evidence." });
+    }
   }
   if (value.state === "RECONCILED" ? value.reconciliationId === null : value.reconciliationId !== null) context.addIssue({ code: "custom", message: "Settlement reconciliation reference must match RECONCILED state." });
 });
