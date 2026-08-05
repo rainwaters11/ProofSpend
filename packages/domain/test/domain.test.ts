@@ -21,7 +21,7 @@ const mockTransaction = (status: "NONE" | "PREPARED" | "SUBMITTED" | "CONFIRMED"
   status, blockNumber: status === "CONFIRMED" ? "1" : null, blockHash: status === "CONFIRMED" ? "mock:block" : null,
   explorerUrl: null, operationType, isMock: true,
 });
-const mockJob = (status: "OPEN" | "FUNDED" | "SUBMITTED" | "COMPLETED" | "REJECTED" | "EXPIRED", transaction: ArcTransactionRef | null = null) => AgenticJobRefSchema.parse({ standard: "ERC-8183", network: "mock:network", chainId: "mock:chain", contractAddress: "mock:contract", jobId: "mock:job", clientAddress: "mock:client", providerAddress: "mock:provider", evaluatorAddress: "mock:evaluator", budget: usdc("1"), expiresAt: "2026-01-01T00:00:00.000Z", descriptionReference: "mock:description", deliverableReference: ["SUBMITTED", "COMPLETED", "REJECTED"].includes(status) ? "mock:deliverable" : null, reasonReference: status === "REJECTED" ? "mock:reason" : null, status, transaction, isMock: true });
+const mockJob = (status: "OPEN" | "FUNDED" | "SUBMITTED" | "COMPLETED" | "REJECTED" | "EXPIRED", transaction: ArcTransactionRef | null = null) => AgenticJobRefSchema.parse({ standard: "ERC-8183", network: "mock:network", chainId: "mock:chain", contractAddress: "mock:contract", jobId: "mock:job", clientAddress: "mock:client", providerAddress: "mock:provider", evaluatorAddress: "mock:evaluator", budget: usdc("1"), expiresAt: "2026-02-01T00:00:00.000Z", descriptionReference: "mock:description", deliverableReference: ["SUBMITTED", "COMPLETED", "REJECTED"].includes(status) ? "mock:deliverable" : null, reasonReference: status === "REJECTED" ? "mock:reason" : null, status, transaction, isMock: true });
 const jobFundingAuthorization = async (job: ReturnType<typeof mockJob>, transactionId = "transaction:job-fund") => {
   if (job.transaction === null) throw new Error("Job funding authorization requires transaction evidence.");
   const intentId = "intent:job-fund";
@@ -300,6 +300,8 @@ describe("separate state machines", () => {
 
     expect((await transitionAgenticJob("SUBMITTED", "COMPLETED", completedContext)).status).toBe("COMPLETED");
     expect((await transitionAgenticJob("SUBMITTED", "REJECTED", rejectedContext)).status).toBe("REJECTED");
+    await expect(transitionAgenticJob("SUBMITTED", "COMPLETED", { ...completedContext, occurredAt: submittedCurrent.expiresAt })).rejects.toThrow(InvalidTransitionError);
+    await expect(transitionAgenticJob("SUBMITTED", "REJECTED", { ...rejectedContext, occurredAt: submittedCurrent.expiresAt })).rejects.toThrow(InvalidTransitionError);
     await expect(transitionAgenticJob("SUBMITTED", "COMPLETED", { ...completedContext, currentJobEvidence: unconfirmedSubmittedCurrent })).rejects.toThrow(InvalidTransitionError);
     await expect(transitionAgenticJob("SUBMITTED", "COMPLETED", { ...completedContext, executionBinding: undefined })).rejects.toThrow(InvalidTransitionError);
     await expect(transitionAgenticJob("SUBMITTED", "COMPLETED", { ...completedContext, authorizedEvaluatorId: "mock:other-evaluator", actor: { actorId: "mock:other-evaluator", actorType: "EVALUATOR" } })).rejects.toThrow(InvalidTransitionError);
@@ -318,6 +320,7 @@ describe("separate state machines", () => {
     const funded = mockJob("FUNDED", mockTransaction("CONFIRMED", "JOB_FUND"));
     const fundingContext = { ...context, aggregateId: funded.jobId, actor: adapter, authorizedAdapterId: adapter.actorId, currentJobEvidence: open, jobEvidence: funded, ...await jobFundingAuthorization(funded) };
     expect((await transitionAgenticJob("OPEN", "FUNDED", fundingContext)).status).toBe("FUNDED");
+    await expect(transitionAgenticJob("OPEN", "FUNDED", { ...fundingContext, occurredAt: open.expiresAt })).rejects.toThrow(InvalidTransitionError);
     await expect(transitionAgenticJob("OPEN", "FUNDED", { ...fundingContext, jobApprovalDecision: undefined })).rejects.toThrow(InvalidTransitionError);
     await expect(transitionAgenticJob("OPEN", "FUNDED", { ...fundingContext, executionBinding: undefined })).rejects.toThrow(InvalidTransitionError);
     await expect(transitionAgenticJob("OPEN", "FUNDED", { ...fundingContext, authorizedApproverId: "mock:other-client" })).rejects.toThrow(InvalidTransitionError);
@@ -342,6 +345,7 @@ describe("separate state machines", () => {
     const submitted = mockJob("SUBMITTED", mockTransaction("SUBMITTED", "JOB_SUBMIT"));
     const submissionContext = { ...context, aggregateId: submitted.jobId, actor: adapter, authorizedAdapterId: adapter.actorId, currentJobEvidence: funded, jobEvidence: submitted, ...await providerSubmissionAuthorization(submitted) };
     expect((await transitionAgenticJob("FUNDED", "SUBMITTED", submissionContext)).status).toBe("SUBMITTED");
+    await expect(transitionAgenticJob("FUNDED", "SUBMITTED", { ...submissionContext, occurredAt: funded.expiresAt })).rejects.toThrow(InvalidTransitionError);
     await expect(transitionAgenticJob("FUNDED", "SUBMITTED", { ...submissionContext, jobApprovalDecision: undefined })).rejects.toThrow(InvalidTransitionError);
     await expect(transitionAgenticJob("FUNDED", "SUBMITTED", { ...submissionContext, executionBinding: undefined })).rejects.toThrow(InvalidTransitionError);
     await expect(transitionAgenticJob("FUNDED", "SUBMITTED", { ...submissionContext, authorizedProviderId: "mock:other-provider" })).rejects.toThrow(InvalidTransitionError);
@@ -355,11 +359,11 @@ describe("separate state machines", () => {
 
     const system = { actorId: "system", actorType: "SYSTEM" as const };
     await expect(transitionAgenticJob("OPEN", "EXPIRED", { ...context, occurredAt: "2025-12-31T23:59:59.000Z", aggregateId: open.jobId, actor: system, authorizedSystemId: system.actorId, currentJobEvidence: open })).rejects.toThrow(InvalidTransitionError);
-    expect((await transitionAgenticJob("OPEN", "EXPIRED", { ...context, aggregateId: open.jobId, actor: system, authorizedSystemId: system.actorId, currentJobEvidence: open })).status).toBe("EXPIRED");
-    expect((await transitionAgenticJob("OPEN", "EXPIRED", { ...context, aggregateId: open.jobId, actor: system, authorizedSystemId: system.actorId, currentJobEvidence: open, jobEvidence: mockJob("EXPIRED") })).status).toBe("EXPIRED");
+    expect((await transitionAgenticJob("OPEN", "EXPIRED", { ...context, occurredAt: open.expiresAt, aggregateId: open.jobId, actor: system, authorizedSystemId: system.actorId, currentJobEvidence: open })).status).toBe("EXPIRED");
+    expect((await transitionAgenticJob("OPEN", "EXPIRED", { ...context, occurredAt: open.expiresAt, aggregateId: open.jobId, actor: system, authorizedSystemId: system.actorId, currentJobEvidence: open, jobEvidence: mockJob("EXPIRED") })).status).toBe("EXPIRED");
     for (const staleTarget of [mockJob("OPEN"), { ...mockJob("EXPIRED"), jobId: "mock:other" }, { ...mockJob("EXPIRED"), clientAddress: "mock:other-client" }, { ...mockJob("EXPIRED"), deliverableReference: "mock:forged-deliverable" }, { ...mockJob("EXPIRED"), reasonReference: "mock:forged-reason" }, { ...mockJob("EXPIRED"), transaction: mockTransaction("CONFIRMED", "REFUND") }]) await expect(transitionAgenticJob("OPEN", "EXPIRED", { ...context, aggregateId: open.jobId, actor: system, authorizedSystemId: system.actorId, currentJobEvidence: open, jobEvidence: staleTarget })).rejects.toThrow(InvalidTransitionError);
     const expiredSubmitted = AgenticJobRefSchema.parse({ ...submitted, status: "EXPIRED" });
-    const submittedExpiry = { ...context, aggregateId: submitted.jobId, actor: system, authorizedSystemId: system.actorId, currentJobEvidence: submitted, jobEvidence: expiredSubmitted };
+    const submittedExpiry = { ...context, occurredAt: submitted.expiresAt, aggregateId: submitted.jobId, actor: system, authorizedSystemId: system.actorId, currentJobEvidence: submitted, jobEvidence: expiredSubmitted };
     expect((await transitionAgenticJob("SUBMITTED", "EXPIRED", submittedExpiry)).status).toBe("EXPIRED");
     for (const changed of [{ deliverableReference: "mock:forged-deliverable" }, { reasonReference: "mock:forged-reason" }, { transaction: mockTransaction("CONFIRMED", "REFUND") }]) await expect(transitionAgenticJob("SUBMITTED", "EXPIRED", { ...submittedExpiry, jobEvidence: { ...expiredSubmitted, ...changed } })).rejects.toThrow(InvalidTransitionError);
     for (const [terminal, currentJobEvidence] of [
@@ -695,7 +699,14 @@ describe("persisted relationship integrity", () => {
   });
   it("validates confirmed release settlement linkage", async () => {
     const { release } = await authorizationFixture(); const confirmedSettlement = SettlementRecordSchema.parse({ id: "settlement:1", projectId: release.projectId, releaseRequestId: release.id, reconciliationId: null, idempotencyKey: "settlement:key", amount: release.amount, state: "CONFIRMED", job: null, transaction: mockTransaction("CONFIRMED"), updatedAt: context.occurredAt }); const confirmedRelease = ReleaseRequestSchema.parse({ ...release, state: "CONFIRMED", settlementId: confirmedSettlement.id });
-    expect(validateReleaseConfirmation(confirmedRelease, confirmedSettlement)).toBe(true); expect(() => validateReleaseConfirmation(confirmedRelease, { ...confirmedSettlement, transaction: mockTransaction("SUBMITTED") })).toThrow(); expect(() => validateReleaseConfirmation(confirmedRelease, { ...confirmedSettlement, transaction: mockTransaction("CONFIRMED", "REFUND") })).toThrow(); expect(() => validateReleaseConfirmation(confirmedRelease, { ...confirmedSettlement, transaction: { status: "CONFIRMED", operationType: "SETTLEMENT" } } as never)).toThrow();
+    const refundedSettlement = SettlementRecordSchema.parse({ ...confirmedSettlement, state: "REFUNDED", transaction: mockTransaction("CONFIRMED", "REFUND") });
+    const reconciledRefund = SettlementRecordSchema.parse({ ...refundedSettlement, state: "RECONCILED", reconciliationId: "reconciliation:refund" });
+    expect(validateReleaseConfirmation(confirmedRelease, confirmedSettlement)).toBe(true);
+    expect(validateReleaseConfirmation(confirmedRelease, refundedSettlement)).toBe(true);
+    expect(validateReleaseConfirmation(confirmedRelease, reconciledRefund)).toBe(true);
+    expect(() => validateReleaseConfirmation(confirmedRelease, { ...confirmedSettlement, transaction: mockTransaction("SUBMITTED") })).toThrow();
+    expect(() => validateReleaseConfirmation(confirmedRelease, { ...confirmedSettlement, transaction: mockTransaction("CONFIRMED", "REFUND") })).toThrow();
+    expect(() => validateReleaseConfirmation(confirmedRelease, { ...confirmedSettlement, transaction: { status: "CONFIRMED", operationType: "SETTLEMENT" } } as never)).toThrow();
   });
   function reconciliationFixture(result: "MATCHED" | "MISMATCH" | "REQUIRES_REVIEW") {
     const matched = result === "MATCHED"; const transaction = TransactionRecordSchema.parse({ id: "transaction:1", projectId: "project:1", releaseRequestId: "release:1", intentId: "intent:1", destinationReference: "mock:recipient", approvalId: "approval:1", approvalBindingId: "binding:1", reconciliationId: matched ? "reconciliation:1" : null, idempotencyKey: "transaction:key", amount: usdc("100"), operationState: matched ? "RECONCILED" : "CONFIRMED", arcTransaction: mockTransaction("CONFIRMED"), createdAt: context.occurredAt, updatedAt: context.occurredAt });
