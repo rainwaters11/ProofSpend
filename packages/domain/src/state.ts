@@ -218,6 +218,9 @@ async function validateJobExecutionAuthorization(context: TransitionContext, tar
     submission.data.arcTransaction.chainId !== target.transaction.chainId ||
     submission.data.arcTransaction.isMock !== target.transaction.isMock ||
     submission.data.arcTransaction.operationType !== target.transaction.operationType ||
+    submission.data.arcTransaction.blockNumber !== target.transaction.blockNumber ||
+    submission.data.arcTransaction.blockHash !== target.transaction.blockHash ||
+    submission.data.arcTransaction.explorerUrl !== target.transaction.explorerUrl ||
     decidedAt === null || consumedAt === null || submittedAt === null || occurredAt === null || expiresAt === null ||
     decidedAt > consumedAt || consumedAt > submittedAt || submittedAt > occurredAt || occurredAt >= expiresAt ||
     intent.actionKind !== policy.actionKind ||
