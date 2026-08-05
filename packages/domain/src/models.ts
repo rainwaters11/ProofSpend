@@ -78,12 +78,14 @@ export const AgenticJobRefSchema = z.object({
   if (value.transaction !== null && value.transaction.isMock !== value.isMock) context.addIssue({ code: "custom", message: "Job and transaction mock/live indicators must match." });
   const escrowTransaction = value.escrowTransaction;
   if (escrowTransaction !== null && escrowTransaction.isMock !== value.isMock) context.addIssue({ code: "custom", message: "Job and prior escrow transaction mock/live indicators must match." });
+  const priorEscrowStateValid = escrowTransaction !== null && escrowTransaction.status === "CONFIRMED" && (
+    (escrowTransaction.operationType === "JOB_FUND" && value.deliverableReference === null) ||
+    (escrowTransaction.operationType === "JOB_SUBMIT" && value.deliverableReference !== null)
+  );
   const escrowEvidenceValid =
-    (escrowTransaction === null && (value.status !== "REJECTED" || value.deliverableReference === null)) ||
-    (value.status === "REJECTED" && escrowTransaction !== null && escrowTransaction.status === "CONFIRMED" && (
-      (escrowTransaction.operationType === "JOB_FUND" && value.deliverableReference === null) ||
-      (escrowTransaction.operationType === "JOB_SUBMIT" && value.deliverableReference !== null)
-    ));
+    (value.status === "REJECTED" && ((escrowTransaction === null && value.deliverableReference === null) || priorEscrowStateValid)) ||
+    (value.status === "EXPIRED" && priorEscrowStateValid) ||
+    (value.status !== "REJECTED" && value.status !== "EXPIRED" && escrowTransaction === null);
   if (!escrowEvidenceValid) context.addIssue({ code: "custom", message: "Prior escrow evidence is valid only for a rejected job and must preserve its confirmed funded or submitted state." });
   const transaction = value.transaction;
   const statusEvidenceValid =
