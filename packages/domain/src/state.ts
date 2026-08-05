@@ -140,6 +140,26 @@ const immutableJobFieldsMatch = (current: AgenticJobRef, target: AgenticJobRef):
   current.descriptionReference === target.descriptionReference &&
   current.isMock === target.isMock;
 
+const mutableJobEvidenceMatches = (current: AgenticJobRef, target: AgenticJobRef): boolean => {
+  const currentTransaction = current.transaction;
+  const targetTransaction = target.transaction;
+  const transactionMatches = currentTransaction === null
+    ? targetTransaction === null
+    : targetTransaction !== null &&
+      currentTransaction.network === targetTransaction.network &&
+      currentTransaction.chainId === targetTransaction.chainId &&
+      currentTransaction.transactionHash === targetTransaction.transactionHash &&
+      currentTransaction.status === targetTransaction.status &&
+      currentTransaction.blockNumber === targetTransaction.blockNumber &&
+      currentTransaction.blockHash === targetTransaction.blockHash &&
+      currentTransaction.explorerUrl === targetTransaction.explorerUrl &&
+      currentTransaction.operationType === targetTransaction.operationType &&
+      currentTransaction.isMock === targetTransaction.isMock;
+  return current.deliverableReference === target.deliverableReference &&
+    current.reasonReference === target.reasonReference &&
+    transactionMatches;
+};
+
 
 export function transitionAgenticJob(from: AgenticJobStatus, to: AgenticJobStatus, context: TransitionContext) {
   if (!jobTransitions[from].includes(to)) throw new InvalidTransitionError("agentic job", from, to);
@@ -150,7 +170,7 @@ export function transitionAgenticJob(from: AgenticJobStatus, to: AgenticJobStatu
     const occurredAt = Date.parse(context.occurredAt);
     if (!current.success || !current.data.isMock || current.data.jobId !== context.aggregateId || current.data.status !== from || !Number.isFinite(occurredAt) || occurredAt < Date.parse(current.data.expiresAt)) throw new InvalidTransitionError("agentic job expiry evidence", from, to);
     const target = AgenticJobRefSchema.safeParse(context.jobEvidence ?? { ...current.data, status: to });
-    if (!target.success || !target.data.isMock || target.data.jobId !== context.aggregateId || target.data.status !== to || !immutableJobFieldsMatch(current.data, target.data)) throw new InvalidTransitionError("agentic job expiry evidence", from, to);
+    if (!target.success || !target.data.isMock || target.data.jobId !== context.aggregateId || target.data.status !== to || !immutableJobFieldsMatch(current.data, target.data) || !mutableJobEvidenceMatches(current.data, target.data)) throw new InvalidTransitionError("agentic job expiry evidence", from, to);
     return { status: to, auditEvent: event(context, from, to) } as const;
   }
   const current = AgenticJobRefSchema.safeParse(context.currentJobEvidence);
