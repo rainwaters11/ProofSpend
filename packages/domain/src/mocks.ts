@@ -11,7 +11,7 @@ export class MockAgenticJobAdapter {
     job = AgenticJobRefSchema.parse(job);
     if (!job.isMock) throw new Error("Mock adapter accepts only visibly synthetic jobs.");
     const result = await transitionAgenticJob(job.status, to, { ...context, currentJobEvidence: job });
-    const evidence = AgenticJobRefSchema.parse(context.jobEvidence ?? (to === "EXPIRED" ? { ...job, status: result.status } : undefined));
+    const evidence = AgenticJobRefSchema.parse(context.jobEvidence);
     return { job: evidence, auditEvent: result.auditEvent };
   }
 }
