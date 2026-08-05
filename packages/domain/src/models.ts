@@ -76,6 +76,19 @@ export const AgenticJobRefSchema = z.object({
   if (value.isMock && references.some((item) => !isSynthetic(item))) context.addIssue({ code: "custom", message: "Every mock job reference must be visibly synthetic." });
   if (!value.isMock && references.some(isSynthetic)) context.addIssue({ code: "custom", message: "Synthetic job references cannot be marked live." });
   if (value.transaction !== null && value.transaction.isMock !== value.isMock) context.addIssue({ code: "custom", message: "Job and transaction mock/live indicators must match." });
+  const transaction = value.transaction;
+  const statusEvidenceValid =
+    (value.status === "OPEN" && value.deliverableReference === null && value.reasonReference === null && transaction === null) ||
+    (value.status === "FUNDED" && value.deliverableReference === null && value.reasonReference === null && transaction?.operationType === "JOB_FUND" && transaction.status === "CONFIRMED") ||
+    (value.status === "SUBMITTED" && value.deliverableReference !== null && value.reasonReference === null && transaction?.operationType === "JOB_SUBMIT" && (transaction.status === "SUBMITTED" || transaction.status === "CONFIRMED")) ||
+    (value.status === "COMPLETED" && value.deliverableReference !== null && value.reasonReference === null && transaction?.operationType === "JOB_EVALUATE" && transaction.status === "CONFIRMED") ||
+    (value.status === "REJECTED" && value.deliverableReference !== null && value.reasonReference !== null && transaction?.operationType === "JOB_EVALUATE" && transaction.status === "CONFIRMED") ||
+    (value.status === "EXPIRED" && value.reasonReference === null && (
+      (value.deliverableReference === null && transaction === null) ||
+      (value.deliverableReference === null && transaction?.operationType === "JOB_FUND" && transaction.status === "CONFIRMED") ||
+      (value.deliverableReference !== null && transaction?.operationType === "JOB_SUBMIT" && (transaction.status === "SUBMITTED" || transaction.status === "CONFIRMED"))
+    ));
+  if (!statusEvidenceValid) context.addIssue({ code: "custom", message: `${value.status} job requires status-specific deliverable, reason, and transaction evidence.` });
 });
 export type AgenticJobRef = z.infer<typeof AgenticJobRefSchema>;
 
@@ -136,7 +149,15 @@ export const MilestoneSchema = z.object({ id: Id, projectId: Id, title: z.string
 export type Milestone = z.infer<typeof MilestoneSchema>;
 export const EvidenceItemSchema = z.object({ id: Id, projectId: Id, kind: z.enum(["RECEIPT", "SCREENSHOT", "INVOICE", "DELIVERABLE", "STATEMENT", "CONFIRMATION"]), sourceHash: Hash, storageRef: z.string().min(1), visibility: z.literal("FOUNDER_PRIVATE"), submittedAt: Time });
 export type EvidenceItem = z.infer<typeof EvidenceItemSchema>;
-export const EvidenceMatchSchema = z.object({ id: Id, evidenceId: Id, requirementId: Id, source: z.enum(["AI_SUGGESTION", "HUMAN_DECISION"]), confidenceBasisPoints: z.number().int().min(0).max(10_000).nullable(), explanation: z.string(), acceptedBy: ActorSchema.nullable() });
+const EvidenceMatchBaseSchema = z.object({ id: Id, evidenceId: Id, requirementId: Id, confidenceBasisPoints: z.number().int().min(0).max(10_000).nullable(), explanation: z.string() });
+const HumanEvidenceDecisionActorSchema = ActorSchema.refine(
+  (actor) => actor.actorType === "FOUNDER" || actor.actorType === "EVALUATOR",
+  "Human evidence decisions require an authorized founder or evaluator.",
+);
+export const EvidenceMatchSchema = z.discriminatedUnion("source", [
+  EvidenceMatchBaseSchema.extend({ source: z.literal("AI_SUGGESTION"), acceptedBy: z.null() }),
+  EvidenceMatchBaseSchema.extend({ source: z.literal("HUMAN_DECISION"), acceptedBy: HumanEvidenceDecisionActorSchema }),
+]);
 export type EvidenceMatch = z.infer<typeof EvidenceMatchSchema>;
 export const ProofGapSchema = z.object({ id: Id, milestoneId: Id, requirementId: Id, reasonCode: z.string().min(1), question: z.string().min(1), priority: z.number().int().nonnegative(), resolvedAt: Time.nullable() });
 export type ProofGap = z.infer<typeof ProofGapSchema>;
@@ -163,10 +184,14 @@ export const SettlementRecordSchema = z.object({ id: Id, projectId: Id, releaseR
 export type SettlementRecord = z.infer<typeof SettlementRecordSchema>;
 const DestinationProtocolTargetSchema = z.object({
   kind: z.literal("DESTINATION"),
-  destination: Id.refine((value) => isSynthetic(value) || EvmAddress.test(value), "Destination must be visibly synthetic or a canonical EVM address."),
+  destination: Id,
   network: z.literal(ARC_TESTNET_NETWORK),
   chainId: Id,
-}).strict();
+  isMock: z.boolean(),
+}).strict().superRefine((value, context) => {
+  if (value.isMock && (!isSynthetic(value.destination) || !isSynthetic(value.chainId))) context.addIssue({ code: "custom", message: "Mock destination intents require visibly synthetic destination and chain references." });
+  if (!value.isMock && (!EvmAddress.test(value.destination) || value.chainId !== ARC_TESTNET_CHAIN_ID)) context.addIssue({ code: "custom", message: "Live destination intents require a canonical EVM recipient on Arc Testnet." });
+});
 const Erc8183ProtocolTargetSchema = z.object({
   kind: z.literal("ERC8183"), standard: z.literal("ERC-8183"), network: z.literal(ARC_TESTNET_NETWORK), chainId: Id.refine(isSynthetic),
   contractReference: Id.refine(isSynthetic, "Issue #2 ERC-8183 contract references must be visibly synthetic."), jobId: Id.refine(isSynthetic, "Issue #2 job IDs must be visibly synthetic."),
