@@ -245,6 +245,64 @@ async function validateJobExecutionAuthorization(context: TransitionContext, tar
   return approval.data;
 }
 
+async function validateJobRefundAuthorization(context: TransitionContext, target: AgenticJobRef, refund: JobRefundOperationRecord, from: AgenticJobStatus, to: AgenticJobStatus): Promise<void> {
+  const approval = ApprovalRecordSchema.safeParse(context.jobApprovalDecision);
+  const binding = ExecutionAuthorizationBindingSchema.safeParse(context.executionBinding);
+  const targetTransaction = target.transaction;
+  if (!approval.success || !binding.success || targetTransaction === null || context.idempotencyKey === undefined) throw new InvalidTransitionError("agentic job refund authorization", from, to);
+  const intent = binding.data.executionIntent;
+  const protocolTarget = intent.protocolTarget;
+  if (protocolTarget.kind !== "DESTINATION") throw new InvalidTransitionError("agentic job refund authorization", from, to);
+  const decidedAt = assertFiniteTime(approval.data.decidedAt);
+  const consumedAt = assertFiniteTime(binding.data.consumedAt);
+  const refundedAt = assertFiniteTime(refund.createdAt);
+  const occurredAt = assertFiniteTime(context.occurredAt);
+  const approvalExpiresAt = assertFiniteTime(approval.data.expiresAt);
+  const recomputedHash = await hashCanonicalExecutionIntent(intent);
+  if (
+    approval.data.actionKind !== "RELEASE_APPROVAL" ||
+    approval.data.authorizedActorType !== "FOUNDER" ||
+    approval.data.authorizedActorId !== target.clientAddress ||
+    approval.data.authorizedActorId !== context.authorizedApproverId ||
+    approval.data.approver?.actorType !== "FOUNDER" ||
+    approval.data.approver.actorId !== approval.data.authorizedActorId ||
+    approval.data.aggregateId !== target.jobId ||
+    approval.data.aggregateId !== context.aggregateId ||
+    approval.data.decision !== "APPROVED" ||
+    approval.data.id !== context.expectedApprovalId ||
+    approval.data.id !== binding.data.approvalId ||
+    approval.data.intentId !== context.expectedIntentId ||
+    approval.data.intentId !== binding.data.intentId ||
+    approval.data.exactIntentHash !== context.expectedExactIntentHash ||
+    approval.data.exactIntentHash !== binding.data.exactIntentHash ||
+    approval.data.exactIntentHash !== recomputedHash ||
+    binding.data.id !== context.expectedApprovalBindingId ||
+    binding.data.status !== "CONSUMED" ||
+    binding.data.releaseRequestId !== target.jobId ||
+    binding.data.releaseRequestId !== context.expectedReleaseRequestId ||
+    binding.data.transactionRecordId !== context.expectedTransactionId ||
+    binding.data.consumedByTransactionId !== context.expectedTransactionId ||
+    refund.transactionId !== context.expectedTransactionId ||
+    refund.transactionId !== binding.data.transactionRecordId ||
+    refund.idempotencyKey !== context.idempotencyKey ||
+    !arcTransactionEvidenceMatches(refund.arcTransaction, targetTransaction) ||
+    decidedAt === null || consumedAt === null || refundedAt === null || occurredAt === null || approvalExpiresAt === null ||
+    decidedAt > consumedAt || consumedAt > refundedAt || refundedAt > occurredAt || occurredAt >= approvalExpiresAt ||
+    intent.actionKind !== "RELEASE_APPROVAL" ||
+    intent.projectId !== context.expectedProjectId ||
+    intent.releaseRequestId !== target.jobId ||
+    intent.transactionRecordId !== context.expectedTransactionId ||
+    intent.intentId !== context.expectedIntentId ||
+    intent.asset !== target.budget.asset ||
+    intent.atomicAmount !== target.budget.atomicUnits ||
+    intent.operationType !== "REFUND" ||
+    protocolTarget.destination !== target.clientAddress ||
+    protocolTarget.network !== targetTransaction.network ||
+    protocolTarget.chainId !== targetTransaction.chainId ||
+    protocolTarget.isMock !== targetTransaction.isMock
+  ) throw new InvalidTransitionError("agentic job refund authorization", from, to);
+}
+
 
 export async function transitionAgenticJob(from: AgenticJobStatus, to: AgenticJobStatus, context: TransitionContext) {
   if (!jobTransitions[from].includes(to)) throw new InvalidTransitionError("agentic job", from, to);
@@ -271,6 +329,7 @@ export async function transitionAgenticJob(from: AgenticJobStatus, to: AgenticJo
       !Number.isFinite(occurredAt) || !Number.isFinite(expiresAt) || !Number.isFinite(refundedAt) ||
       occurredAt < expiresAt || refundedAt < expiresAt || refundedAt > occurredAt
     ) throw new InvalidTransitionError("agentic job expiry evidence", from, to);
+    await validateJobRefundAuthorization(context, target.data, refund.data, from, to);
     return { status: to, auditEvent: event(context, from, to) } as const;
   }
   const current = AgenticJobRefSchema.safeParse(context.currentJobEvidence);
