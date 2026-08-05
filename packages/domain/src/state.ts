@@ -128,7 +128,6 @@ export async function transitionApplicationSubmission(context: TransitionContext
   const policy = arcTransaction === null ? null : requiredApprovalPolicy(arcTransaction.operationType);
   const decidedAt = assertFiniteTime(approval.data.decidedAt);
   const consumedAt = assertFiniteTime(binding.data.consumedAt);
-  const submittedAt = assertFiniteTime(submission.data.createdAt);
   const occurredAt = assertFiniteTime(context.occurredAt);
   const expiresAt = assertFiniteTime(approval.data.expiresAt);
   const recomputedHash = await hashCanonicalExecutionIntent(executionIntent);
@@ -189,6 +188,7 @@ async function validateJobExecutionAuthorization(context: TransitionContext, tar
   if (protocolTarget.kind !== "ERC8183") throw new InvalidTransitionError("agentic job execution authorization", from, to);
   const decidedAt = assertFiniteTime(approval.data.decidedAt);
   const consumedAt = assertFiniteTime(binding.data.consumedAt);
+  const submittedAt = assertFiniteTime(submission.data.createdAt);
   const occurredAt = assertFiniteTime(context.occurredAt);
   const expiresAt = assertFiniteTime(approval.data.expiresAt);
   const recomputedHash = await hashCanonicalExecutionIntent(intent);
