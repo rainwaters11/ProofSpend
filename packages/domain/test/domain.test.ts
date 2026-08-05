@@ -9,7 +9,7 @@ import {
   MockAgenticJobAdapter, MockIdentityAdapter, MockWalletReferenceAdapter, money, MoneyAmountSchema, MoneyError,
   RecoveryOperationRecordSchema, ReleaseRequestSchema, ReserveSchema, SettlementMoneyAmountSchema, SettlementRecordSchema, SubmissionOperationRecordSchema, subtractMoney,
   ReconciliationRecordSchema, TransactionRecordSchema, transitionAgenticJob, transitionApplication, transitionApplicationSubmission,
-  hashCanonicalExecutionIntent, serializeCanonicalExecutionIntent, validateExecutionAuthorization, validateLedgerReversal, validateReconciliation, validateReleaseConfirmation,
+  hashCanonicalExecutionIntent, hashJobParameterCommitment, serializeCanonicalExecutionIntent, validateExecutionAuthorization, validateLedgerReversal, validateReconciliation, validateReleaseConfirmation,
 } from "../src";
 
 type ReversalEntry = Extract<LedgerEntry, { kind: "REVERSAL" }>;
@@ -28,10 +28,11 @@ const jobFundingAuthorization = async (job: ReturnType<typeof mockJob>, transact
   const approvalId = "approval:job-fund";
   const bindingId = "binding:job-fund";
   const projectId = "project:job";
+  const parameterCommitment = await hashJobParameterCommitment({ operationType: "JOB_FUND", jobId: job.jobId, asset: job.budget.asset, atomicAmount: job.budget.atomicUnits, deliverableReference: null, decision: null, reasonReference: null });
   const executionIntent = CanonicalExecutionIntentSchema.parse({
     version: 1, actionKind: "RELEASE_APPROVAL", projectId, releaseRequestId: job.jobId, transactionRecordId: transactionId, intentId,
     asset: job.budget.asset, atomicAmount: job.budget.atomicUnits, operationType: "JOB_FUND",
-    protocolTarget: { kind: "ERC8183", standard: "ERC-8183", network: job.transaction.network, chainId: job.transaction.chainId, contractReference: job.contractAddress, jobId: job.jobId, method: "JOB_FUND", parameterCommitment: `sha256:${"a".repeat(64)}`, clientReference: job.clientAddress, providerReference: job.providerAddress, evaluatorReference: job.evaluatorAddress, destination: job.contractAddress },
+    protocolTarget: { kind: "ERC8183", standard: "ERC-8183", network: job.transaction.network, chainId: job.transaction.chainId, contractReference: job.contractAddress, jobId: job.jobId, method: "JOB_FUND", parameterCommitment, clientReference: job.clientAddress, providerReference: job.providerAddress, evaluatorReference: job.evaluatorAddress, destination: job.contractAddress },
   });
   const exactIntentHash = await hashCanonicalExecutionIntent(executionIntent);
   const jobApprovalDecision = ApprovalRecordSchema.parse({ id: approvalId, aggregateId: job.jobId, intentId, actionKind: "RELEASE_APPROVAL", authorizedActorType: "FOUNDER", authorizedActorId: job.clientAddress, exactIntentHash, idempotencyKey: "approval:job-fund:key", decision: "APPROVED", approver: { actorId: job.clientAddress, actorType: "FOUNDER" }, expiresAt: "2027-01-01T00:00:00.000Z", decidedAt: context.occurredAt });
@@ -44,10 +45,11 @@ const providerSubmissionAuthorization = async (job: ReturnType<typeof mockJob>, 
   const approvalId = "approval:job-submit";
   const bindingId = "binding:job-submit";
   const projectId = "project:job";
+  const parameterCommitment = await hashJobParameterCommitment({ operationType: "JOB_SUBMIT", jobId: job.jobId, asset: job.budget.asset, atomicAmount: job.budget.atomicUnits, deliverableReference: job.deliverableReference, decision: null, reasonReference: null });
   const executionIntent = CanonicalExecutionIntentSchema.parse({
     version: 1, actionKind: "JOB_SUBMISSION", projectId, releaseRequestId: job.jobId, transactionRecordId: transactionId, intentId,
     asset: job.budget.asset, atomicAmount: job.budget.atomicUnits, operationType: "JOB_SUBMIT",
-    protocolTarget: { kind: "ERC8183", standard: "ERC-8183", network: job.transaction.network, chainId: job.transaction.chainId, contractReference: job.contractAddress, jobId: job.jobId, method: "JOB_SUBMIT", parameterCommitment: `sha256:${"c".repeat(64)}`, clientReference: job.clientAddress, providerReference: job.providerAddress, evaluatorReference: job.evaluatorAddress, destination: job.contractAddress },
+    protocolTarget: { kind: "ERC8183", standard: "ERC-8183", network: job.transaction.network, chainId: job.transaction.chainId, contractReference: job.contractAddress, jobId: job.jobId, method: "JOB_SUBMIT", parameterCommitment, clientReference: job.clientAddress, providerReference: job.providerAddress, evaluatorReference: job.evaluatorAddress, destination: job.contractAddress },
   });
   const exactIntentHash = await hashCanonicalExecutionIntent(executionIntent);
   const jobApprovalDecision = ApprovalRecordSchema.parse({ id: approvalId, aggregateId: job.jobId, intentId, actionKind: "JOB_SUBMISSION", authorizedActorType: "PROVIDER", authorizedActorId: job.providerAddress, exactIntentHash, idempotencyKey: "approval:job-submit:key", decision: "APPROVED", approver: { actorId: job.providerAddress, actorType: "PROVIDER" }, expiresAt: "2027-01-01T00:00:00.000Z", decidedAt: context.occurredAt });
@@ -60,10 +62,11 @@ const jobEvaluationAuthorization = async (job: ReturnType<typeof mockJob>, decis
   const approvalId = `approval:${decision}`;
   const bindingId = `binding:job-evaluate:${decision.toLowerCase()}`;
   const projectId = "project:job";
+  const parameterCommitment = await hashJobParameterCommitment({ operationType: "JOB_EVALUATE", jobId: job.jobId, asset: job.budget.asset, atomicAmount: job.budget.atomicUnits, deliverableReference: job.deliverableReference, decision, reasonReference: job.reasonReference });
   const executionIntent = CanonicalExecutionIntentSchema.parse({
     version: 1, actionKind: "JOB_EVALUATION", projectId, releaseRequestId: job.jobId, transactionRecordId: transactionId, intentId,
     asset: job.budget.asset, atomicAmount: job.budget.atomicUnits, operationType: "JOB_EVALUATE",
-    protocolTarget: { kind: "ERC8183", standard: "ERC-8183", network: job.transaction.network, chainId: job.transaction.chainId, contractReference: job.contractAddress, jobId: job.jobId, method: "JOB_EVALUATE", parameterCommitment: `sha256:${"f".repeat(64)}`, clientReference: job.clientAddress, providerReference: job.providerAddress, evaluatorReference: job.evaluatorAddress, destination: job.contractAddress },
+    protocolTarget: { kind: "ERC8183", standard: "ERC-8183", network: job.transaction.network, chainId: job.transaction.chainId, contractReference: job.contractAddress, jobId: job.jobId, method: "JOB_EVALUATE", parameterCommitment, clientReference: job.clientAddress, providerReference: job.providerAddress, evaluatorReference: job.evaluatorAddress, destination: job.contractAddress },
   });
   const exactIntentHash = await hashCanonicalExecutionIntent(executionIntent);
   const jobApprovalDecision = ApprovalRecordSchema.parse({ id: approvalId, aggregateId: job.jobId, intentId, actionKind: "JOB_EVALUATION", authorizedActorType: "EVALUATOR", authorizedActorId: job.evaluatorAddress, exactIntentHash, idempotencyKey: `approval:${decision}:key`, decision, approver: { actorId: job.evaluatorAddress, actorType: "EVALUATOR" }, expiresAt: "2027-01-01T00:00:00.000Z", decidedAt: context.occurredAt });
@@ -548,13 +551,15 @@ describe("lifecycle evidence schemas", () => {
   it("requires persisted approvals and settlement references only in compatible release states", () => {
     const base = { id: "release:1", projectId: "project:1", milestoneId: "milestone:1", proofId: "proof:1", intentId: "intent:1", settlementId: null, amount: usdc("1"), idempotencyKey: "release:key", createdAt: context.occurredAt };
     expect(() => ReleaseRequestSchema.parse({ ...base, state: "APPROVED", approvalId: null })).toThrow();
+    expect(() => ReleaseRequestSchema.parse({ ...base, state: "FAILED", approvalId: null })).toThrow();
+    expect(ReleaseRequestSchema.parse({ ...base, state: "FAILED", approvalId: "approval:1" })).toBeDefined();
     expect(() => ReleaseRequestSchema.parse({ ...base, state: "RECONCILED", approvalId: null, settlementId: "settlement:1" })).toThrow();
     expect(() => ReleaseRequestSchema.parse({ ...base, state: "RECONCILED", approvalId: "approval:1", settlementId: null })).toThrow();
     expect(() => ReleaseRequestSchema.parse({ ...base, state: "DRAFT", approvalId: "approval:1" })).toThrow();
     expect(ReleaseRequestSchema.parse({ ...base, state: "SUBMITTED", approvalId: "approval:1" })).toBeDefined();
     expect(ReleaseRequestSchema.parse({ ...base, state: "RECONCILED", approvalId: "approval:1", settlementId: "settlement:1" })).toBeDefined();
     for (const state of ["DRAFT", "ELIGIBLE", "APPROVAL_PENDING", "APPROVED", "PREPARED", "SUBMITTED", "REJECTED", "FAILED"] as const) {
-      const approvalId = state === "APPROVED" || state === "PREPARED" || state === "SUBMITTED" ? "approval:1" : null;
+      const approvalId = state === "APPROVED" || state === "PREPARED" || state === "SUBMITTED" || state === "FAILED" ? "approval:1" : null;
       expect(() => ReleaseRequestSchema.parse({ ...base, state, approvalId, settlementId: "settlement:1" })).toThrow();
     }
   });
