@@ -11,8 +11,7 @@ export class MockAgenticJobAdapter {
     job = AgenticJobRefSchema.parse(job);
     if (!job.isMock) throw new Error("Mock adapter accepts only visibly synthetic jobs.");
     const result = transitionAgenticJob(job.status, to, { ...context, currentJobEvidence: job });
-    const evidence = to === "EXPIRED" ? { ...job, status: result.status } : context.jobEvidence;
-    if (evidence === undefined) throw new Error("Mock job transition requires persisted target evidence.");
+    const evidence = AgenticJobRefSchema.parse(context.jobEvidence ?? (to === "EXPIRED" ? { ...job, status: result.status } : undefined));
     return { job: evidence, auditEvent: result.auditEvent };
   }
 }
