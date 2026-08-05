@@ -197,10 +197,11 @@ export const SettlementRecordSchema = z.object({ id: Id, projectId: Id, releaseR
   const expiredRefundEligible = value.job?.status === "EXPIRED" && value.job.escrowTransaction !== null && transaction?.operationType === "REFUND" && transactionMatchesJob;
   const genericSettlementEligible = value.job === null && transaction?.operationType === "SETTLEMENT";
   const genericRefundEligible = value.job === null && transaction?.operationType === "REFUND";
+  const pendingJobEligible = value.job === null || !["COMPLETED", "REJECTED", "EXPIRED"].includes(value.job.status);
   const allowed =
-    (value.state === "PENDING" && (transaction === null || (genericSettlementEligible && ["PREPARED", "SUBMITTED"].includes(transaction.status)))) ||
+    (value.state === "PENDING" && ((transaction === null && pendingJobEligible) || (genericSettlementEligible && ["PREPARED", "SUBMITTED"].includes(transaction.status)))) ||
     (value.state === "CONFIRMED" && transaction?.status === "CONFIRMED" && (genericSettlementEligible || completionSettlementEligible)) ||
-    (value.state === "REFUND_PENDING" && (transaction === null || (genericRefundEligible && ["PREPARED", "SUBMITTED"].includes(transaction.status)))) ||
+    (value.state === "REFUND_PENDING" && ((transaction === null && pendingJobEligible) || (genericRefundEligible && ["PREPARED", "SUBMITTED"].includes(transaction.status)))) ||
     (value.state === "REFUNDED" && transaction?.status === "CONFIRMED" && (genericRefundEligible || expiredRefundEligible || rejectionRefundEligible)) ||
     (value.state === "RECONCILED" && transaction?.status === "CONFIRMED" && (genericSettlementEligible || completionSettlementEligible || genericRefundEligible || expiredRefundEligible || rejectionRefundEligible)) ||
     (value.state === "FAILED" && (transaction === null || (value.job === null && transaction.status === "FAILED" && (transaction.operationType === "SETTLEMENT" || transaction.operationType === "REFUND"))));
