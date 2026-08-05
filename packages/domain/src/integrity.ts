@@ -91,10 +91,10 @@ export function validateLedgerReversal(reversal: LedgerEntry, targetEntry: Ledge
   assert(parsedReversal.kind === "REVERSAL", "Ledger relationship validation requires a reversal entry.");
   if (targetEntry === null || targetEntry === undefined) throw new RelationshipIntegrityError("Ledger reversal target does not exist or match.");
   const parsedTarget = LedgerEntrySchema.parse(targetEntry);
-  assert(parsedTarget.id === parsedReversal.reversesEntryId && parsedTarget.id !== parsedReversal.id && parsedTarget.vaultId === parsedReversal.vaultId, "Ledger reversal target must be a different matching entry in the same vault.");
+  assert(parsedTarget.id === parsedReversal.reversesEntryId && parsedTarget.id !== parsedReversal.id && parsedTarget.vaultId === parsedReversal.vaultId && parsedTarget.reserveId === parsedReversal.reserveId, "Ledger reversal target must be a different matching entry in the same vault.");
   assert(parsedTarget.amount.asset === parsedReversal.amount.asset, "Ledger reversal asset does not match target.");
   const alreadyReversed = acceptedReversals.map((entry) => LedgerEntrySchema.parse(entry)).reduce((total, entry) => {
-    assert(entry.kind === "REVERSAL" && entry.reversesEntryId === parsedTarget.id && entry.vaultId === parsedTarget.vaultId && entry.amount.asset === parsedTarget.amount.asset, "Accepted reversal is unrelated to the target ledger entry.");
+    assert(entry.kind === "REVERSAL" && entry.reversesEntryId === parsedTarget.id && entry.vaultId === parsedTarget.vaultId && entry.reserveId === parsedTarget.reserveId && entry.amount.asset === parsedTarget.amount.asset, "Accepted reversal is unrelated to the target ledger entry.");
     return total + BigInt(entry.amount.atomicUnits);
   }, 0n);
   assert(alreadyReversed + BigInt(parsedReversal.amount.atomicUnits) <= BigInt(parsedTarget.amount.atomicUnits), "Ledger reversal exceeds the remaining target amount.");
