@@ -106,7 +106,10 @@ export function transitionApplication(from: ProofSpendApplicationState, to: Proo
 function validateLifecycleTransaction(context: TransitionContext, status: "PREPARED" | "FAILED", from: string, to: string): void {
   const parsed = TransactionRecordSchema.safeParse(context.lifecycleTransaction);
   const transaction = parsed.success ? parsed.data : null;
-  if (transaction === null || transaction.operationState !== status || transaction.arcTransaction?.status !== status || transaction.releaseRequestId !== context.aggregateId || transaction.id !== context.expectedTransactionId || transaction.projectId !== context.expectedProjectId || transaction.releaseRequestId !== context.expectedReleaseRequestId || transaction.intentId !== context.expectedIntentId || transaction.approvalId !== context.expectedApprovalId || transaction.approvalBindingId !== context.expectedApprovalBindingId || (context.expectedOperationType !== "SETTLEMENT" && context.expectedOperationType !== "REFUND") || transaction.arcTransaction.operationType !== context.expectedOperationType) throw new InvalidTransitionError("ProofSpend application transaction evidence", from, to);
+  const expectedOperationType = context.expectedOperationType;
+  const releaseOperation = expectedOperationType === "SETTLEMENT" || expectedOperationType === "REFUND";
+  const submittedTerminalOperation = from === "SUBMITTED" && status === "FAILED" && (expectedOperationType === "JOB_EVALUATE" || expectedOperationType === "JOB_REJECT");
+  if (transaction === null || transaction.operationState !== status || transaction.arcTransaction?.status !== status || transaction.releaseRequestId !== context.aggregateId || transaction.id !== context.expectedTransactionId || transaction.projectId !== context.expectedProjectId || transaction.releaseRequestId !== context.expectedReleaseRequestId || transaction.intentId !== context.expectedIntentId || transaction.approvalId !== context.expectedApprovalId || transaction.approvalBindingId !== context.expectedApprovalBindingId || (!releaseOperation && !submittedTerminalOperation) || transaction.arcTransaction.operationType !== expectedOperationType) throw new InvalidTransitionError("ProofSpend application transaction evidence", from, to);
 }
 
 function validateFailedSubmissionEvidence(context: TransitionContext, from: string, to: string): void {
