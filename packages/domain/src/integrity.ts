@@ -6,7 +6,7 @@ const assert = (condition: boolean, message: string): void => { if (!condition) 
 export function serializeCanonicalExecutionIntent(intent: CanonicalExecutionIntent): string {
   const target = intent.protocolTarget;
   const targetValues = target.kind === "DESTINATION"
-    ? [target.kind, target.destination, target.network, target.chainId]
+    ? [target.kind, target.isMock, target.destination, target.network, target.chainId]
     : [target.kind, target.standard, target.network, target.chainId, target.contractReference, target.jobId, target.method, target.parameterCommitment, target.clientReference, target.providerReference, target.evaluatorReference, target.destination];
   return JSON.stringify([intent.version, intent.actionKind, intent.projectId, intent.releaseRequestId, intent.transactionRecordId, intent.intentId, intent.asset, intent.atomicAmount, intent.operationType, ...targetValues]);
 }
@@ -61,6 +61,7 @@ export async function validateExecutionAuthorization(approval: ApprovalRecord, r
   assert(intent.asset === release.amount.asset && intent.atomicAmount === release.amount.atomicUnits, "Canonical execution amount does not match persisted amount.");
   assert(intent.operationType === transaction.arcTransaction.operationType && intent.protocolTarget.destination === transaction.destinationReference, "Canonical execution operation or destination does not match transaction.");
   assert(intent.protocolTarget.network === transaction.arcTransaction.network && intent.protocolTarget.chainId === transaction.arcTransaction.chainId, "Canonical execution network does not match transaction.");
+  if (intent.protocolTarget.kind === "DESTINATION") assert(intent.protocolTarget.isMock === transaction.arcTransaction.isMock, "Canonical destination mode does not match transaction mode.");
   const recomputedHash = await hashCanonicalExecutionIntent(intent);
   assert(recomputedHash === approval.exactIntentHash && recomputedHash === binding.exactIntentHash, "Recomputed exact intent hash does not match approval and binding.");
   return true;
