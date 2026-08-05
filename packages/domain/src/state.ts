@@ -162,7 +162,7 @@ const mutableJobEvidenceMatches = (current: AgenticJobRef, target: AgenticJobRef
     transactionMatches;
 };
 
-function validateProviderSubmissionAuthorization(context: TransitionContext, target: AgenticJobRef, from: AgenticJobStatus, to: AgenticJobStatus): void {
+async function validateProviderSubmissionAuthorization(context: TransitionContext, target: AgenticJobRef, from: AgenticJobStatus, to: AgenticJobStatus): Promise<void> {
   const approval = ApprovalRecordSchema.safeParse(context.jobApprovalDecision);
   const binding = ExecutionAuthorizationBindingSchema.safeParse(context.executionBinding);
   if (!approval.success || !binding.success || target.transaction === null) throw new InvalidTransitionError("agentic job provider submission authorization", from, to);
@@ -173,6 +173,7 @@ function validateProviderSubmissionAuthorization(context: TransitionContext, tar
   const consumedAt = assertFiniteTime(binding.data.consumedAt);
   const occurredAt = assertFiniteTime(context.occurredAt);
   const expiresAt = assertFiniteTime(approval.data.expiresAt);
+  const recomputedHash = await hashCanonicalExecutionIntent(intent);
   if (
     approval.data.actionKind !== "JOB_SUBMISSION" ||
     approval.data.authorizedActorType !== "PROVIDER" ||
@@ -189,6 +190,7 @@ function validateProviderSubmissionAuthorization(context: TransitionContext, tar
     approval.data.intentId !== binding.data.intentId ||
     approval.data.exactIntentHash !== context.expectedExactIntentHash ||
     approval.data.exactIntentHash !== binding.data.exactIntentHash ||
+    approval.data.exactIntentHash !== recomputedHash ||
     binding.data.id !== context.expectedApprovalBindingId ||
     binding.data.status !== "CONSUMED" ||
     binding.data.releaseRequestId !== target.jobId ||
@@ -218,7 +220,7 @@ function validateProviderSubmissionAuthorization(context: TransitionContext, tar
 }
 
 
-export function transitionAgenticJob(from: AgenticJobStatus, to: AgenticJobStatus, context: TransitionContext) {
+export async function transitionAgenticJob(from: AgenticJobStatus, to: AgenticJobStatus, context: TransitionContext) {
   if (!jobTransitions[from].includes(to)) throw new InvalidTransitionError("agentic job", from, to);
   const authority = jobAuthority[`${from}->${to}`];
   if (authority === undefined || context.actor.actorType !== authority.actorType || context[authority.identifier] === undefined || context.actor.actorId !== context[authority.identifier]) throw new InvalidTransitionError("agentic job authority", from, to);
@@ -235,8 +237,9 @@ export function transitionAgenticJob(from: AgenticJobStatus, to: AgenticJobStatu
   if (!current.success || !target.success || !current.data.isMock || !target.data.isMock || current.data.jobId !== context.aggregateId || target.data.jobId !== context.aggregateId || current.data.status !== from || target.data.status !== to || !immutableJobFieldsMatch(current.data, target.data)) throw new InvalidTransitionError("agentic job lifecycle evidence", from, to);
   if (to === "FUNDED" && (target.data.deliverableReference !== null || target.data.reasonReference !== null || target.data.transaction?.isMock !== true || target.data.transaction.status !== "CONFIRMED" || target.data.transaction.operationType !== "JOB_FUND")) throw new InvalidTransitionError("agentic job funding evidence", from, to);
   if (to === "SUBMITTED") {
-    if (target.data.deliverableReference === null || target.data.reasonReference !== null || target.data.transaction?.isMock !== true || !["SUBMITTED", "CONFIRMED"].includes(target.data.transaction.status) || target.data.transaction.operationType !== "JOB_SUBMIT") throw new InvalidTransitionError("agentic job submission evidence", from, to);
-    validateProviderSubmissionAuthorization(context, target.data, from, to);
+    const fundingTransaction = current.data.transaction;
+    if (current.data.deliverableReference !== null || current.data.reasonReference !== null || fundingTransaction?.isMock !== true || fundingTransaction.status !== "CONFIRMED" || fundingTransaction.operationType !== "JOB_FUND" || fundingTransaction.transactionHash === null || fundingTransaction.blockNumber === null || fundingTransaction.blockHash === null || target.data.deliverableReference === null || target.data.reasonReference !== null || target.data.transaction?.isMock !== true || !["SUBMITTED", "CONFIRMED"].includes(target.data.transaction.status) || target.data.transaction.operationType !== "JOB_SUBMIT") throw new InvalidTransitionError("agentic job submission evidence", from, to);
+    await validateProviderSubmissionAuthorization(context, target.data, from, to);
   }
   if (to === "COMPLETED" || to === "REJECTED") {
     const approval = ApprovalRecordSchema.safeParse(context.jobApprovalDecision);
