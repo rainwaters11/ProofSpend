@@ -17,16 +17,25 @@ function sameAsset(left: MoneyAmount, right: MoneyAmount): void {
   if (left.asset !== right.asset) throw new MoneyError("ASSET_MISMATCH", "Money assets must match.");
 }
 
+function parseMoneyOperands(left: MoneyAmount, right: MoneyAmount): readonly [MoneyAmount, MoneyAmount] {
+  return [MoneyAmountSchema.parse(left), MoneyAmountSchema.parse(right)];
+}
+
 export function addMoney(left: MoneyAmount, right: MoneyAmount): MoneyAmount {
-  sameAsset(left, right); return money(left.asset, (BigInt(left.atomicUnits) + BigInt(right.atomicUnits)).toString());
+  const [parsedLeft, parsedRight] = parseMoneyOperands(left, right);
+  sameAsset(parsedLeft, parsedRight);
+  return money(parsedLeft.asset, (BigInt(parsedLeft.atomicUnits) + BigInt(parsedRight.atomicUnits)).toString());
 }
 export function subtractMoney(left: MoneyAmount, right: MoneyAmount): MoneyAmount {
-  sameAsset(left, right);
-  const result = BigInt(left.atomicUnits) - BigInt(right.atomicUnits);
+  const [parsedLeft, parsedRight] = parseMoneyOperands(left, right);
+  sameAsset(parsedLeft, parsedRight);
+  const result = BigInt(parsedLeft.atomicUnits) - BigInt(parsedRight.atomicUnits);
   if (result < 0n) throw new MoneyError("INSUFFICIENT_FUNDS", "Money subtraction cannot produce a negative amount.");
-  return money(left.asset, result.toString());
+  return money(parsedLeft.asset, result.toString());
 }
 export function compareMoney(left: MoneyAmount, right: MoneyAmount): -1 | 0 | 1 {
-  sameAsset(left, right); const a = BigInt(left.atomicUnits); const b = BigInt(right.atomicUnits);
+  const [parsedLeft, parsedRight] = parseMoneyOperands(left, right);
+  sameAsset(parsedLeft, parsedRight);
+  const a = BigInt(parsedLeft.atomicUnits); const b = BigInt(parsedRight.atomicUnits);
   return a < b ? -1 : a > b ? 1 : 0;
 }
