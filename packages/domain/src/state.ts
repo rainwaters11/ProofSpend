@@ -309,11 +309,12 @@ export async function transitionAgenticJob(from: AgenticJobStatus, to: AgenticJo
     });
     const transaction = target.data.transaction;
     const priorTransaction = current.data.transaction;
+    const escrowTransaction = target.data.escrowTransaction;
     const deliverablePreserved = target.data.deliverableReference === current.data.deliverableReference;
     const priorStateEvidenceValid =
-      (from === "OPEN" && current.data.deliverableReference === null && current.data.reasonReference === null && priorTransaction === null) ||
-      (from === "FUNDED" && current.data.deliverableReference === null && current.data.reasonReference === null && priorTransaction?.operationType === "JOB_FUND" && priorTransaction.status === "CONFIRMED" && priorTransaction.transactionHash !== null && priorTransaction.blockNumber !== null && priorTransaction.blockHash !== null) ||
-      (from === "SUBMITTED" && current.data.deliverableReference !== null && current.data.reasonReference === null && priorTransaction?.operationType === "JOB_SUBMIT" && priorTransaction.status === "CONFIRMED" && priorTransaction.transactionHash !== null && priorTransaction.blockNumber !== null && priorTransaction.blockHash !== null);
+      (from === "OPEN" && current.data.deliverableReference === null && current.data.reasonReference === null && priorTransaction === null && escrowTransaction === null) ||
+      (from === "FUNDED" && current.data.deliverableReference === null && current.data.reasonReference === null && priorTransaction?.operationType === "JOB_FUND" && priorTransaction.status === "CONFIRMED" && priorTransaction.transactionHash !== null && priorTransaction.blockNumber !== null && priorTransaction.blockHash !== null && escrowTransaction !== null && arcTransactionEvidenceMatches(priorTransaction, escrowTransaction)) ||
+      (from === "SUBMITTED" && current.data.deliverableReference !== null && current.data.reasonReference === null && priorTransaction?.operationType === "JOB_SUBMIT" && priorTransaction.status === "CONFIRMED" && priorTransaction.transactionHash !== null && priorTransaction.blockNumber !== null && priorTransaction.blockHash !== null && escrowTransaction !== null && arcTransactionEvidenceMatches(priorTransaction, escrowTransaction));
     if (!priorStateEvidenceValid || !deliverablePreserved || transaction === null || transaction.status !== "CONFIRMED" || transaction.operationType !== "JOB_REJECT" || transaction.transactionHash === null) throw new InvalidTransitionError("agentic job rejection evidence", from, to);
     if (evaluatorRejection) {
       const evaluationEvidence = JobEvaluationEvidenceSchema.safeParse(context.jobEvaluationEvidence);
