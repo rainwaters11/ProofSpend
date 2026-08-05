@@ -302,9 +302,17 @@ describe("separate state machines", () => {
   it("requires exact transaction evidence for preparation and failure", () => {
     const makeTransaction = (status: "PREPARED" | "FAILED") => TransactionRecordSchema.parse({ id: `transaction:${status}`, projectId: "project:1", releaseRequestId: "release:1", intentId: "intent:1", destinationReference: "mock:recipient", approvalId: "approval:1", approvalBindingId: "binding:1", reconciliationId: null, idempotencyKey: `transaction:${status}:key`, amount: usdc("1"), operationState: status, arcTransaction: mockTransaction(status), createdAt: context.occurredAt, updatedAt: context.occurredAt });
     const adapter = { actorId: "adapter", actorType: "ADAPTER" as const };
-    const evidence = (transaction: ReturnType<typeof makeTransaction>) => ({ ...context, aggregateId: transaction.releaseRequestId, actor: adapter, authorizedAdapterId: adapter.actorId, lifecycleTransaction: transaction, expectedTransactionId: transaction.id, expectedProjectId: transaction.projectId, expectedReleaseRequestId: transaction.releaseRequestId, expectedIntentId: transaction.intentId, expectedApprovalId: transaction.approvalId!, expectedApprovalBindingId: transaction.approvalBindingId! });
+    const evidence = (transaction: ReturnType<typeof makeTransaction>) => ({ ...context, aggregateId: transaction.releaseRequestId, actor: adapter, authorizedAdapterId: adapter.actorId, lifecycleTransaction: transaction, expectedTransactionId: transaction.id, expectedProjectId: transaction.projectId, expectedReleaseRequestId: transaction.releaseRequestId, expectedIntentId: transaction.intentId, expectedApprovalId: transaction.approvalId!, expectedApprovalBindingId: transaction.approvalBindingId!, expectedOperationType: transaction.arcTransaction!.operationType });
     const prepared = makeTransaction("PREPARED"); expect(transitionApplication("APPROVED", "PREPARED", evidence(prepared)).state).toBe("PREPARED");
     expect(() => transitionApplication("APPROVED", "PREPARED", { ...evidence(prepared), lifecycleTransaction: undefined })).toThrow();
+    expect(() => transitionApplication("APPROVED", "PREPARED", { ...evidence(prepared), expectedOperationType: undefined })).toThrow(InvalidTransitionError);
+    expect(() => transitionApplication("APPROVED", "PREPARED", { ...evidence(prepared), expectedOperationType: "REFUND" })).toThrow(InvalidTransitionError);
+    for (const operationType of ["JOB_CREATE", "JOB_FUND", "JOB_SUBMIT", "JOB_EVALUATE", "JOB_REJECT", "IDENTITY_REGISTRATION", "REPUTATION_WRITE"] as const) {
+      const unrelated = TransactionRecordSchema.parse({ ...prepared, arcTransaction: mockTransaction("PREPARED", operationType) });
+      expect(() => transitionApplication("APPROVED", "PREPARED", evidence(unrelated))).toThrow(InvalidTransitionError);
+    }
+    const refundPrepared = TransactionRecordSchema.parse({ ...prepared, arcTransaction: mockTransaction("PREPARED", "REFUND") });
+    expect(transitionApplication("APPROVED", "PREPARED", evidence(refundPrepared)).state).toBe("PREPARED");
     const failed = makeTransaction("FAILED"); expect(transitionApplication("PREPARED", "FAILED", evidence(failed)).state).toBe("FAILED"); expect(transitionApplication("SUBMITTED", "FAILED", evidence(failed)).state).toBe("FAILED");
     expect(() => transitionApplication("PREPARED", "FAILED", { ...context, actor: adapter, authorizedAdapterId: adapter.actorId })).toThrow();
     expect(() => transitionApplication("PREPARED", "FAILED", { ...evidence(failed), lifecycleTransaction: prepared })).toThrow();
@@ -319,6 +327,7 @@ describe("separate state machines", () => {
     expect(() => transitionApplication("SUBMITTED", "CONFIRMED", { ...confirmation, submissionTransaction: undefined })).toThrow(InvalidTransitionError);
     expect(() => transitionApplication("SUBMITTED", "CONFIRMED", { ...confirmation, confirmationTransaction: { ...transaction, amount: usdc("2") } })).toThrow(InvalidTransitionError);
     expect(() => transitionApplication("SUBMITTED", "CONFIRMED", { ...confirmation, confirmationTransaction: { ...transaction, destinationReference: "mock:other" } })).toThrow(InvalidTransitionError);
+    expect(() => transitionApplication("SUBMITTED", "CONFIRMED", { ...confirmation, confirmationTransaction: { ...transaction, idempotencyKey: "transaction:confirmation:other-key" } })).toThrow(InvalidTransitionError);
     expect(() => transitionApplication("SUBMITTED", "CONFIRMED", { ...confirmation, confirmationTransaction: { ...transaction, arcTransaction: { ...transaction.arcTransaction!, transactionHash: "mock:different" } } })).toThrow(InvalidTransitionError);
     expect(() => transitionApplication("SUBMITTED", "CONFIRMED", { ...confirmation, confirmationTransaction: { ...transaction, arcTransaction: { ...transaction.arcTransaction!, chainId: "synthetic:other-chain" } } })).toThrow(InvalidTransitionError);
     for (const status of ["PREPARED", "SUBMITTED", "FAILED"] as const) expect(() => transitionApplication("SUBMITTED", "CONFIRMED", { ...confirmation, confirmationTransaction: { ...transaction, operationState: status, arcTransaction: mockTransaction(status) } })).toThrow(InvalidTransitionError);
