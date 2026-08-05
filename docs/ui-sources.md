@@ -29,6 +29,18 @@ Records components adapted from approved open-source sources for Issue #14. See 
 - **Magic UI** (marketing motion) — deferred to Phase B (public landing page). No Magic UI source was copied in this phase.
 - **shadcn-admin** — reference-only per Issue #14; not forked or copied. Only used as informal inspiration for the collapsible-sidebar-plus-header composition described in Issue #14, re-implemented independently against ProofSpend's own routes and tokens.
 
+## shadcn/ui — release-lifecycle demonstration (this phase)
+
+Same usage model as Phase A above (hand-adapted source, no vendoring).
+
+| File | Upstream primitive | Adaptation |
+| --- | --- | --- |
+| `apps/web/components/ui/card.tsx` | `card` | `Card`/`CardHeader`/`CardTitle`/`CardDescription`/`CardContent`/`CardFooter` remapped to `--surface`/`--border` tokens; responsive padding (`p-4` mobile, `p-6` desktop). |
+
+Tremor and Magic UI remain unused — this phase is mock-data presentation only, not real reserve/spend charting.
+
 ## ProofSpend-owned code
 
 `ModeBadge`, `RoleBadge`, `AppShell`, `DesktopSidebar`, `MobileNav`, `TopHeader`, `PlaceholderPanel`, and all placeholder route pages under `apps/web/app/app/**` and `apps/web/app/proof/**` are original ProofSpend product code, not adapted from any third-party source.
+
+All components under `apps/web/components/release/**` and `apps/web/components/backer/**`, plus `apps/web/lib/release-scenario.ts` and `apps/web/lib/format-money.ts`, are original ProofSpend product code built for the release-lifecycle demonstration (this phase). They render only the frozen mock PawPOVAI scenario from `release-scenario.ts` against the real `@proofspend/domain` types — no third-party source was adapted.

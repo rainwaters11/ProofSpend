@@ -11,6 +11,7 @@
     "build": "next build"
   },
   "dependencies": {
+    "@proofspend/domain": "workspace:*",
     "@proofspend/shared": "workspace:*",
     "@radix-ui/react-dialog": "^1.1.23",
     "@radix-ui/react-separator": "^1.1.15",
