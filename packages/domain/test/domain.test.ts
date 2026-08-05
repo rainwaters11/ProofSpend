@@ -139,7 +139,7 @@ describe("separate state machines", () => {
   it("enforces status-specific ERC-8183 evidence at the schema boundary", () => {
     const open = mockJob("OPEN");
     const funded = mockJob("FUNDED", mockTransaction("CONFIRMED", "JOB_FUND"));
-    const submitted = mockJob("SUBMITTED", mockTransaction("SUBMITTED", "JOB_SUBMIT"));
+    const submitted = mockJob("SUBMITTED", mockTransaction("CONFIRMED", "JOB_SUBMIT"));
     const completed = mockJob("COMPLETED", mockTransaction("CONFIRMED", "JOB_EVALUATE"));
     const completedWithReason = AgenticJobRefSchema.parse({ ...completed, reasonReference: "mock:completion-attestation" });
     const rejected = mockJob("REJECTED", mockTransaction("CONFIRMED", "JOB_REJECT"));
@@ -153,6 +153,7 @@ describe("separate state machines", () => {
       { ...open, status: "EXPIRED" as const },
       { ...open, status: "COMPLETED" as const },
       { ...submitted, deliverableReference: null },
+      { ...submitted, transaction: mockTransaction("SUBMITTED", "JOB_SUBMIT") },
       { ...completed, transaction: null },
       { ...funded, status: "EXPIRED" as const },
       { ...submitted, status: "EXPIRED" as const },
@@ -355,7 +356,7 @@ describe("separate state machines", () => {
   it("separates exact evaluator approval from adapter terminal confirmation", async () => {
     const adapter = { actorId: "adapter:terminal", actorType: "ADAPTER" as const };
     const submittedCurrent = mockJob("SUBMITTED", mockTransaction("CONFIRMED", "JOB_SUBMIT"));
-    const unconfirmedSubmittedCurrent = mockJob("SUBMITTED", mockTransaction("SUBMITTED", "JOB_SUBMIT"));
+    const unconfirmedSubmittedCurrent = { ...submittedCurrent, transaction: mockTransaction("SUBMITTED", "JOB_SUBMIT") } as typeof submittedCurrent;
     const completed = mockJob("COMPLETED", mockTransaction("CONFIRMED", "JOB_EVALUATE"));
     const completedWithReason = AgenticJobRefSchema.parse({ ...completed, reasonReference: "mock:completion-attestation" });
     const rejected = mockJob("REJECTED", mockTransaction("CONFIRMED", "JOB_REJECT"));
@@ -479,9 +480,11 @@ describe("separate state machines", () => {
     await expect(transitionAgenticJob("OPEN", "FUNDED", { ...fundingContext, jobEvidence: { ...funded, deliverableReference: "mock:deliverable" } })).rejects.toThrow(InvalidTransitionError);
     await expect(transitionAgenticJob("OPEN", "FUNDED", { ...fundingContext, jobEvidence: { ...funded, reasonReference: "mock:reason" } })).rejects.toThrow(InvalidTransitionError);
 
-    const submitted = mockJob("SUBMITTED", mockTransaction("SUBMITTED", "JOB_SUBMIT"));
+    const submitted = mockJob("SUBMITTED", mockTransaction("CONFIRMED", "JOB_SUBMIT"));
     const submissionContext = { ...context, aggregateId: submitted.jobId, actor: adapter, authorizedAdapterId: adapter.actorId, currentJobEvidence: funded, jobEvidence: submitted, ...await providerSubmissionAuthorization(submitted) };
     expect((await transitionAgenticJob("FUNDED", "SUBMITTED", submissionContext)).status).toBe("SUBMITTED");
+    const pendingSubmitted = { ...submitted, transaction: mockTransaction("SUBMITTED", "JOB_SUBMIT") } as typeof submitted;
+    await expect(transitionAgenticJob("FUNDED", "SUBMITTED", { ...submissionContext, jobEvidence: pendingSubmitted, submissionOperation: { ...submissionContext.submissionOperation, arcTransaction: pendingSubmitted.transaction! } })).rejects.toThrow(InvalidTransitionError);
     await expect(transitionAgenticJob("FUNDED", "SUBMITTED", { ...submissionContext, occurredAt: funded.expiresAt })).rejects.toThrow(InvalidTransitionError);
     await expect(transitionAgenticJob("FUNDED", "SUBMITTED", { ...submissionContext, jobApprovalDecision: undefined })).rejects.toThrow(InvalidTransitionError);
     await expect(transitionAgenticJob("FUNDED", "SUBMITTED", { ...submissionContext, executionBinding: undefined })).rejects.toThrow(InvalidTransitionError);
@@ -642,9 +645,11 @@ describe("protocol-safe mocks and privacy", () => {
     const funded = AgenticJobRefSchema.parse({ ...job, status: "FUNDED", transaction: mockTransaction("CONFIRMED", "JOB_FUND") });
     expect((await adapter.transition(job, "FUNDED", { ...authority, currentJobEvidence: { ...job, budget: usdc("1") }, jobEvidence: funded, ...await jobFundingAuthorization(funded) })).job.status).toBe("FUNDED"); expect(job.status).toBe("OPEN");
     await expect(adapter.transition(funded, "SUBMITTED", authority)).rejects.toThrow(InvalidTransitionError);
-    const submitted = AgenticJobRefSchema.parse({ ...funded, status: "SUBMITTED", deliverableReference: "mock:deliverable", transaction: mockTransaction("SUBMITTED", "JOB_SUBMIT") });
+    const submitted = AgenticJobRefSchema.parse({ ...funded, status: "SUBMITTED", deliverableReference: "mock:deliverable", transaction: mockTransaction("CONFIRMED", "JOB_SUBMIT") });
     const submissionAuthority = { ...authority, currentJobEvidence: funded, jobEvidence: submitted, ...await providerSubmissionAuthorization(submitted) };
     expect((await adapter.transition(funded, "SUBMITTED", submissionAuthority)).job.status).toBe("SUBMITTED");
+    const pendingSubmitted = { ...submitted, transaction: mockTransaction("SUBMITTED", "JOB_SUBMIT") } as typeof submitted;
+    await expect(adapter.transition(funded, "SUBMITTED", { ...submissionAuthority, jobEvidence: pendingSubmitted, submissionOperation: { ...submissionAuthority.submissionOperation, arcTransaction: pendingSubmitted.transaction! } })).rejects.toThrow(InvalidTransitionError);
     await expect(adapter.transition(funded, "SUBMITTED", { ...authority, jobEvidence: { ...submitted, deliverableReference: null } })).rejects.toThrow(InvalidTransitionError);
     const refundAuthority = { ...context, occurredAt: job.expiresAt, aggregateId: job.jobId, actor: { actorId: "adapter", actorType: "ADAPTER" as const }, authorizedAdapterId: "adapter" };
     await expect(adapter.transition(job, "EXPIRED", refundAuthority)).rejects.toThrow(InvalidTransitionError);
@@ -760,11 +765,14 @@ describe("lifecycle evidence schemas", () => {
     expect(() => SettlementRecordSchema.parse({ ...base, state: "CONFIRMED", amount: usdc("2"), job: completedJob, transaction: mockTransaction("CONFIRMED") })).toThrow();
     expect(() => SettlementRecordSchema.parse({ ...base, state: "CONFIRMED", job: submittedJob, transaction: mockTransaction("CONFIRMED") })).toThrow();
     expect(SettlementRecordSchema.parse({ ...base, state: "REFUNDED", job: rejectedJob, transaction: mockTransaction("CONFIRMED", "REFUND") })).toBeDefined();
+    expect(SettlementRecordSchema.parse({ ...base, state: "REFUNDED", job: rejectedJob, transaction: rejectedJob.transaction })).toBeDefined();
+    expect(() => SettlementRecordSchema.parse({ ...base, state: "REFUNDED", job: null, transaction: rejectedJob.transaction })).toThrow();
     expect(() => SettlementRecordSchema.parse({ ...base, state: "REFUNDED", amount: usdc("2"), job: rejectedJob, transaction: mockTransaction("CONFIRMED", "REFUND") })).toThrow();
     expect(SettlementRecordSchema.parse({ ...base, state: "REFUNDED", job: expiredJob, transaction: mockTransaction("CONFIRMED", "REFUND") })).toBeDefined();
     expect(() => SettlementRecordSchema.parse({ ...base, state: "REFUNDED", job: completedJob, transaction: mockTransaction("CONFIRMED", "REFUND") })).toThrow();
     expect(SettlementRecordSchema.parse({ ...base, state: "RECONCILED", reconciliationId: "reconciliation:1", job: completedJob, transaction: mockTransaction("CONFIRMED") })).toBeDefined();
     expect(SettlementRecordSchema.parse({ ...base, state: "RECONCILED", reconciliationId: "reconciliation:1", job: rejectedJob, transaction: mockTransaction("CONFIRMED", "REFUND") })).toBeDefined();
+    expect(SettlementRecordSchema.parse({ ...base, state: "RECONCILED", reconciliationId: "reconciliation:1", job: rejectedJob, transaction: rejectedJob.transaction })).toBeDefined();
     expect(() => SettlementRecordSchema.parse({ ...base, state: "CONFIRMED", job: completedJob, transaction: null })).toThrow();
   });
   it.each([
@@ -997,12 +1005,14 @@ describe("Backer-safe disclosure filtering", () => {
     expect(result.settlements.map((record) => record.id)).toEqual(["settlement:selected"]);
     expect(result.settlements[0]?.disposition).toBeNull();
     const reconciliationId = "reconciliation:disclosure";
+    const rejectedJob = mockJob("REJECTED", mockTransaction("CONFIRMED", "JOB_REJECT"));
     const reconciled = [
       { ...settlement, id: "settlement:paid", projectId: seed.project.id, reconciliationId, state: "RECONCILED" as const, transaction: mockTransaction("CONFIRMED", "SETTLEMENT") },
       { ...settlement, id: "settlement:refunded", projectId: seed.project.id, releaseRequestId: "release:2", reconciliationId, state: "RECONCILED" as const, transaction: mockTransaction("CONFIRMED", "REFUND") },
+      { ...settlement, id: "settlement:rejected", projectId: seed.project.id, releaseRequestId: "release:3", reconciliationId, state: "RECONCILED" as const, job: rejectedJob, transaction: rejectedJob.transaction },
     ];
     const dispositions = filterBackerDisclosure({ project: seed.project, evidence: [], proofs: [], settlements: reconciled, preferences: { ...seed.disclosurePreferences, discloseSettlementState: true } }).settlements.map(({ disposition }) => disposition);
-    expect(dispositions).toEqual(["SETTLEMENT", "REFUND"]);
+    expect(dispositions).toEqual(["SETTLEMENT", "REFUND", "REFUND"]);
     expect(() => filterBackerDisclosure({ project: seed.project, evidence: [], proofs: [], settlements: [{ ...settlement, id: "settlement:invalid-other", projectId: "project:other", state: "CONFIRMED" }], preferences: { ...seed.disclosurePreferences, discloseSettlementState: false } })).toThrow();
   });
   it("fails closed on malformed disclosure preferences", () => {
