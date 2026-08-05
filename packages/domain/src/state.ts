@@ -252,7 +252,8 @@ async function validateJobRefundAuthorization(context: TransitionContext, target
   if (!approval.success || !binding.success || targetTransaction === null || context.idempotencyKey === undefined) throw new InvalidTransitionError("agentic job refund authorization", from, to);
   const intent = binding.data.executionIntent;
   const protocolTarget = intent.protocolTarget;
-  if (protocolTarget.kind !== "DESTINATION") throw new InvalidTransitionError("agentic job refund authorization", from, to);
+  if (protocolTarget.kind !== "ERC8183") throw new InvalidTransitionError("agentic job refund authorization", from, to);
+  const parameterCommitment = await hashJobParameterCommitment({ operationType: "REFUND", jobId: target.jobId, asset: target.budget.asset, atomicAmount: target.budget.atomicUnits, deliverableReference: target.deliverableReference, decision: null, reasonReference: null });
   const decidedAt = assertFiniteTime(approval.data.decidedAt);
   const consumedAt = assertFiniteTime(binding.data.consumedAt);
   const refundedAt = assertFiniteTime(refund.createdAt);
@@ -296,10 +297,16 @@ async function validateJobRefundAuthorization(context: TransitionContext, target
     intent.asset !== target.budget.asset ||
     intent.atomicAmount !== target.budget.atomicUnits ||
     intent.operationType !== "REFUND" ||
+    protocolTarget.method !== "CLAIM_REFUND" ||
+    protocolTarget.parameterCommitment !== parameterCommitment ||
+    protocolTarget.jobId !== target.jobId ||
+    protocolTarget.contractReference !== target.contractAddress ||
+    protocolTarget.clientReference !== target.clientAddress ||
+    protocolTarget.providerReference !== target.providerAddress ||
+    protocolTarget.evaluatorReference !== target.evaluatorAddress ||
     protocolTarget.destination !== target.clientAddress ||
     protocolTarget.network !== targetTransaction.network ||
-    protocolTarget.chainId !== targetTransaction.chainId ||
-    protocolTarget.isMock !== targetTransaction.isMock
+    protocolTarget.chainId !== targetTransaction.chainId
   ) throw new InvalidTransitionError("agentic job refund authorization", from, to);
 }
 
