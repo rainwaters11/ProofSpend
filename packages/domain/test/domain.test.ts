@@ -316,12 +316,18 @@ describe("separate state machines", () => {
     expect(() => transitionApplication("APPROVED", "PREPARED", { ...evidence(prepared), lifecycleTransaction: undefined })).toThrow();
     expect(() => transitionApplication("APPROVED", "PREPARED", { ...evidence(prepared), expectedOperationType: undefined })).toThrow(InvalidTransitionError);
     expect(() => transitionApplication("APPROVED", "PREPARED", { ...evidence(prepared), expectedOperationType: "REFUND" })).toThrow(InvalidTransitionError);
-    for (const operationType of ["JOB_CREATE", "JOB_FUND", "JOB_SUBMIT", "JOB_EVALUATE", "JOB_REJECT", "IDENTITY_REGISTRATION", "REPUTATION_WRITE"] as const) {
+    for (const operationType of ["JOB_CREATE", "JOB_FUND", "JOB_SUBMIT", "IDENTITY_REGISTRATION", "REPUTATION_WRITE"] as const) {
       const unrelated = TransactionRecordSchema.parse({ ...prepared, arcTransaction: { ...mockTransaction("PREPARED"), operationType } });
       expect(() => transitionApplication("APPROVED", "PREPARED", evidence(unrelated))).toThrow(InvalidTransitionError);
     }
     const refundPrepared = TransactionRecordSchema.parse({ ...prepared, arcTransaction: mockTransaction("PREPARED", "REFUND") });
     expect(transitionApplication("APPROVED", "PREPARED", evidence(refundPrepared)).state).toBe("PREPARED");
+    for (const operationType of ["JOB_EVALUATE", "JOB_REJECT"] as const) {
+      const terminalPrepared = TransactionRecordSchema.parse({ ...prepared, arcTransaction: { ...mockTransaction("PREPARED"), operationType } });
+      expect(transitionApplication("APPROVED", "PREPARED", evidence(terminalPrepared)).state).toBe("PREPARED");
+      expect(() => transitionApplication("APPROVED", "PREPARED", { ...evidence(terminalPrepared), expectedOperationType: operationType === "JOB_EVALUATE" ? "JOB_REJECT" : "JOB_EVALUATE" })).toThrow(InvalidTransitionError);
+      expect(() => transitionApplication("PREPARED", "FAILED", evidence(TransactionRecordSchema.parse({ ...terminalPrepared, operationState: "FAILED", arcTransaction: { ...mockTransaction("FAILED"), operationType } })))).toThrow(InvalidTransitionError);
+    }
     const failed = makeTransaction("FAILED");
     expect(transitionApplication("PREPARED", "FAILED", evidence(failed)).state).toBe("FAILED");
     const failedSubmission = TransactionRecordSchema.parse({ ...failed, arcTransaction: { ...mockTransaction("FAILED"), transactionHash: "mock:transaction" } });
