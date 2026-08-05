@@ -330,6 +330,12 @@ describe("separate state machines", () => {
     const evaluationTarget = completedAuthorization.executionBinding.executionIntent.protocolTarget;
     if (evaluationTarget.kind !== "ERC8183") throw new Error("Expected an ERC-8183 evaluation target.");
     await expect(transitionAgenticJob("SUBMITTED", "COMPLETED", { ...completedContext, executionBinding: { ...completedAuthorization.executionBinding, executionIntent: { ...completedAuthorization.executionBinding.executionIntent, protocolTarget: { ...evaluationTarget, parameterCommitment: `sha256:${"a".repeat(64)}` } } } })).rejects.toThrow(InvalidTransitionError);
+    const forgedEvaluationIntent = CanonicalExecutionIntentSchema.parse({ ...completedAuthorization.executionBinding.executionIntent, protocolTarget: { ...evaluationTarget, parameterCommitment: `sha256:${"a".repeat(64)}` } });
+    const forgedEvaluationHash = await hashCanonicalExecutionIntent(forgedEvaluationIntent);
+    const forgedEvaluationApproval = ApprovalRecordSchema.parse({ ...completedAuthorization.jobApprovalDecision, exactIntentHash: forgedEvaluationHash });
+    const forgedEvaluationBinding = ExecutionAuthorizationBindingSchema.parse({ ...completedAuthorization.executionBinding, exactIntentHash: forgedEvaluationHash, executionIntent: forgedEvaluationIntent });
+    const forgedEvaluationEvidence = JobEvaluationEvidenceSchema.parse({ ...completedAuthorization.jobEvaluationEvidence, exactIntentHash: forgedEvaluationHash });
+    await expect(transitionAgenticJob("SUBMITTED", "COMPLETED", { ...completedContext, jobApprovalDecision: forgedEvaluationApproval, executionBinding: forgedEvaluationBinding, jobEvaluationEvidence: forgedEvaluationEvidence, expectedExactIntentHash: forgedEvaluationHash })).rejects.toThrow(InvalidTransitionError);
     await expect(transitionAgenticJob("SUBMITTED", "COMPLETED", { ...completedContext, jobApprovalDecision: { ...completedAuthorization.jobApprovalDecision, expiresAt: context.occurredAt } })).rejects.toThrow(InvalidTransitionError);
   });
   it("evidence-gates funding, submission, and expiry", async () => {
@@ -371,6 +377,11 @@ describe("separate state machines", () => {
     const boundTarget = submissionContext.executionBinding!.executionIntent.protocolTarget;
     if (boundTarget.kind !== "ERC8183") throw new Error("Expected an ERC-8183 submission target.");
     await expect(transitionAgenticJob("FUNDED", "SUBMITTED", { ...submissionContext, executionBinding: { ...submissionContext.executionBinding!, executionIntent: { ...submissionContext.executionBinding!.executionIntent, protocolTarget: { ...boundTarget, parameterCommitment: `sha256:${"e".repeat(64)}` } } } })).rejects.toThrow(InvalidTransitionError);
+    const forgedSubmissionIntent = CanonicalExecutionIntentSchema.parse({ ...submissionContext.executionBinding!.executionIntent, protocolTarget: { ...boundTarget, parameterCommitment: `sha256:${"e".repeat(64)}` } });
+    const forgedSubmissionHash = await hashCanonicalExecutionIntent(forgedSubmissionIntent);
+    const forgedSubmissionApproval = ApprovalRecordSchema.parse({ ...submissionContext.jobApprovalDecision!, exactIntentHash: forgedSubmissionHash });
+    const forgedSubmissionBinding = ExecutionAuthorizationBindingSchema.parse({ ...submissionContext.executionBinding!, exactIntentHash: forgedSubmissionHash, executionIntent: forgedSubmissionIntent });
+    await expect(transitionAgenticJob("FUNDED", "SUBMITTED", { ...submissionContext, jobApprovalDecision: forgedSubmissionApproval, executionBinding: forgedSubmissionBinding, expectedExactIntentHash: forgedSubmissionHash })).rejects.toThrow(InvalidTransitionError);
     for (const currentJobEvidence of [{ ...funded, transaction: null }, { ...funded, transaction: mockTransaction("SUBMITTED", "JOB_FUND") }, { ...funded, transaction: mockTransaction("CONFIRMED", "REFUND") }]) await expect(transitionAgenticJob("FUNDED", "SUBMITTED", { ...submissionContext, currentJobEvidence })).rejects.toThrow(InvalidTransitionError);
     await expect(transitionAgenticJob("FUNDED", "SUBMITTED", { ...submissionContext, jobEvidence: { ...submitted, deliverableReference: null } })).rejects.toThrow(InvalidTransitionError);
     await expect(transitionAgenticJob("FUNDED", "SUBMITTED", { ...submissionContext, jobEvidence: { ...submitted, reasonReference: "mock:reason" } })).rejects.toThrow(InvalidTransitionError);
