@@ -323,6 +323,14 @@ describe("separate state machines", () => {
     const priorSubmissionOperation = SubmissionOperationRecordSchema.parse({ id: "submission:failed", transactionId: priorSubmittedTransaction.id, idempotencyKey: "submission:failed:key", arcTransaction: priorSubmittedTransaction.arcTransaction!, createdAt: context.occurredAt });
     const failedSubmissionEvidence = { ...evidence(failedSubmission), submissionTransaction: priorSubmittedTransaction, submissionOperation: priorSubmissionOperation, idempotencyKey: priorSubmissionOperation.idempotencyKey };
     expect(transitionApplication("SUBMITTED", "FAILED", failedSubmissionEvidence).state).toBe("FAILED");
+    for (const operationType of ["JOB_EVALUATE", "JOB_REJECT"] as const) {
+      const failedJobTransaction = TransactionRecordSchema.parse({ ...failedSubmission, arcTransaction: { ...failedSubmission.arcTransaction!, operationType } });
+      const submittedJobTransaction = TransactionRecordSchema.parse({ ...priorSubmittedTransaction, arcTransaction: { ...priorSubmittedTransaction.arcTransaction!, operationType } });
+      const submittedJobOperation = SubmissionOperationRecordSchema.parse({ ...priorSubmissionOperation, arcTransaction: submittedJobTransaction.arcTransaction! });
+      const failedJobEvidence = { ...failedSubmissionEvidence, lifecycleTransaction: failedJobTransaction, submissionTransaction: submittedJobTransaction, submissionOperation: submittedJobOperation, expectedOperationType: operationType };
+      expect(transitionApplication("SUBMITTED", "FAILED", failedJobEvidence).state).toBe("FAILED");
+      expect(() => transitionApplication("PREPARED", "FAILED", evidence(failedJobTransaction))).toThrow(InvalidTransitionError);
+    }
     expect(() => transitionApplication("SUBMITTED", "FAILED", { ...failedSubmissionEvidence, submissionTransaction: undefined })).toThrow(InvalidTransitionError);
     expect(() => transitionApplication("SUBMITTED", "FAILED", { ...failedSubmissionEvidence, submissionOperation: undefined })).toThrow(InvalidTransitionError);
     expect(() => transitionApplication("SUBMITTED", "FAILED", { ...failedSubmissionEvidence, idempotencyKey: "submission:other:key" })).toThrow(InvalidTransitionError);
@@ -839,6 +847,11 @@ describe("lifecycle evidence schemas", () => {
     const openRejectedJob = mockJob("REJECTED", mockTransaction("CONFIRMED", "JOB_REJECT"));
     const rejectedJob = mockJob("REJECTED", mockTransaction("CONFIRMED", "JOB_REJECT"), mockTransaction("CONFIRMED", "JOB_SUBMIT"));
     const expiredJob = AgenticJobRefSchema.parse({ ...mockJob("FUNDED", mockTransaction("CONFIRMED", "JOB_FUND")), status: "EXPIRED", transaction: mockTransaction("CONFIRMED", "REFUND"), escrowTransaction: mockTransaction("CONFIRMED", "JOB_FUND") });
+    for (const state of ["PENDING", "REFUND_PENDING"] as const) {
+      for (const job of [completedJob, rejectedJob, expiredJob]) expect(() => SettlementRecordSchema.parse({ ...base, state, job, transaction: null })).toThrow();
+    }
+    expect(SettlementRecordSchema.parse({ ...base, state: "PENDING", job: submittedJob, transaction: null })).toBeDefined();
+    expect(SettlementRecordSchema.parse({ ...base, state: "REFUND_PENDING", job: mockJob("FUNDED", mockTransaction("CONFIRMED", "JOB_FUND")), transaction: null })).toBeDefined();
     expect(() => SettlementRecordSchema.parse({ ...base, state: "CONFIRMED", job: completedJob, transaction: mockTransaction("CONFIRMED") })).toThrow();
     expect(() => SettlementRecordSchema.parse({ ...base, state: "CONFIRMED", job: completedJobWithReason, transaction: mockTransaction("CONFIRMED") })).toThrow();
     expect(SettlementRecordSchema.parse({ ...base, state: "CONFIRMED", job: completedJobWithReason, transaction: completedJobWithReason.transaction })).toBeDefined();
