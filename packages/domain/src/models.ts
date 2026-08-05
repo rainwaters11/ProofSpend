@@ -198,16 +198,32 @@ export const SettlementRecordSchema = z.object({ id: Id, projectId: Id, releaseR
   const genericSettlementEligible = value.job === null && transaction?.operationType === "SETTLEMENT";
   const genericRefundEligible = value.job === null && transaction?.operationType === "REFUND";
   const pendingJobEligible = value.job === null || !["COMPLETED", "REJECTED", "EXPIRED"].includes(value.job.status);
+  const pendingTransactionMatchesJob = transaction !== null && jobTransaction !== null &&
+    jobTransaction.status === "CONFIRMED" &&
+    jobTransaction.network === transaction.network &&
+    jobTransaction.chainId === transaction.chainId &&
+    jobTransaction.isMock === transaction.isMock &&
+    ["PREPARED", "SUBMITTED"].includes(transaction.status);
+  const pendingCompletionEligible =
+    value.job?.status === "SUBMITTED" &&
+    jobTransaction?.operationType === "JOB_SUBMIT" &&
+    transaction?.operationType === "JOB_EVALUATE" &&
+    pendingTransactionMatchesJob;
+  const pendingRejectionEligible =
+    (value.job?.status === "FUNDED" || value.job?.status === "SUBMITTED") &&
+    (jobTransaction?.operationType === "JOB_FUND" || jobTransaction?.operationType === "JOB_SUBMIT") &&
+    transaction?.operationType === "JOB_REJECT" &&
+    pendingTransactionMatchesJob;
   const allowed =
-    (value.state === "PENDING" && ((transaction === null && pendingJobEligible) || (genericSettlementEligible && ["PREPARED", "SUBMITTED"].includes(transaction.status)))) ||
+    (value.state === "PENDING" && ((transaction === null && pendingJobEligible) || (genericSettlementEligible && ["PREPARED", "SUBMITTED"].includes(transaction.status)) || pendingCompletionEligible)) ||
     (value.state === "CONFIRMED" && transaction?.status === "CONFIRMED" && (genericSettlementEligible || completionSettlementEligible)) ||
-    (value.state === "REFUND_PENDING" && ((transaction === null && pendingJobEligible) || (genericRefundEligible && ["PREPARED", "SUBMITTED"].includes(transaction.status)))) ||
+    (value.state === "REFUND_PENDING" && ((transaction === null && pendingJobEligible) || (genericRefundEligible && ["PREPARED", "SUBMITTED"].includes(transaction.status)) || pendingRejectionEligible)) ||
     (value.state === "REFUNDED" && transaction?.status === "CONFIRMED" && (genericRefundEligible || expiredRefundEligible || rejectionRefundEligible)) ||
     (value.state === "RECONCILED" && transaction?.status === "CONFIRMED" && (genericSettlementEligible || completionSettlementEligible || genericRefundEligible || expiredRefundEligible || rejectionRefundEligible)) ||
     (value.state === "FAILED" && ((transaction === null && pendingJobEligible) || (value.job === null && transaction?.status === "FAILED" && (transaction.operationType === "SETTLEMENT" || transaction.operationType === "REFUND"))));
   if (!allowed) context.addIssue({ code: "custom", message: `${value.state} settlement requires compatible persisted transaction evidence.` });
+  if (value.job !== null && (value.job.budget.asset !== value.amount.asset || value.job.budget.atomicUnits !== value.amount.atomicUnits)) context.addIssue({ code: "custom", message: "Job-backed settlement amount must match the ERC-8183 job budget exactly." });
   if (value.job !== null && transaction?.status === "CONFIRMED") {
-    if (value.job.budget.asset !== value.amount.asset || value.job.budget.atomicUnits !== value.amount.atomicUnits) context.addIssue({ code: "custom", message: "Job-backed settlement amount must match the ERC-8183 job budget exactly." });
     if (transaction.operationType === "SETTLEMENT") context.addIssue({ code: "custom", message: "Job-backed completion must use the completed job's exact JOB_EVALUATE transaction." });
     if (transaction.operationType === "JOB_EVALUATE" && !completionSettlementEligible) context.addIssue({ code: "custom", message: "Confirmed evaluation settlement must match the completed job's exact Arc transaction evidence." });
     if (transaction.operationType === "REFUND" && !expiredRefundEligible) context.addIssue({ code: "custom", message: "Job-backed REFUND evidence is reserved for the exact expired-job refund write." });
