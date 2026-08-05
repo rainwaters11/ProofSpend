@@ -214,7 +214,7 @@ describe("separate state machines", () => {
       const actorId = actorType === "FOUNDER" ? "founder:1" : actorType === "PROVIDER" ? "mock:provider" : "evaluator:1";
       const candidateApproval = ApprovalRecordSchema.parse({ ...approvalDecision, actionKind, authorizedActorType: actorType, authorizedActorId: actorId, approver: { actorId, actorType }, exactIntentHash: candidateHash });
       const candidateBinding = ExecutionAuthorizationBindingSchema.parse({ ...binding, exactIntentHash: candidateHash, executionIntent: candidateIntent });
-      return transitionApplicationSubmission({ ...submitted, submissionTransaction: candidateTransaction, executionBinding: candidateBinding, approvalDecision: candidateApproval, authorizedApproverId: actorId, expectedExactIntentHash: candidateHash });
+      return transitionApplicationSubmission({ ...submitted, submissionTransaction: candidateTransaction, submissionOperation: { ...submissionOperation, arcTransaction: candidateTransaction.arcTransaction! }, executionBinding: candidateBinding, approvalDecision: candidateApproval, authorizedApproverId: actorId, expectedExactIntentHash: candidateHash });
     };
     await expect(submitForOperation("SETTLEMENT", "FOUNDER")).resolves.toMatchObject({ state: "SUBMITTED" });
     await expect(submitForOperation("REFUND", "FOUNDER")).resolves.toMatchObject({ state: "SUBMITTED" });
