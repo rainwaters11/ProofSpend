@@ -240,6 +240,8 @@ describe("separate state machines", () => {
     await expect(transitionApplicationSubmission({ ...submitted, submissionOperation: undefined })).rejects.toThrow(InvalidTransitionError);
     await expect(transitionApplicationSubmission({ ...submitted, submissionOperation: { ...submissionOperation, arcTransaction: { ...submissionOperation.arcTransaction, transactionHash: "mock:unrelated-release" } } })).rejects.toThrow(InvalidTransitionError);
     await expect(transitionApplicationSubmission({ ...submitted, submissionOperation: { ...submissionOperation, arcTransaction: { ...submissionOperation.arcTransaction, status: "FAILED" } } })).rejects.toThrow(InvalidTransitionError);
+    await expect(transitionApplicationSubmission({ ...submitted, submissionOperation: { ...submissionOperation, createdAt: "2025-12-31T23:59:59.000Z" } })).rejects.toThrow(InvalidTransitionError);
+    await expect(transitionApplicationSubmission({ ...submitted, submissionOperation: { ...submissionOperation, createdAt: "2026-01-02T00:00:00.000Z" } })).rejects.toThrow(InvalidTransitionError);
     await expect(transitionApplicationSubmission({ ...submitted, idempotencyKey: "submission:other" })).rejects.toThrow(InvalidTransitionError);
     for (const changed of [{ projectId: "project:other" }, { releaseRequestId: "release:other" }, { intentId: "intent:other" }, { approvalId: "approval:other" }, { approvalBindingId: "binding:other" }]) await expect(transitionApplicationSubmission({ ...submitted, submissionTransaction: { ...transaction, ...changed } })).rejects.toThrow(InvalidTransitionError);
     for (const changed of [{ amount: usdc("2") }, { destinationReference: "mock:other" }, { arcTransaction: { ...transaction.arcTransaction!, operationType: "REFUND" as const } }, { arcTransaction: { ...transaction.arcTransaction!, chainId: "synthetic:other-chain" } }]) await expect(transitionApplicationSubmission({ ...submitted, submissionTransaction: { ...transaction, ...changed } })).rejects.toThrow(InvalidTransitionError);
@@ -773,18 +775,19 @@ describe("lifecycle evidence schemas", () => {
       expect(() => TransactionRecordSchema.parse({ ...base, destinationReference: liveDestination, operationState: "CONFIRMED", arcTransaction: mockTransaction("CONFIRMED", operationType) })).toThrow();
     }
   });
-  it("requires a positive budget for every non-open ERC-8183 job state", () => {
+  it("requires a positive budget for funded and escrow-backed ERC-8183 job states", () => {
     expect(AgenticJobRefSchema.safeParse({ ...mockJob("OPEN"), budget: usdc("0") }).success).toBe(true);
+    expect(AgenticJobRefSchema.safeParse({ ...mockJob("REJECTED", mockTransaction("CONFIRMED", "JOB_REJECT")), budget: usdc("0") }).success).toBe(true);
     const funded = mockJob("FUNDED", mockTransaction("CONFIRMED", "JOB_FUND"));
     const expired = AgenticJobRefSchema.parse({ ...funded, status: "EXPIRED", transaction: mockTransaction("CONFIRMED", "REFUND"), escrowTransaction: funded.transaction });
-    const nonOpenJobs = [
+    const nonOpenValueJobs = [
       funded,
       mockJob("SUBMITTED", mockTransaction("CONFIRMED", "JOB_SUBMIT")),
       mockJob("COMPLETED", mockTransaction("CONFIRMED", "JOB_EVALUATE")),
-      mockJob("REJECTED", mockTransaction("CONFIRMED", "JOB_REJECT")),
+      mockJob("REJECTED", mockTransaction("CONFIRMED", "JOB_REJECT"), mockTransaction("CONFIRMED", "JOB_FUND")),
       expired,
     ];
-    for (const job of nonOpenJobs) expect(AgenticJobRefSchema.safeParse({ ...job, budget: usdc("0") }).success).toBe(false);
+    for (const job of nonOpenValueJobs) expect(AgenticJobRefSchema.safeParse({ ...job, budget: usdc("0") }).success).toBe(false);
   });
   it("restricts LaunchVault value-moving records to USDC", async () => {
     const { vault } = createPawPovAiSeed();
