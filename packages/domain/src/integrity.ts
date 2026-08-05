@@ -17,7 +17,7 @@ export async function hashCanonicalExecutionIntent(intent: CanonicalExecutionInt
 }
 
 export interface JobParameterCommitmentInput {
-  operationType: "JOB_FUND" | "JOB_SUBMIT" | "JOB_EVALUATE" | "JOB_REJECT";
+  operationType: "JOB_FUND" | "JOB_SUBMIT" | "JOB_EVALUATE" | "JOB_REJECT" | "REFUND";
   jobId: string;
   asset: string;
   atomicAmount: string;
