@@ -862,9 +862,23 @@ describe("lifecycle evidence schemas", () => {
     for (const state of ["PENDING", "REFUND_PENDING", "FAILED"] as const) {
       for (const job of [completedJob, rejectedJob, expiredJob]) expect(() => SettlementRecordSchema.parse({ ...base, state, job, transaction: null })).toThrow();
     }
+    const fundedJob = mockJob("FUNDED", mockTransaction("CONFIRMED", "JOB_FUND"));
     expect(SettlementRecordSchema.parse({ ...base, state: "PENDING", job: submittedJob, transaction: null })).toBeDefined();
-    expect(SettlementRecordSchema.parse({ ...base, state: "REFUND_PENDING", job: mockJob("FUNDED", mockTransaction("CONFIRMED", "JOB_FUND")), transaction: null })).toBeDefined();
+    expect(SettlementRecordSchema.parse({ ...base, state: "REFUND_PENDING", job: fundedJob, transaction: null })).toBeDefined();
     expect(SettlementRecordSchema.parse({ ...base, state: "FAILED", job: submittedJob, transaction: null })).toBeDefined();
+    for (const status of ["PREPARED", "SUBMITTED"] as const) {
+      const evaluationWrite = mockTransaction(status, "JOB_EVALUATE");
+      const rejectionWrite = mockTransaction(status, "JOB_REJECT");
+      expect(SettlementRecordSchema.parse({ ...base, state: "PENDING", job: submittedJob, transaction: evaluationWrite })).toBeDefined();
+      expect(SettlementRecordSchema.parse({ ...base, state: "REFUND_PENDING", job: fundedJob, transaction: rejectionWrite })).toBeDefined();
+      expect(SettlementRecordSchema.parse({ ...base, state: "REFUND_PENDING", job: submittedJob, transaction: rejectionWrite })).toBeDefined();
+      expect(() => SettlementRecordSchema.parse({ ...base, state: "REFUND_PENDING", job: submittedJob, transaction: evaluationWrite })).toThrow();
+      expect(() => SettlementRecordSchema.parse({ ...base, state: "PENDING", job: submittedJob, transaction: rejectionWrite })).toThrow();
+      expect(() => SettlementRecordSchema.parse({ ...base, state: "PENDING", job: fundedJob, transaction: evaluationWrite })).toThrow();
+    }
+    expect(() => SettlementRecordSchema.parse({ ...base, state: "PENDING", job: submittedJob, transaction: { ...mockTransaction("PREPARED", "JOB_EVALUATE"), chainId: "synthetic:other-chain" } })).toThrow();
+    expect(() => SettlementRecordSchema.parse({ ...base, state: "PENDING", amount: usdc("2"), job: submittedJob, transaction: mockTransaction("PREPARED", "JOB_EVALUATE") })).toThrow();
+    expect(() => SettlementRecordSchema.parse({ ...base, state: "PENDING", job: completedJob, transaction: mockTransaction("PREPARED", "JOB_EVALUATE") })).toThrow();
     expect(() => SettlementRecordSchema.parse({ ...base, state: "CONFIRMED", job: completedJob, transaction: mockTransaction("CONFIRMED") })).toThrow();
     expect(() => SettlementRecordSchema.parse({ ...base, state: "CONFIRMED", job: completedJobWithReason, transaction: mockTransaction("CONFIRMED") })).toThrow();
     expect(SettlementRecordSchema.parse({ ...base, state: "CONFIRMED", job: completedJobWithReason, transaction: completedJobWithReason.transaction })).toBeDefined();
@@ -961,7 +975,7 @@ describe("persisted relationship integrity", () => {
     const deferredIntent = { ...binding.executionIntent, operationType: "JOB_CREATE" as const };
     await expect(validateExecutionAuthorization(approval, release, { ...transaction, arcTransaction: { ...transaction.arcTransaction!, operationType: "JOB_CREATE" } }, { ...binding, executionIntent: deferredIntent }, context.occurredAt)).rejects.toThrow();
   });
-  it("keeps job-scoped writes out of release execution authorization", async () => {
+  it("revalidates only evaluator-authorized terminal job writes", async () => {
     const fixture = await authorizationFixture();
     const refundIntent = CanonicalExecutionIntentSchema.parse({ ...fixture.binding.executionIntent, operationType: "REFUND" });
     const refundHash = await hashCanonicalExecutionIntent(refundIntent);
@@ -969,11 +983,22 @@ describe("persisted relationship integrity", () => {
     const refundTransaction = TransactionRecordSchema.parse({ ...fixture.transaction, arcTransaction: { ...fixture.transaction.arcTransaction!, operationType: "REFUND" } });
     await expect(validateExecutionAuthorization(refundApproval, fixture.release, refundTransaction, { ...fixture.binding, exactIntentHash: refundHash, executionIntent: refundIntent }, context.occurredAt)).resolves.toBe(true);
 
+    for (const [operationType, actionKind] of [["JOB_EVALUATE", "JOB_EVALUATION"], ["JOB_REJECT", "JOB_REJECTION"]] as const) {
+      const protocolTarget = { kind: "ERC8183" as const, standard: "ERC-8183" as const, network: "ARC_TESTNET" as const, chainId: "synthetic:chain", contractReference: "mock:contract", jobId: "mock:job", method: operationType, parameterCommitment: `sha256:${"a".repeat(64)}`, clientReference: "mock:client", providerReference: "mock:provider", evaluatorReference: "mock:evaluator", destination: fixture.transaction.destinationReference };
+      const executionIntent = CanonicalExecutionIntentSchema.parse({ ...fixture.binding.executionIntent, actionKind, operationType, protocolTarget });
+      const exactIntentHash = await hashCanonicalExecutionIntent(executionIntent);
+      const approval = ApprovalRecordSchema.parse({ ...fixture.approval, aggregateId: protocolTarget.jobId, actionKind, authorizedActorType: "EVALUATOR", authorizedActorId: protocolTarget.evaluatorReference, approver: { actorId: protocolTarget.evaluatorReference, actorType: "EVALUATOR" }, exactIntentHash });
+      const transaction = TransactionRecordSchema.parse({ ...fixture.transaction, arcTransaction: { ...fixture.transaction.arcTransaction!, operationType, network: protocolTarget.network, chainId: protocolTarget.chainId } });
+      const binding = { ...fixture.binding, exactIntentHash, executionIntent };
+      await expect(validateExecutionAuthorization(approval, fixture.release, transaction, binding, context.occurredAt)).resolves.toBe(true);
+      await expect(validateExecutionAuthorization({ ...approval, aggregateId: fixture.release.id }, fixture.release, transaction, binding, context.occurredAt)).rejects.toThrow(/subject/);
+      await expect(validateExecutionAuthorization({ ...approval, authorizedActorId: "mock:other-evaluator", approver: { actorId: "mock:other-evaluator", actorType: "EVALUATOR" } }, fixture.release, transaction, binding, context.occurredAt)).rejects.toThrow(/subject/);
+      await expect(validateExecutionAuthorization(approval, fixture.release, transaction, { ...binding, executionIntent: { ...executionIntent, protocolTarget: { ...protocolTarget, jobId: "mock:other-job" } } }, context.occurredAt)).rejects.toThrow();
+    }
+
     for (const [operationType, actionKind, actorType, actorId] of [
       ["JOB_FUND", "RELEASE_APPROVAL", "FOUNDER", "founder:1"],
       ["JOB_SUBMIT", "JOB_SUBMISSION", "PROVIDER", "mock:provider"],
-      ["JOB_EVALUATE", "JOB_EVALUATION", "EVALUATOR", "evaluator:1"],
-      ["JOB_REJECT", "JOB_REJECTION", "EVALUATOR", "evaluator:1"],
     ] as const) {
       const protocolTarget = { kind: "ERC8183" as const, standard: "ERC-8183" as const, network: "ARC_TESTNET" as const, chainId: "synthetic:chain", contractReference: "mock:contract", jobId: "mock:job", method: operationType, parameterCommitment: `sha256:${"a".repeat(64)}`, clientReference: "mock:client", providerReference: "mock:provider", evaluatorReference: "mock:evaluator", destination: fixture.transaction.destinationReference };
       const executionIntent = CanonicalExecutionIntentSchema.parse({ ...fixture.binding.executionIntent, actionKind, operationType, protocolTarget });
