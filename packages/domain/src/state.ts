@@ -316,6 +316,8 @@ export async function transitionAgenticJob(from: AgenticJobStatus, to: AgenticJo
     const expiresAt = current.success ? Date.parse(current.data.expiresAt) : Number.NaN;
     const refundedAt = refund.success ? Date.parse(refund.data.createdAt) : Number.NaN;
     const targetTransaction = target.success ? target.data.transaction : null;
+    const priorTransaction = current.success ? current.data.transaction : null;
+    const escrowTransaction = target.success ? target.data.escrowTransaction : null;
     if (
       !current.success || !target.success || !refund.success ||
       !current.data.isMock || !target.data.isMock ||
@@ -323,6 +325,7 @@ export async function transitionAgenticJob(from: AgenticJobStatus, to: AgenticJo
       current.data.status !== from || target.data.status !== to ||
       !immutableJobFieldsMatch(current.data, target.data) ||
       target.data.deliverableReference !== current.data.deliverableReference || target.data.reasonReference !== null ||
+      priorTransaction === null || escrowTransaction === null || !arcTransactionEvidenceMatches(priorTransaction, escrowTransaction) ||
       targetTransaction === null || !arcTransactionEvidenceMatches(refund.data.arcTransaction, targetTransaction) ||
       context.idempotencyKey === undefined || refund.data.idempotencyKey !== context.idempotencyKey ||
       context.expectedTransactionId === undefined || refund.data.transactionId !== context.expectedTransactionId ||
