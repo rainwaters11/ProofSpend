@@ -482,7 +482,7 @@ describe("protocol-safe mocks and privacy", () => {
     const adapter = new MockAgenticJobAdapter(); const authority = { ...context, aggregateId: job.jobId, actor: { actorId: "adapter", actorType: "ADAPTER" as const }, authorizedAdapterId: "adapter" };
     await expect(adapter.transition(job, "FUNDED", authority)).rejects.toThrow(InvalidTransitionError);
     const funded = AgenticJobRefSchema.parse({ ...job, status: "FUNDED", transaction: mockTransaction("CONFIRMED", "JOB_FUND") });
-    expect((await adapter.transition(job, "FUNDED", { ...authority, currentJobEvidence: { ...job, budget: usdc("1") }, jobEvidence: funded })).job.status).toBe("FUNDED"); expect(job.status).toBe("OPEN");
+    expect((await adapter.transition(job, "FUNDED", { ...authority, currentJobEvidence: { ...job, budget: usdc("1") }, jobEvidence: funded, ...await jobFundingAuthorization(funded) })).job.status).toBe("FUNDED"); expect(job.status).toBe("OPEN");
     await expect(adapter.transition(funded, "SUBMITTED", authority)).rejects.toThrow(InvalidTransitionError);
     const submitted = AgenticJobRefSchema.parse({ ...funded, status: "SUBMITTED", deliverableReference: "mock:deliverable", transaction: mockTransaction("SUBMITTED", "JOB_SUBMIT") });
     const submissionAuthority = { ...authority, currentJobEvidence: funded, jobEvidence: submitted, ...await providerSubmissionAuthorization(submitted) };
