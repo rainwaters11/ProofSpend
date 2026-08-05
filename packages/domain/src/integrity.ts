@@ -16,6 +16,25 @@ export async function hashCanonicalExecutionIntent(intent: CanonicalExecutionInt
   return `sha256:${Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
 }
 
+export interface JobParameterCommitmentInput {
+  operationType: "JOB_FUND" | "JOB_SUBMIT" | "JOB_EVALUATE";
+  jobId: string;
+  asset: string;
+  atomicAmount: string;
+  deliverableReference: string | null;
+  decision: "APPROVED" | "REJECTED" | null;
+  reasonReference: string | null;
+}
+
+export function serializeJobParameterCommitment(input: JobParameterCommitmentInput): string {
+  return JSON.stringify([1, input.operationType, input.jobId, input.asset, input.atomicAmount, input.deliverableReference, input.decision, input.reasonReference]);
+}
+
+export async function hashJobParameterCommitment(input: JobParameterCommitmentInput): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(serializeJobParameterCommitment(input)));
+  return `sha256:${Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
+}
+
 function requiredApprovalPolicy(intent: CanonicalExecutionIntent): { actionKind: ApprovalRecord["actionKind"]; actorType: "FOUNDER" | "PROVIDER" | "EVALUATOR" } {
   switch (intent.operationType) {
     case "SETTLEMENT": case "REFUND":
