@@ -96,6 +96,7 @@ export const AgenticJobRefSchema = z.object({
     (value.status === "REJECTED" && transaction?.operationType === "JOB_REJECT" && transaction.status === "CONFIRMED") ||
     (value.status === "EXPIRED" && value.reasonReference === null && transaction?.operationType === "REFUND" && transaction.status === "CONFIRMED");
   if (!statusEvidenceValid) context.addIssue({ code: "custom", message: `${value.status} job requires status-specific deliverable, reason, and transaction evidence.` });
+  if (value.status !== "OPEN" && value.budget.atomicUnits === "0") context.addIssue({ code: "custom", message: `${value.status} job requires a positive ERC-8183 budget.` });
 });
 export type AgenticJobRef = z.infer<typeof AgenticJobRefSchema>;
 
