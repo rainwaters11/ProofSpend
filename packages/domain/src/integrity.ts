@@ -35,22 +35,10 @@ export async function hashJobParameterCommitment(input: JobParameterCommitmentIn
   return `sha256:${Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
 }
 
-function requiredApprovalPolicy(intent: CanonicalExecutionIntent): { actionKind: ApprovalRecord["actionKind"]; actorType: "FOUNDER" | "PROVIDER" | "EVALUATOR" } {
-  switch (intent.operationType) {
-    case "SETTLEMENT": case "REFUND":
-      assert(intent.protocolTarget.kind === "DESTINATION", `${intent.operationType} requires an exact destination target.`);
-      return { actionKind: "RELEASE_APPROVAL", actorType: "FOUNDER" };
-    case "JOB_FUND":
-      assert(intent.protocolTarget.kind === "ERC8183", "JOB_FUND requires an exact ERC-8183 target.");
-      return { actionKind: "RELEASE_APPROVAL", actorType: "FOUNDER" };
-    case "JOB_SUBMIT":
-      assert(intent.protocolTarget.kind === "ERC8183", "JOB_SUBMIT requires an exact ERC-8183 target.");
-      return { actionKind: "JOB_SUBMISSION", actorType: "PROVIDER" };
-    case "JOB_EVALUATE":
-      assert(intent.protocolTarget.kind === "ERC8183", "JOB_EVALUATE requires an exact ERC-8183 target.");
-      return { actionKind: "JOB_EVALUATION", actorType: "EVALUATOR" };
-    default: throw new RelationshipIntegrityError(`Authorization governance for ${intent.operationType} is deferred to its owning issue.`);
-  }
+function requiredApprovalPolicy(intent: CanonicalExecutionIntent): { actionKind: "RELEASE_APPROVAL"; actorType: "FOUNDER" } {
+  if (intent.operationType !== "SETTLEMENT" && intent.operationType !== "REFUND") throw new RelationshipIntegrityError(`Release execution authorization cannot authorize job-scoped ${intent.operationType} writes.`);
+  assert(intent.protocolTarget.kind === "DESTINATION", `${intent.operationType} requires an exact destination target.`);
+  return { actionKind: "RELEASE_APPROVAL", actorType: "FOUNDER" };
 }
 
 export async function validateExecutionAuthorization(approval: ApprovalRecord, release: ReleaseRequest, transaction: TransactionRecord, binding: ExecutionAuthorizationBinding, asOf: string): Promise<true> {
