@@ -228,7 +228,7 @@ describe("separate state machines", () => {
     type SubmissionOperationType = NonNullable<typeof transaction.arcTransaction>["operationType"];
     const erc8183Target = (method: "JOB_FUND" | "JOB_SUBMIT" | "JOB_EVALUATE" | "JOB_REJECT") => ({ kind: "ERC8183" as const, standard: "ERC-8183" as const, network: "ARC_TESTNET" as const, chainId: "synthetic:chain", contractReference: "mock:contract", jobId: "mock:job", method, parameterCommitment: `sha256:${"c".repeat(64)}`, clientReference: "mock:client", providerReference: "mock:provider", evaluatorReference: "mock:evaluator", destination: transaction.destinationReference });
     const submitForOperation = async (operationType: SubmissionOperationType, actorType: "FOUNDER" | "PROVIDER" | "EVALUATOR") => {
-      const actionKind = actorType === "FOUNDER" ? "RELEASE_APPROVAL" : actorType === "PROVIDER" ? "JOB_SUBMISSION" : "JOB_EVALUATION";
+      const actionKind = operationType === "JOB_REJECT" ? "JOB_REJECTION" : actorType === "FOUNDER" ? "RELEASE_APPROVAL" : actorType === "PROVIDER" ? "JOB_SUBMISSION" : "JOB_EVALUATION";
       const protocolTarget = operationType === "JOB_FUND" || operationType === "JOB_SUBMIT" || operationType === "JOB_EVALUATE" || operationType === "JOB_REJECT" ? erc8183Target(operationType) : { kind: "DESTINATION" as const, destination: transaction.destinationReference, network: "ARC_TESTNET" as const, chainId: "synthetic:chain", isMock: true };
       const candidateTransaction = TransactionRecordSchema.parse({ ...transaction, arcTransaction: { ...transaction.arcTransaction!, operationType } });
       const candidateIntent = CanonicalExecutionIntentSchema.parse({ ...executionIntent, actionKind, operationType, protocolTarget });
@@ -390,7 +390,8 @@ describe("separate state machines", () => {
     const openContext = { ...context, aggregateId: open.jobId, actor: adapter, authorizedAdapterId: adapter.actorId, currentJobEvidence: open, jobEvidence: openRejected, ...openAuthorization };
     expect((await transitionAgenticJob("OPEN", "REJECTED", openContext)).status).toBe("REJECTED");
     await expect(transitionAgenticJob("OPEN", "REJECTED", { ...openContext, authorizedApproverId: "mock:other-client" })).rejects.toThrow(InvalidTransitionError);
-    await expect(transitionAgenticJob("OPEN", "REJECTED", { ...openContext, authorizedEvaluatorId: openRejected.evaluatorAddress })).rejects.toThrow(InvalidTransitionError);
+    const openEvaluatorAuthorization = await jobEvaluationAuthorization(openRejected, "REJECTED");
+    await expect(transitionAgenticJob("OPEN", "REJECTED", { ...openContext, ...openEvaluatorAuthorization, authorizedApproverId: undefined })).rejects.toThrow(InvalidTransitionError);
 
     const funded = mockJob("FUNDED", mockTransaction("CONFIRMED", "JOB_FUND"));
     const fundedRejected = AgenticJobRefSchema.parse({ ...openRejected });
