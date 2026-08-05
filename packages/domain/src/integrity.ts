@@ -87,8 +87,13 @@ export function validateReleaseConfirmation(release: ReleaseRequest, settlement:
   assert(release.state === "CONFIRMED" && release.settlementId === settlement.id, "Confirmed release must reference the settlement.");
   assert(settlement.releaseRequestId === release.id && settlement.projectId === release.projectId, "Settlement relationship does not match release.");
   assert(settlement.amount.asset === release.amount.asset && settlement.amount.atomicUnits === release.amount.atomicUnits, "Settlement amount does not match release.");
-  assert(settlement.state === "CONFIRMED" || settlement.state === "RECONCILED", "Settlement is not confirmed or reconciled.");
-  assert(settlement.transaction?.status === "CONFIRMED" && settlement.transaction.operationType === "SETTLEMENT", "Release requires confirmed settlement transaction evidence.");
+  const operationType = settlement.transaction?.operationType;
+  const confirmedDisposition = settlement.transaction?.status === "CONFIRMED" && (
+    (settlement.state === "CONFIRMED" && operationType === "SETTLEMENT") ||
+    (settlement.state === "REFUNDED" && operationType === "REFUND") ||
+    (settlement.state === "RECONCILED" && (operationType === "SETTLEMENT" || operationType === "REFUND"))
+  );
+  assert(confirmedDisposition, "Release requires compatible confirmed settlement or refund transaction evidence.");
   return true;
 }
 
