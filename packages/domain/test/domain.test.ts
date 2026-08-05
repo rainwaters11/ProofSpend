@@ -331,7 +331,7 @@ describe("separate state machines", () => {
     expect(() => transitionApplication("SUBMITTED", "CONFIRMED", { ...confirmation, confirmationTransaction: { ...transaction, intentId: "intent:other" } })).toThrow(InvalidTransitionError);
     expect(() => transitionApplication("SUBMITTED", "CONFIRMED", { ...confirmation, confirmationTransaction: { ...transaction, approvalId: "approval:other" } })).toThrow(InvalidTransitionError);
     expect(() => transitionApplication("SUBMITTED", "CONFIRMED", { ...confirmation, confirmationTransaction: { ...transaction, approvalBindingId: "binding:other" } })).toThrow(InvalidTransitionError);
-    for (const operationType of ["JOB_FUND", "JOB_EVALUATE", "JOB_REJECT", "JOB_SUBMIT"] as const) {
+    for (const operationType of ["JOB_FUND", "JOB_REJECT", "JOB_SUBMIT"] as const) {
       const otherOperation = TransactionRecordSchema.parse({ ...transaction, arcTransaction: mockTransaction("CONFIRMED", operationType) });
       expect(() => transitionApplication("SUBMITTED", "CONFIRMED", { ...confirmation, confirmationTransaction: otherOperation, expectedOperationType: operationType })).toThrow(InvalidTransitionError);
     }
@@ -341,6 +341,9 @@ describe("separate state machines", () => {
     const refundTransaction = TransactionRecordSchema.parse({ ...transaction, arcTransaction: mockTransaction("CONFIRMED", "REFUND") });
     const submittedRefundTransaction = TransactionRecordSchema.parse({ ...submittedTransaction, arcTransaction: mockTransaction("SUBMITTED", "REFUND") });
     expect(transitionApplication("SUBMITTED", "CONFIRMED", { ...confirmation, submissionTransaction: submittedRefundTransaction, confirmationTransaction: refundTransaction, expectedOperationType: "REFUND" }).state).toBe("CONFIRMED");
+    const completionTransaction = TransactionRecordSchema.parse({ ...transaction, arcTransaction: mockTransaction("CONFIRMED", "JOB_EVALUATE") });
+    const submittedCompletionTransaction = TransactionRecordSchema.parse({ ...submittedTransaction, arcTransaction: mockTransaction("SUBMITTED", "JOB_EVALUATE") });
+    expect(transitionApplication("SUBMITTED", "CONFIRMED", { ...confirmation, submissionTransaction: submittedCompletionTransaction, confirmationTransaction: completionTransaction, expectedOperationType: "JOB_EVALUATE" }).state).toBe("CONFIRMED");
     expect(() => transitionApplication("SUBMITTED", "CONFIRMED", { ...confirmation, confirmationTransaction: refundTransaction, expectedOperationType: "SETTLEMENT" })).toThrow(InvalidTransitionError);
     for (const actorType of ["AI", "FOUNDER", "EVALUATOR"] as const) expect(() => transitionApplication("SUBMITTED", "CONFIRMED", { ...confirmation, actor: { actorId: "adapter:authorized", actorType } })).toThrow(InvalidTransitionError);
     expect(() => transitionApplication("SUBMITTED", "CONFIRMED", { ...confirmation, actor: { actorId: "adapter:other", actorType: "ADAPTER" } })).toThrow(InvalidTransitionError);
