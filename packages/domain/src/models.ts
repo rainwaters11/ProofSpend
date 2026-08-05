@@ -164,7 +164,7 @@ export type ProofGap = z.infer<typeof ProofGapSchema>;
 export const ProofOfProgressSchema = z.object({ id: Id, projectId: Id, milestoneId: Id, version: z.number().int().positive(), approvedEvidenceHashes: z.array(Hash), recordHash: Hash, visibility: VisibilitySchema, createdAt: Time });
 export type ProofOfProgress = z.infer<typeof ProofOfProgressSchema>;
 export const ReleaseRequestSchema = z.object({ id: Id, projectId: Id, milestoneId: Id, proofId: Id, intentId: Id, settlementId: Id.nullable(), amount: SettlementMoneyAmountSchema, state: z.enum(["DRAFT", "ELIGIBLE", "APPROVAL_PENDING", "APPROVED", "PREPARED", "SUBMITTED", "CONFIRMED", "RECONCILED", "REJECTED", "FAILED"]), approvalId: Id.nullable(), idempotencyKey: Id, createdAt: Time }).superRefine((value, context) => {
-  if (["APPROVED", "PREPARED", "SUBMITTED", "CONFIRMED", "RECONCILED"].includes(value.state) && value.approvalId === null) context.addIssue({ code: "custom", message: `${value.state} release requires a persisted approval.` });
+  if (["APPROVED", "PREPARED", "SUBMITTED", "CONFIRMED", "RECONCILED", "FAILED"].includes(value.state) && value.approvalId === null) context.addIssue({ code: "custom", message: `${value.state} release requires a persisted approval.` });
   if (["DRAFT", "ELIGIBLE", "APPROVAL_PENDING"].includes(value.state) && value.approvalId !== null) context.addIssue({ code: "custom", message: `${value.state} release cannot claim completed approval.` });
   if (["CONFIRMED", "RECONCILED"].includes(value.state) ? value.settlementId === null : value.settlementId !== null) context.addIssue({ code: "custom", message: "Release settlement reference must exist only in CONFIRMED or RECONCILED state." });
 });
