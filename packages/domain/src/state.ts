@@ -128,6 +128,7 @@ export async function transitionApplicationSubmission(context: TransitionContext
   const policy = arcTransaction === null ? null : requiredApprovalPolicy(arcTransaction.operationType);
   const decidedAt = assertFiniteTime(approval.data.decidedAt);
   const consumedAt = assertFiniteTime(binding.data.consumedAt);
+  const submittedAt = assertFiniteTime(submission.data.createdAt);
   const occurredAt = assertFiniteTime(context.occurredAt);
   const expiresAt = assertFiniteTime(approval.data.expiresAt);
   const recomputedHash = await hashCanonicalExecutionIntent(executionIntent);
@@ -181,7 +182,8 @@ async function validateJobExecutionAuthorization(context: TransitionContext, tar
 }): Promise<ApprovalRecord> {
   const approval = ApprovalRecordSchema.safeParse(context.jobApprovalDecision);
   const binding = ExecutionAuthorizationBindingSchema.safeParse(context.executionBinding);
-  if (!approval.success || !binding.success || target.transaction === null) throw new InvalidTransitionError("agentic job execution authorization", from, to);
+  const submission = SubmissionOperationRecordSchema.safeParse(context.submissionOperation);
+  if (!approval.success || !binding.success || !submission.success || target.transaction === null || context.idempotencyKey === undefined) throw new InvalidTransitionError("agentic job execution authorization", from, to);
   const intent = binding.data.executionIntent;
   const protocolTarget = intent.protocolTarget;
   if (protocolTarget.kind !== "ERC8183") throw new InvalidTransitionError("agentic job execution authorization", from, to);
@@ -214,8 +216,11 @@ async function validateJobExecutionAuthorization(context: TransitionContext, tar
     binding.data.releaseRequestId !== context.expectedReleaseRequestId ||
     binding.data.transactionRecordId !== context.expectedTransactionId ||
     binding.data.consumedByTransactionId !== context.expectedTransactionId ||
-    decidedAt === null || consumedAt === null || occurredAt === null || expiresAt === null ||
-    decidedAt > consumedAt || consumedAt > occurredAt || occurredAt >= expiresAt ||
+    submission.data.transactionId !== context.expectedTransactionId ||
+    submission.data.transactionId !== binding.data.transactionRecordId ||
+    submission.data.idempotencyKey !== context.idempotencyKey ||
+    decidedAt === null || consumedAt === null || submittedAt === null || occurredAt === null || expiresAt === null ||
+    decidedAt > consumedAt || consumedAt > submittedAt || submittedAt > occurredAt || occurredAt >= expiresAt ||
     intent.actionKind !== policy.actionKind ||
     intent.projectId !== context.expectedProjectId ||
     intent.releaseRequestId !== target.jobId ||
