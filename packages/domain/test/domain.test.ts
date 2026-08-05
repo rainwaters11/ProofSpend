@@ -161,12 +161,16 @@ describe("separate state machines", () => {
     expect(() => transitionApplication("SUBMITTED", "CONFIRMED", { ...confirmation, confirmationTransaction: { ...transaction, intentId: "intent:other" } })).toThrow(InvalidTransitionError);
     expect(() => transitionApplication("SUBMITTED", "CONFIRMED", { ...confirmation, confirmationTransaction: { ...transaction, approvalId: "approval:other" } })).toThrow(InvalidTransitionError);
     expect(() => transitionApplication("SUBMITTED", "CONFIRMED", { ...confirmation, confirmationTransaction: { ...transaction, approvalBindingId: "binding:other" } })).toThrow(InvalidTransitionError);
-    for (const operationType of ["JOB_FUND", "JOB_EVALUATE", "JOB_SUBMIT", "REFUND"] as const) {
+    for (const operationType of ["JOB_FUND", "JOB_EVALUATE", "JOB_SUBMIT"] as const) {
       const otherOperation = TransactionRecordSchema.parse({ ...transaction, arcTransaction: mockTransaction("CONFIRMED", operationType) });
       expect(() => transitionApplication("SUBMITTED", "CONFIRMED", { ...confirmation, confirmationTransaction: otherOperation, expectedOperationType: operationType })).toThrow(InvalidTransitionError);
     }
-    expect(transitionApplication("SUBMITTED", "CONFIRMED", { ...confirmation, expectedOperationType: "REFUND" }).state).toBe("CONFIRMED");
+    expect(() => transitionApplication("SUBMITTED", "CONFIRMED", { ...confirmation, expectedOperationType: "REFUND" })).toThrow(InvalidTransitionError);
+    expect(() => transitionApplication("SUBMITTED", "CONFIRMED", { ...confirmation, expectedOperationType: undefined })).toThrow(InvalidTransitionError);
     expect(transitionApplication("SUBMITTED", "CONFIRMED", confirmation).state).toBe("CONFIRMED");
+    const refundTransaction = TransactionRecordSchema.parse({ ...transaction, arcTransaction: mockTransaction("CONFIRMED", "REFUND") });
+    expect(transitionApplication("SUBMITTED", "CONFIRMED", { ...confirmation, confirmationTransaction: refundTransaction, expectedOperationType: "REFUND" }).state).toBe("CONFIRMED");
+    expect(() => transitionApplication("SUBMITTED", "CONFIRMED", { ...confirmation, confirmationTransaction: refundTransaction, expectedOperationType: "SETTLEMENT" })).toThrow(InvalidTransitionError);
     for (const actorType of ["AI", "FOUNDER", "EVALUATOR"] as const) expect(() => transitionApplication("SUBMITTED", "CONFIRMED", { ...confirmation, actor: { actorId: "adapter:authorized", actorType } })).toThrow(InvalidTransitionError);
     expect(() => transitionApplication("SUBMITTED", "CONFIRMED", { ...confirmation, actor: { actorId: "adapter:other", actorType: "ADAPTER" } })).toThrow(InvalidTransitionError);
   });
@@ -200,9 +204,12 @@ describe("separate state machines", () => {
     const evaluationTransaction = ArcTransactionRefSchema.parse(mockTransaction("CONFIRMED", "JOB_EVALUATE"));
     const approval = (decision: "APPROVED" | "REJECTED", aggregateId = "mock:job", intentId = "mock:intent", exactIntentHash = `sha256:${"a".repeat(64)}`, actorId = actor.actorId, decidedAt = context.occurredAt, expiresAt = "2027-01-01T00:00:00.000Z") => ApprovalRecordSchema.parse({ id: `approval:${decision}`, aggregateId, intentId, actionKind: "JOB_EVALUATION", authorizedActorType: "EVALUATOR", authorizedActorId: actorId, exactIntentHash, idempotencyKey: `approval:${decision}:key`, decision, approver: { actorId, actorType: "EVALUATOR" as const }, expiresAt, decidedAt });
     const evaluationEvidence = (decision: "APPROVED" | "REJECTED", overrides: Partial<JobEvaluationEvidence> = {}) => JobEvaluationEvidenceSchema.parse({ id: `evaluation:${decision}`, jobId: "mock:job", approvalId: `approval:${decision}`, intentId: "mock:intent", exactIntentHash: `sha256:${"a".repeat(64)}`, decision, transactionHash: "mock:transaction", transactionNetwork: "ARC_TESTNET", transactionChainId: "synthetic:chain", ...overrides });
-    const submittedCurrent = mockJob("SUBMITTED", mockTransaction("SUBMITTED", "JOB_SUBMIT"));
+    const submittedCurrent = mockJob("SUBMITTED", mockTransaction("CONFIRMED", "JOB_SUBMIT"));
+    const unconfirmedSubmittedCurrent = mockJob("SUBMITTED", mockTransaction("SUBMITTED", "JOB_SUBMIT"));
     const completed = mockJob("COMPLETED", evaluationTransaction);
     expect(transitionAgenticJob("SUBMITTED", "COMPLETED", { ...context, aggregateId: completed.jobId, actor, authorizedEvaluatorId: actor.actorId, currentJobEvidence: submittedCurrent, jobEvidence: completed, jobApprovalDecision: approval("APPROVED"), jobEvaluationEvidence: evaluationEvidence("APPROVED") }).status).toBe("COMPLETED");
+    expect(() => transitionAgenticJob("SUBMITTED", "COMPLETED", { ...context, aggregateId: completed.jobId, actor, authorizedEvaluatorId: actor.actorId, currentJobEvidence: unconfirmedSubmittedCurrent, jobEvidence: completed, jobApprovalDecision: approval("APPROVED"), jobEvaluationEvidence: evaluationEvidence("APPROVED") })).toThrow(InvalidTransitionError);
+    expect(() => transitionAgenticJob("SUBMITTED", "COMPLETED", { ...context, aggregateId: completed.jobId, actor, authorizedEvaluatorId: actor.actorId, currentJobEvidence: { ...mockJob("SUBMITTED", mockTransaction("CONFIRMED", "JOB_SUBMIT")), transaction: { ...mockTransaction("CONFIRMED", "JOB_SUBMIT"), blockHash: null } } as unknown as ReturnType<typeof mockJob>, jobEvidence: completed, jobApprovalDecision: approval("APPROVED"), jobEvaluationEvidence: evaluationEvidence("APPROVED") })).toThrow(InvalidTransitionError);
     const rejected = mockJob("REJECTED", evaluationTransaction);
     expect(transitionAgenticJob("SUBMITTED", "REJECTED", { ...context, aggregateId: rejected.jobId, actor, authorizedEvaluatorId: actor.actorId, currentJobEvidence: submittedCurrent, jobEvidence: rejected, jobApprovalDecision: approval("REJECTED"), jobEvaluationEvidence: evaluationEvidence("REJECTED") }).status).toBe("REJECTED");
     for (const transaction of [null, { ...evaluationTransaction, operationType: "JOB_SUBMIT" as const }, { ...evaluationTransaction, status: "SUBMITTED" as const, blockNumber: null, blockHash: null }]) expect(() => transitionAgenticJob("SUBMITTED", "REJECTED", { ...context, aggregateId: rejected.jobId, actor, authorizedEvaluatorId: actor.actorId, currentJobEvidence: submittedCurrent, jobEvidence: { ...rejected, transaction }, jobApprovalDecision: approval("REJECTED"), jobEvaluationEvidence: evaluationEvidence("REJECTED") })).toThrow(InvalidTransitionError);
@@ -259,6 +266,12 @@ describe("separate state machines", () => {
     const system = { actorId: "system", actorType: "SYSTEM" as const };
     expect(() => transitionAgenticJob("OPEN", "EXPIRED", { ...context, occurredAt: "2025-12-31T23:59:59.000Z", aggregateId: open.jobId, actor: system, authorizedSystemId: system.actorId, currentJobEvidence: open })).toThrow(InvalidTransitionError);
     expect(transitionAgenticJob("OPEN", "EXPIRED", { ...context, aggregateId: open.jobId, actor: system, authorizedSystemId: system.actorId, currentJobEvidence: open }).status).toBe("EXPIRED");
+    expect(transitionAgenticJob("OPEN", "EXPIRED", { ...context, aggregateId: open.jobId, actor: system, authorizedSystemId: system.actorId, currentJobEvidence: open, jobEvidence: mockJob("EXPIRED") }).status).toBe("EXPIRED");
+    for (const staleTarget of [mockJob("OPEN"), { ...mockJob("EXPIRED"), jobId: "mock:other" }, { ...mockJob("EXPIRED"), clientAddress: "mock:other-client" }, { ...mockJob("EXPIRED"), deliverableReference: "mock:forged-deliverable" }, { ...mockJob("EXPIRED"), reasonReference: "mock:forged-reason" }, { ...mockJob("EXPIRED"), transaction: mockTransaction("CONFIRMED", "REFUND") }]) expect(() => transitionAgenticJob("OPEN", "EXPIRED", { ...context, aggregateId: open.jobId, actor: system, authorizedSystemId: system.actorId, currentJobEvidence: open, jobEvidence: staleTarget })).toThrow(InvalidTransitionError);
+    const expiredSubmitted = AgenticJobRefSchema.parse({ ...submitted, status: "EXPIRED" });
+    const submittedExpiry = { ...context, aggregateId: submitted.jobId, actor: system, authorizedSystemId: system.actorId, currentJobEvidence: submitted, jobEvidence: expiredSubmitted };
+    expect(transitionAgenticJob("SUBMITTED", "EXPIRED", submittedExpiry).status).toBe("EXPIRED");
+    for (const changed of [{ deliverableReference: "mock:forged-deliverable" }, { reasonReference: "mock:forged-reason" }, { transaction: mockTransaction("CONFIRMED", "REFUND") }]) expect(() => transitionAgenticJob("SUBMITTED", "EXPIRED", { ...submittedExpiry, jobEvidence: { ...expiredSubmitted, ...changed } })).toThrow(InvalidTransitionError);
     for (const terminal of ["COMPLETED", "REJECTED", "EXPIRED"] as const) expect(() => transitionAgenticJob(terminal, "FUNDED", { ...context, aggregateId: open.jobId, actor: adapter, authorizedAdapterId: adapter.actorId, currentJobEvidence: mockJob(terminal), jobEvidence: funded })).toThrow(InvalidTransitionError);
   });
 });
@@ -373,6 +386,10 @@ describe("protocol-safe mocks and privacy", () => {
     const submitted = AgenticJobRefSchema.parse({ ...funded, status: "SUBMITTED", deliverableReference: "mock:deliverable", transaction: mockTransaction("SUBMITTED", "JOB_SUBMIT") });
     expect(adapter.transition(funded, "SUBMITTED", { ...authority, currentJobEvidence: job, jobEvidence: submitted }).job.status).toBe("SUBMITTED");
     expect(() => adapter.transition(funded, "SUBMITTED", { ...authority, jobEvidence: { ...submitted, deliverableReference: null } })).toThrow(InvalidTransitionError);
+    const systemAuthority = { ...context, occurredAt: job.expiresAt, aggregateId: job.jobId, actor: { actorId: "system", actorType: "SYSTEM" as const }, authorizedSystemId: "system" };
+    expect(adapter.transition(job, "EXPIRED", systemAuthority).job.status).toBe("EXPIRED");
+    expect(adapter.transition(job, "EXPIRED", { ...systemAuthority, jobEvidence: AgenticJobRefSchema.parse({ ...job, status: "EXPIRED" }) }).job.status).toBe("EXPIRED");
+    for (const staleTarget of [job, AgenticJobRefSchema.parse({ ...job, status: "EXPIRED", jobId: "mock:other" }), AgenticJobRefSchema.parse({ ...job, status: "EXPIRED", providerAddress: "mock:other-provider" }), AgenticJobRefSchema.parse({ ...job, status: "EXPIRED", deliverableReference: "mock:forged-deliverable" }), AgenticJobRefSchema.parse({ ...job, status: "EXPIRED", reasonReference: "mock:forged-reason" }), AgenticJobRefSchema.parse({ ...job, status: "EXPIRED", transaction: mockTransaction("CONFIRMED", "SETTLEMENT") })]) expect(() => adapter.transition(job, "EXPIRED", { ...systemAuthority, jobEvidence: staleTarget })).toThrow(InvalidTransitionError);
     expect(() => AgenticJobRefSchema.parse({ ...job, network: "ARC_TESTNET", chainId: "5042002", contractAddress: "0x1111111111111111111111111111111111111111", jobId: "1", clientAddress: "0x2222222222222222222222222222222222222222", providerAddress: "0x3333333333333333333333333333333333333333", evaluatorAddress: "0x4444444444444444444444444444444444444444", descriptionReference: "description", isMock: false })).toThrow(/deferred to Issue #8/);
   });
   it("requires every protocol-reference field", () => {
