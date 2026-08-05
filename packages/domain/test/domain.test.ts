@@ -975,7 +975,7 @@ describe("persisted relationship integrity", () => {
     const deferredIntent = { ...binding.executionIntent, operationType: "JOB_CREATE" as const };
     await expect(validateExecutionAuthorization(approval, release, { ...transaction, arcTransaction: { ...transaction.arcTransaction!, operationType: "JOB_CREATE" } }, { ...binding, executionIntent: deferredIntent }, context.occurredAt)).rejects.toThrow();
   });
-  it("revalidates only evaluator-authorized terminal job writes", async () => {
+  it("binds terminal authorization to the release's exact ERC-8183 job contract", async () => {
     const fixture = await authorizationFixture();
     const refundIntent = CanonicalExecutionIntentSchema.parse({ ...fixture.binding.executionIntent, operationType: "REFUND" });
     const refundHash = await hashCanonicalExecutionIntent(refundIntent);
@@ -983,17 +983,38 @@ describe("persisted relationship integrity", () => {
     const refundTransaction = TransactionRecordSchema.parse({ ...fixture.transaction, arcTransaction: { ...fixture.transaction.arcTransaction!, operationType: "REFUND" } });
     await expect(validateExecutionAuthorization(refundApproval, fixture.release, refundTransaction, { ...fixture.binding, exactIntentHash: refundHash, executionIntent: refundIntent }, context.occurredAt)).resolves.toBe(true);
 
-    for (const [operationType, actionKind] of [["JOB_EVALUATE", "JOB_EVALUATION"], ["JOB_REJECT", "JOB_REJECTION"]] as const) {
-      const protocolTarget = { kind: "ERC8183" as const, standard: "ERC-8183" as const, network: "ARC_TESTNET" as const, chainId: "synthetic:chain", contractReference: "mock:contract", jobId: "mock:job", method: operationType, parameterCommitment: `sha256:${"a".repeat(64)}`, clientReference: "mock:client", providerReference: "mock:provider", evaluatorReference: "mock:evaluator", destination: fixture.transaction.destinationReference };
+    for (const [operationType, actionKind, state, decision, reasonReference] of [
+      ["JOB_EVALUATE", "JOB_EVALUATION", "PENDING", "APPROVED", "mock:completion-attestation"],
+      ["JOB_REJECT", "JOB_REJECTION", "REFUND_PENDING", "REJECTED", "mock:rejection-reason"],
+    ] as const) {
+      const job = AgenticJobRefSchema.parse({ ...mockJob("SUBMITTED", mockTransaction("CONFIRMED", "JOB_SUBMIT")), budget: fixture.release.amount });
+      const parameters = { operationType, jobId: job.jobId, asset: job.budget.asset, atomicAmount: job.budget.atomicUnits, deliverableReference: job.deliverableReference, decision, reasonReference };
+      const parameterCommitment = await hashJobParameterCommitment(parameters);
+      const protocolTarget = { kind: "ERC8183" as const, standard: "ERC-8183" as const, network: job.transaction!.network, chainId: job.transaction!.chainId, contractReference: job.contractAddress, jobId: job.jobId, method: operationType, parameterCommitment, clientReference: job.clientAddress, providerReference: job.providerAddress, evaluatorReference: job.evaluatorAddress, destination: job.contractAddress };
+      const transaction = TransactionRecordSchema.parse({ ...fixture.transaction, destinationReference: job.contractAddress, arcTransaction: { ...fixture.transaction.arcTransaction!, operationType, network: protocolTarget.network, chainId: protocolTarget.chainId } });
       const executionIntent = CanonicalExecutionIntentSchema.parse({ ...fixture.binding.executionIntent, actionKind, operationType, protocolTarget });
       const exactIntentHash = await hashCanonicalExecutionIntent(executionIntent);
-      const approval = ApprovalRecordSchema.parse({ ...fixture.approval, aggregateId: protocolTarget.jobId, actionKind, authorizedActorType: "EVALUATOR", authorizedActorId: protocolTarget.evaluatorReference, approver: { actorId: protocolTarget.evaluatorReference, actorType: "EVALUATOR" }, exactIntentHash });
-      const transaction = TransactionRecordSchema.parse({ ...fixture.transaction, arcTransaction: { ...fixture.transaction.arcTransaction!, operationType, network: protocolTarget.network, chainId: protocolTarget.chainId } });
+      const approval = ApprovalRecordSchema.parse({ ...fixture.approval, aggregateId: job.jobId, actionKind, authorizedActorType: "EVALUATOR", authorizedActorId: job.evaluatorAddress, approver: { actorId: job.evaluatorAddress, actorType: "EVALUATOR" }, exactIntentHash });
       const binding = { ...fixture.binding, exactIntentHash, executionIntent };
-      await expect(validateExecutionAuthorization(approval, fixture.release, transaction, binding, context.occurredAt)).resolves.toBe(true);
-      await expect(validateExecutionAuthorization({ ...approval, aggregateId: fixture.release.id }, fixture.release, transaction, binding, context.occurredAt)).rejects.toThrow(/subject/);
-      await expect(validateExecutionAuthorization({ ...approval, authorizedActorId: "mock:other-evaluator", approver: { actorId: "mock:other-evaluator", actorType: "EVALUATOR" } }, fixture.release, transaction, binding, context.occurredAt)).rejects.toThrow(/subject/);
-      await expect(validateExecutionAuthorization(approval, fixture.release, transaction, { ...binding, executionIntent: { ...executionIntent, protocolTarget: { ...protocolTarget, jobId: "mock:other-job" } } }, context.occurredAt)).rejects.toThrow();
+      const settlement = SettlementRecordSchema.parse({ id: `settlement:${operationType.toLowerCase()}`, projectId: fixture.release.projectId, releaseRequestId: fixture.release.id, reconciliationId: null, idempotencyKey: `settlement:${operationType.toLowerCase()}:key`, amount: fixture.release.amount, state, job, transaction: transaction.arcTransaction, updatedAt: context.occurredAt });
+      const terminalJobContext = { settlement, parameters };
+
+      await expect(validateExecutionAuthorization(approval, fixture.release, transaction, binding, context.occurredAt, terminalJobContext)).resolves.toBe(true);
+      await expect(validateExecutionAuthorization(approval, fixture.release, transaction, binding, context.occurredAt)).rejects.toThrow(/job evidence/);
+      await expect(validateExecutionAuthorization({ ...approval, aggregateId: fixture.release.id }, fixture.release, transaction, binding, context.occurredAt, terminalJobContext)).rejects.toThrow(/subject/);
+      await expect(validateExecutionAuthorization({ ...approval, authorizedActorId: "mock:other-evaluator", approver: { actorId: "mock:other-evaluator", actorType: "EVALUATOR" } }, fixture.release, transaction, binding, context.occurredAt, terminalJobContext)).rejects.toThrow(/subject/);
+      await expect(validateExecutionAuthorization(approval, fixture.release, transaction, binding, context.occurredAt, { ...terminalJobContext, settlement: { ...settlement, releaseRequestId: "release:other" } })).rejects.toThrow(/prepared release/);
+      await expect(validateExecutionAuthorization(approval, fixture.release, transaction, binding, context.occurredAt, { ...terminalJobContext, settlement: { ...settlement, job: { ...job, contractAddress: "mock:other-contract" } } })).rejects.toThrow(/job contract/);
+      await expect(validateExecutionAuthorization(approval, fixture.release, transaction, binding, context.occurredAt, { ...terminalJobContext, parameters: { ...parameters, reasonReference: "mock:forged-reason" } })).rejects.toThrow(/parameter commitment/);
+
+      for (const field of ["jobId", "clientReference", "providerReference", "evaluatorReference", "contractReference", "destination"] as const) {
+        const forgedTarget = { ...protocolTarget, [field]: `mock:forged-${field}` };
+        const forgedIntent = CanonicalExecutionIntentSchema.parse({ ...executionIntent, protocolTarget: forgedTarget });
+        const forgedHash = await hashCanonicalExecutionIntent(forgedIntent);
+        const forgedApproval = ApprovalRecordSchema.parse({ ...approval, aggregateId: forgedTarget.jobId, authorizedActorId: forgedTarget.evaluatorReference, approver: { actorId: forgedTarget.evaluatorReference, actorType: "EVALUATOR" }, exactIntentHash: forgedHash });
+        const forgedTransaction = TransactionRecordSchema.parse({ ...transaction, destinationReference: forgedTarget.destination });
+        await expect(validateExecutionAuthorization(forgedApproval, fixture.release, forgedTransaction, { ...binding, exactIntentHash: forgedHash, executionIntent: forgedIntent }, context.occurredAt, { ...terminalJobContext, settlement: { ...settlement, transaction: forgedTransaction.arcTransaction } })).rejects.toThrow();
+      }
     }
 
     for (const [operationType, actionKind, actorType, actorId] of [
