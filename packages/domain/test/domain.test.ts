@@ -260,23 +260,29 @@ describe("separate state machines", () => {
     await expect(transitionApplicationSubmission(submitted)).resolves.toMatchObject({ state: "SUBMITTED" });
     type SubmissionOperationType = NonNullable<typeof transaction.arcTransaction>["operationType"];
     const erc8183Target = (method: "JOB_FUND" | "JOB_SUBMIT" | "JOB_EVALUATE" | "JOB_REJECT") => ({ kind: "ERC8183" as const, standard: "ERC-8183" as const, network: "ARC_TESTNET" as const, chainId: "synthetic:chain", contractReference: "mock:contract", jobId: "mock:job", method, parameterCommitment: `sha256:${"c".repeat(64)}`, clientReference: "mock:client", providerReference: "mock:provider", evaluatorReference: "mock:evaluator", destination: transaction.destinationReference });
-    const submitForOperation = async (operationType: SubmissionOperationType, actorType: "FOUNDER" | "PROVIDER" | "EVALUATOR") => {
+    const submissionForOperation = async (operationType: SubmissionOperationType, actorType: "FOUNDER" | "PROVIDER" | "EVALUATOR") => {
       const actionKind = operationType === "JOB_REJECT" ? "JOB_REJECTION" : actorType === "FOUNDER" ? "RELEASE_APPROVAL" : actorType === "PROVIDER" ? "JOB_SUBMISSION" : "JOB_EVALUATION";
       const protocolTarget = operationType === "JOB_FUND" || operationType === "JOB_SUBMIT" || operationType === "JOB_EVALUATE" || operationType === "JOB_REJECT" ? erc8183Target(operationType) : { kind: "DESTINATION" as const, destination: transaction.destinationReference, network: "ARC_TESTNET" as const, chainId: "synthetic:chain", isMock: true };
       const candidateTransaction = TransactionRecordSchema.parse({ ...transaction, arcTransaction: { ...transaction.arcTransaction!, operationType } });
       const candidateIntent = CanonicalExecutionIntentSchema.parse({ ...executionIntent, actionKind, operationType, protocolTarget });
       const candidateHash = await hashCanonicalExecutionIntent(candidateIntent);
-      const actorId = actorType === "FOUNDER" ? "founder:1" : actorType === "PROVIDER" ? "mock:provider" : "evaluator:1";
-      const candidateApproval = ApprovalRecordSchema.parse({ ...approvalDecision, actionKind, authorizedActorType: actorType, authorizedActorId: actorId, approver: { actorId, actorType }, exactIntentHash: candidateHash });
+      const actorId = actorType === "FOUNDER" ? "founder:1" : actorType === "PROVIDER" ? "mock:provider" : "mock:evaluator";
+      const approvalAggregateId = protocolTarget.kind === "ERC8183" ? protocolTarget.jobId : transaction.releaseRequestId;
+      const candidateApproval = ApprovalRecordSchema.parse({ ...approvalDecision, aggregateId: approvalAggregateId, actionKind, authorizedActorType: actorType, authorizedActorId: actorId, approver: { actorId, actorType }, exactIntentHash: candidateHash });
       const candidateBinding = ExecutionAuthorizationBindingSchema.parse({ ...binding, exactIntentHash: candidateHash, executionIntent: candidateIntent });
-      return transitionApplicationSubmission({ ...submitted, submissionTransaction: candidateTransaction, submissionOperation: { ...submissionOperation, arcTransaction: candidateTransaction.arcTransaction! }, executionBinding: candidateBinding, approvalDecision: candidateApproval, authorizedApproverId: actorId, expectedExactIntentHash: candidateHash });
+      return { ...submitted, submissionTransaction: candidateTransaction, submissionOperation: { ...submissionOperation, arcTransaction: candidateTransaction.arcTransaction! }, executionBinding: candidateBinding, approvalDecision: candidateApproval, authorizedApproverId: actorType === "FOUNDER" ? actorId : undefined, authorizedEvaluatorId: actorType === "EVALUATOR" ? actorId : undefined, expectedExactIntentHash: candidateHash };
     };
+    const submitForOperation = async (operationType: SubmissionOperationType, actorType: "FOUNDER" | "PROVIDER" | "EVALUATOR") => transitionApplicationSubmission(await submissionForOperation(operationType, actorType));
     await expect(submitForOperation("SETTLEMENT", "FOUNDER")).resolves.toMatchObject({ state: "SUBMITTED" });
     await expect(submitForOperation("REFUND", "FOUNDER")).resolves.toMatchObject({ state: "SUBMITTED" });
     await expect(submitForOperation("JOB_FUND", "FOUNDER")).rejects.toThrow(InvalidTransitionError);
     await expect(submitForOperation("JOB_SUBMIT", "PROVIDER")).rejects.toThrow(InvalidTransitionError);
-    await expect(submitForOperation("JOB_EVALUATE", "EVALUATOR")).rejects.toThrow(InvalidTransitionError);
-    await expect(submitForOperation("JOB_REJECT", "EVALUATOR")).rejects.toThrow(InvalidTransitionError);
+    await expect(submitForOperation("JOB_EVALUATE", "EVALUATOR")).resolves.toMatchObject({ state: "SUBMITTED" });
+    await expect(submitForOperation("JOB_REJECT", "EVALUATOR")).resolves.toMatchObject({ state: "SUBMITTED" });
+    const terminalJobSubmission = await submissionForOperation("JOB_EVALUATE", "EVALUATOR");
+    await expect(transitionApplicationSubmission({ ...terminalJobSubmission, authorizedEvaluatorId: undefined })).rejects.toThrow(InvalidTransitionError);
+    await expect(transitionApplicationSubmission({ ...terminalJobSubmission, authorizedEvaluatorId: "mock:other-evaluator" })).rejects.toThrow(InvalidTransitionError);
+    await expect(transitionApplicationSubmission({ ...terminalJobSubmission, approvalDecision: { ...terminalJobSubmission.approvalDecision!, aggregateId: transaction.releaseRequestId } })).rejects.toThrow(InvalidTransitionError);
     await expect(transitionApplicationSubmission({ ...submitted, approvalDecision: { ...approvalDecision, actionKind: "JOB_EVALUATION", authorizedActorType: "EVALUATOR", authorizedActorId: "evaluator:1", approver: { actorId: "evaluator:1", actorType: "EVALUATOR" as const } } })).rejects.toThrow(InvalidTransitionError);
     const jobFundIntent = CanonicalExecutionIntentSchema.parse({ ...executionIntent, operationType: "JOB_FUND", protocolTarget: erc8183Target("JOB_FUND") });
     const jobEvaluateIntent = CanonicalExecutionIntentSchema.parse({ ...executionIntent, actionKind: "JOB_EVALUATION", operationType: "JOB_EVALUATE", protocolTarget: erc8183Target("JOB_EVALUATE") });
@@ -847,11 +853,12 @@ describe("lifecycle evidence schemas", () => {
     const openRejectedJob = mockJob("REJECTED", mockTransaction("CONFIRMED", "JOB_REJECT"));
     const rejectedJob = mockJob("REJECTED", mockTransaction("CONFIRMED", "JOB_REJECT"), mockTransaction("CONFIRMED", "JOB_SUBMIT"));
     const expiredJob = AgenticJobRefSchema.parse({ ...mockJob("FUNDED", mockTransaction("CONFIRMED", "JOB_FUND")), status: "EXPIRED", transaction: mockTransaction("CONFIRMED", "REFUND"), escrowTransaction: mockTransaction("CONFIRMED", "JOB_FUND") });
-    for (const state of ["PENDING", "REFUND_PENDING"] as const) {
+    for (const state of ["PENDING", "REFUND_PENDING", "FAILED"] as const) {
       for (const job of [completedJob, rejectedJob, expiredJob]) expect(() => SettlementRecordSchema.parse({ ...base, state, job, transaction: null })).toThrow();
     }
     expect(SettlementRecordSchema.parse({ ...base, state: "PENDING", job: submittedJob, transaction: null })).toBeDefined();
     expect(SettlementRecordSchema.parse({ ...base, state: "REFUND_PENDING", job: mockJob("FUNDED", mockTransaction("CONFIRMED", "JOB_FUND")), transaction: null })).toBeDefined();
+    expect(SettlementRecordSchema.parse({ ...base, state: "FAILED", job: submittedJob, transaction: null })).toBeDefined();
     expect(() => SettlementRecordSchema.parse({ ...base, state: "CONFIRMED", job: completedJob, transaction: mockTransaction("CONFIRMED") })).toThrow();
     expect(() => SettlementRecordSchema.parse({ ...base, state: "CONFIRMED", job: completedJobWithReason, transaction: mockTransaction("CONFIRMED") })).toThrow();
     expect(SettlementRecordSchema.parse({ ...base, state: "CONFIRMED", job: completedJobWithReason, transaction: completedJobWithReason.transaction })).toBeDefined();
