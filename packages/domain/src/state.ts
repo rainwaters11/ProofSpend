@@ -1,5 +1,5 @@
 import { AgenticJobRefSchema, ApprovalRecordSchema, CanonicalExecutionIntentSchema, ExecutionAuthorizationBindingSchema, JobEvaluationEvidenceSchema, ReconciliationRecordSchema, ReleaseRequestSchema, SettlementRecordSchema, SubmissionOperationRecordSchema, TransactionRecordSchema, type Actor, type AgenticJobRef, type AgenticJobStatus, type ApprovalRecord, type AuditEvent, type ExecutionAuthorizationBinding, type JobEvaluationEvidence, type ReconciliationRecord, type ReleaseRequest, type SettlementRecord, type SubmissionOperationRecord, type TransactionRecord } from "./models";
-import { hashCanonicalExecutionIntent, validateReconciliation } from "./integrity";
+import { hashCanonicalExecutionIntent, hashJobParameterCommitment, validateReconciliation } from "./integrity";
 
 export class InvalidTransitionError extends Error {
   constructor(readonly machine: string, readonly from: string, readonly to: string) {
@@ -187,6 +187,7 @@ async function validateJobExecutionAuthorization(context: TransitionContext, tar
   const occurredAt = assertFiniteTime(context.occurredAt);
   const expiresAt = assertFiniteTime(approval.data.expiresAt);
   const recomputedHash = await hashCanonicalExecutionIntent(intent);
+  const parameterCommitment = await hashJobParameterCommitment({ operationType: policy.operationType, jobId: target.jobId, asset: target.budget.asset, atomicAmount: target.budget.atomicUnits, deliverableReference: policy.operationType === "JOB_FUND" ? null : target.deliverableReference, decision: policy.operationType === "JOB_EVALUATE" ? policy.decision : null, reasonReference: policy.operationType === "JOB_EVALUATE" ? target.reasonReference : null });
   if (
     approval.data.actionKind !== policy.actionKind ||
     approval.data.authorizedActorType !== policy.actorType ||
@@ -221,6 +222,7 @@ async function validateJobExecutionAuthorization(context: TransitionContext, tar
     intent.atomicAmount !== target.budget.atomicUnits ||
     intent.operationType !== policy.operationType ||
     protocolTarget.method !== policy.operationType ||
+    protocolTarget.parameterCommitment !== parameterCommitment ||
     protocolTarget.jobId !== target.jobId ||
     protocolTarget.contractReference !== target.contractAddress ||
     protocolTarget.clientReference !== target.clientAddress ||
