@@ -135,9 +135,10 @@ describe("separate state machines", () => {
     const funded = mockJob("FUNDED", mockTransaction("CONFIRMED", "JOB_FUND"));
     const submitted = mockJob("SUBMITTED", mockTransaction("SUBMITTED", "JOB_SUBMIT"));
     const completed = mockJob("COMPLETED", mockTransaction("CONFIRMED", "JOB_EVALUATE"));
+    const completedWithReason = AgenticJobRefSchema.parse({ ...completed, reasonReference: "mock:completion-attestation" });
     const rejected = mockJob("REJECTED", mockTransaction("CONFIRMED", "JOB_REJECT"));
     const rejectedBeforeSubmission = AgenticJobRefSchema.parse({ ...rejected, deliverableReference: null });
-    for (const job of [open, funded, submitted, completed, rejected, rejectedBeforeSubmission, mockJob("EXPIRED"), AgenticJobRefSchema.parse({ ...funded, status: "EXPIRED" }), AgenticJobRefSchema.parse({ ...submitted, status: "EXPIRED" })]) expect(AgenticJobRefSchema.parse(job)).toEqual(job);
+    for (const job of [open, funded, submitted, completed, completedWithReason, rejected, rejectedBeforeSubmission, mockJob("EXPIRED"), AgenticJobRefSchema.parse({ ...funded, status: "EXPIRED" }), AgenticJobRefSchema.parse({ ...submitted, status: "EXPIRED" })]) expect(AgenticJobRefSchema.parse(job)).toEqual(job);
     for (const invalid of [
       { ...open, status: "FUNDED" as const },
       { ...open, status: "COMPLETED" as const },
@@ -345,15 +346,20 @@ describe("separate state machines", () => {
     const submittedCurrent = mockJob("SUBMITTED", mockTransaction("CONFIRMED", "JOB_SUBMIT"));
     const unconfirmedSubmittedCurrent = mockJob("SUBMITTED", mockTransaction("SUBMITTED", "JOB_SUBMIT"));
     const completed = mockJob("COMPLETED", mockTransaction("CONFIRMED", "JOB_EVALUATE"));
+    const completedWithReason = AgenticJobRefSchema.parse({ ...completed, reasonReference: "mock:completion-attestation" });
     const rejected = mockJob("REJECTED", mockTransaction("CONFIRMED", "JOB_REJECT"));
     const completedAuthorization = await jobEvaluationAuthorization(completed, "APPROVED");
+    const completedWithReasonAuthorization = await jobEvaluationAuthorization(completedWithReason, "APPROVED", "transaction:job-evaluate:approved-with-reason");
     const rejectedAuthorization = await jobEvaluationAuthorization(rejected, "REJECTED");
     const completedContext = { ...context, aggregateId: completed.jobId, actor: adapter, authorizedAdapterId: adapter.actorId, currentJobEvidence: submittedCurrent, jobEvidence: completed, ...completedAuthorization };
+    const completedWithReasonContext = { ...context, aggregateId: completedWithReason.jobId, actor: adapter, authorizedAdapterId: adapter.actorId, currentJobEvidence: submittedCurrent, jobEvidence: completedWithReason, ...completedWithReasonAuthorization };
     const rejectedContext = { ...context, aggregateId: rejected.jobId, actor: adapter, authorizedAdapterId: adapter.actorId, currentJobEvidence: submittedCurrent, jobEvidence: rejected, ...rejectedAuthorization };
 
     const completedResult = await transitionAgenticJob("SUBMITTED", "COMPLETED", completedContext);
+    const completedWithReasonResult = await transitionAgenticJob("SUBMITTED", "COMPLETED", completedWithReasonContext);
     const rejectedResult = await transitionAgenticJob("SUBMITTED", "REJECTED", rejectedContext);
     expect(completedResult.status).toBe("COMPLETED");
+    expect(completedWithReasonResult.status).toBe("COMPLETED");
     expect(rejectedResult.status).toBe("REJECTED");
     expect(completedResult.auditEvent.actor).toEqual(adapter);
     expect(rejectedResult.auditEvent.actor).toEqual(adapter);
@@ -369,6 +375,7 @@ describe("separate state machines", () => {
     await expect(transitionAgenticJob("SUBMITTED", "COMPLETED", { ...completedContext, authorizedAdapterId: "adapter:other" })).rejects.toThrow(InvalidTransitionError);
     await expect(transitionAgenticJob("SUBMITTED", "COMPLETED", { ...completedContext, actor: { actorId: "mock:evaluator", actorType: "EVALUATOR" } })).rejects.toThrow(InvalidTransitionError);
     await expect(transitionAgenticJob("SUBMITTED", "COMPLETED", { ...completedContext, jobEvidence: { ...completed, deliverableReference: "mock:replacement" } })).rejects.toThrow(InvalidTransitionError);
+    await expect(transitionAgenticJob("SUBMITTED", "COMPLETED", { ...completedContext, jobEvidence: { ...completed, reasonReference: "mock:unapproved-attestation" } })).rejects.toThrow(InvalidTransitionError);
     await expect(transitionAgenticJob("SUBMITTED", "REJECTED", { ...rejectedContext, jobEvidence: { ...rejected, reasonReference: null } })).rejects.toThrow(InvalidTransitionError);
     await expect(transitionAgenticJob("SUBMITTED", "REJECTED", { ...rejectedContext, jobEvaluationEvidence: { ...rejectedAuthorization.jobEvaluationEvidence, transactionHash: "mock:other" } })).rejects.toThrow(InvalidTransitionError);
     const evaluationTarget = completedAuthorization.executionBinding.executionIntent.protocolTarget;
@@ -705,10 +712,12 @@ describe("lifecycle evidence schemas", () => {
     expect(SettlementRecordSchema.parse({ ...base, state: "REFUNDED", transaction: mockTransaction("CONFIRMED", "REFUND") })).toBeDefined();
     expect(() => SettlementRecordSchema.parse({ ...base, state: "RECONCILED", transaction: null })).toThrow();
     const completedJob = mockJob("COMPLETED", mockTransaction("CONFIRMED", "JOB_EVALUATE"));
+    const completedJobWithReason = AgenticJobRefSchema.parse({ ...completedJob, reasonReference: "mock:completion-attestation" });
     const submittedJob = mockJob("SUBMITTED", mockTransaction("CONFIRMED", "JOB_SUBMIT"));
     const rejectedJob = mockJob("REJECTED", mockTransaction("CONFIRMED", "JOB_REJECT"));
     const expiredJob = mockJob("EXPIRED");
     expect(SettlementRecordSchema.parse({ ...base, state: "CONFIRMED", job: completedJob, transaction: mockTransaction("CONFIRMED") })).toBeDefined();
+    expect(SettlementRecordSchema.parse({ ...base, state: "CONFIRMED", job: completedJobWithReason, transaction: mockTransaction("CONFIRMED") })).toBeDefined();
     expect(() => SettlementRecordSchema.parse({ ...base, state: "CONFIRMED", amount: usdc("2"), job: completedJob, transaction: mockTransaction("CONFIRMED") })).toThrow();
     expect(() => SettlementRecordSchema.parse({ ...base, state: "CONFIRMED", job: submittedJob, transaction: mockTransaction("CONFIRMED") })).toThrow();
     expect(SettlementRecordSchema.parse({ ...base, state: "REFUNDED", job: rejectedJob, transaction: mockTransaction("CONFIRMED", "REFUND") })).toBeDefined();
