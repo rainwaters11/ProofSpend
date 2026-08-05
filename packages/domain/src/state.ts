@@ -178,7 +178,7 @@ async function validateJobExecutionAuthorization(context: TransitionContext, tar
   actorType: "FOUNDER" | "PROVIDER" | "EVALUATOR";
   actorId: string;
   authorizedActorId: string | undefined;
-  decision: "APPROVED" | "REJECTED";
+  outcomeDecision: "APPROVED" | "REJECTED" | null;
   operationType: "JOB_FUND" | "JOB_SUBMIT" | "JOB_EVALUATE" | "JOB_REJECT";
 }): Promise<ApprovalRecord> {
   const approval = ApprovalRecordSchema.safeParse(context.jobApprovalDecision);
@@ -195,7 +195,7 @@ async function validateJobExecutionAuthorization(context: TransitionContext, tar
   const expiresAt = assertFiniteTime(approval.data.expiresAt);
   const recomputedHash = await hashCanonicalExecutionIntent(intent);
   const isDecisionOperation = policy.operationType === "JOB_EVALUATE" || policy.operationType === "JOB_REJECT";
-  const parameterCommitment = await hashJobParameterCommitment({ operationType: policy.operationType, jobId: target.jobId, asset: target.budget.asset, atomicAmount: target.budget.atomicUnits, deliverableReference: policy.operationType === "JOB_FUND" ? null : target.deliverableReference, decision: isDecisionOperation ? policy.decision : null, reasonReference: isDecisionOperation ? target.reasonReference : null });
+  const parameterCommitment = await hashJobParameterCommitment({ operationType: policy.operationType, jobId: target.jobId, asset: target.budget.asset, atomicAmount: target.budget.atomicUnits, deliverableReference: policy.operationType === "JOB_FUND" ? null : target.deliverableReference, decision: isDecisionOperation ? policy.outcomeDecision : null, reasonReference: isDecisionOperation ? target.reasonReference : null });
   if (
     approval.data.actionKind !== policy.actionKind ||
     approval.data.authorizedActorType !== policy.actorType ||
@@ -205,7 +205,7 @@ async function validateJobExecutionAuthorization(context: TransitionContext, tar
     approval.data.approver.actorId !== approval.data.authorizedActorId ||
     approval.data.aggregateId !== target.jobId ||
     approval.data.aggregateId !== context.aggregateId ||
-    approval.data.decision !== policy.decision ||
+    approval.data.decision !== "APPROVED" ||
     approval.data.id !== context.expectedApprovalId ||
     approval.data.id !== binding.data.approvalId ||
     approval.data.intentId !== context.expectedIntentId ||
@@ -273,15 +273,15 @@ export async function transitionAgenticJob(from: AgenticJobStatus, to: AgenticJo
   if (!Number.isFinite(occurredAt) || !Number.isFinite(expiresAt) || occurredAt >= expiresAt) throw new InvalidTransitionError("agentic job expiry gate", from, to);
   if (to === "FUNDED") {
     if (target.data.deliverableReference !== null || target.data.reasonReference !== null || target.data.transaction?.isMock !== true || target.data.transaction.status !== "CONFIRMED" || target.data.transaction.operationType !== "JOB_FUND") throw new InvalidTransitionError("agentic job funding evidence", from, to);
-    await validateJobExecutionAuthorization(context, target.data, from, to, { actionKind: "RELEASE_APPROVAL", actorType: "FOUNDER", actorId: target.data.clientAddress, authorizedActorId: context.authorizedApproverId, decision: "APPROVED", operationType: "JOB_FUND" });
+    await validateJobExecutionAuthorization(context, target.data, from, to, { actionKind: "RELEASE_APPROVAL", actorType: "FOUNDER", actorId: target.data.clientAddress, authorizedActorId: context.authorizedApproverId, outcomeDecision: null, operationType: "JOB_FUND" });
   }
   if (to === "SUBMITTED") {
     const fundingTransaction = current.data.transaction;
     if (current.data.deliverableReference !== null || current.data.reasonReference !== null || fundingTransaction?.isMock !== true || fundingTransaction.status !== "CONFIRMED" || fundingTransaction.operationType !== "JOB_FUND" || fundingTransaction.transactionHash === null || fundingTransaction.blockNumber === null || fundingTransaction.blockHash === null || target.data.deliverableReference === null || target.data.reasonReference !== null || target.data.transaction?.isMock !== true || !["SUBMITTED", "CONFIRMED"].includes(target.data.transaction.status) || target.data.transaction.operationType !== "JOB_SUBMIT") throw new InvalidTransitionError("agentic job submission evidence", from, to);
-    await validateJobExecutionAuthorization(context, target.data, from, to, { actionKind: "JOB_SUBMISSION", actorType: "PROVIDER", actorId: target.data.providerAddress, authorizedActorId: context.authorizedProviderId, decision: "APPROVED", operationType: "JOB_SUBMIT" });
+    await validateJobExecutionAuthorization(context, target.data, from, to, { actionKind: "JOB_SUBMISSION", actorType: "PROVIDER", actorId: target.data.providerAddress, authorizedActorId: context.authorizedProviderId, outcomeDecision: null, operationType: "JOB_SUBMIT" });
   }
   if (to === "COMPLETED") {
-    const approval = await validateJobExecutionAuthorization(context, target.data, from, to, { actionKind: "JOB_EVALUATION", actorType: "EVALUATOR", actorId: target.data.evaluatorAddress, authorizedActorId: context.authorizedEvaluatorId, decision: "APPROVED", operationType: "JOB_EVALUATE" });
+    const approval = await validateJobExecutionAuthorization(context, target.data, from, to, { actionKind: "JOB_EVALUATION", actorType: "EVALUATOR", actorId: target.data.evaluatorAddress, authorizedActorId: context.authorizedEvaluatorId, outcomeDecision: "APPROVED", operationType: "JOB_EVALUATE" });
     const transaction = target.data.transaction;
     const evaluationEvidence = JobEvaluationEvidenceSchema.safeParse(context.jobEvaluationEvidence);
     const deliverablePreserved = current.data.deliverableReference !== null && target.data.deliverableReference === current.data.deliverableReference;
@@ -296,7 +296,7 @@ export async function transitionAgenticJob(from: AgenticJobStatus, to: AgenticJo
       actorType: evaluatorRejection ? "EVALUATOR" : "FOUNDER",
       actorId: evaluatorRejection ? target.data.evaluatorAddress : target.data.clientAddress,
       authorizedActorId: evaluatorRejection ? context.authorizedEvaluatorId : context.authorizedApproverId,
-      decision: "REJECTED",
+      outcomeDecision: "REJECTED",
       operationType: "JOB_REJECT",
     });
     const transaction = target.data.transaction;
