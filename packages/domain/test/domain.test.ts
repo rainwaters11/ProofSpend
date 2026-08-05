@@ -341,7 +341,7 @@ describe("separate state machines", () => {
     expect(() => transitionApplication("SUBMITTED", "CONFIRMED", { ...confirmation, confirmationTransaction: { ...transaction, intentId: "intent:other" } })).toThrow(InvalidTransitionError);
     expect(() => transitionApplication("SUBMITTED", "CONFIRMED", { ...confirmation, confirmationTransaction: { ...transaction, approvalId: "approval:other" } })).toThrow(InvalidTransitionError);
     expect(() => transitionApplication("SUBMITTED", "CONFIRMED", { ...confirmation, confirmationTransaction: { ...transaction, approvalBindingId: "binding:other" } })).toThrow(InvalidTransitionError);
-    for (const operationType of ["JOB_FUND", "JOB_REJECT", "JOB_SUBMIT"] as const) {
+    for (const operationType of ["JOB_FUND", "JOB_SUBMIT"] as const) {
       const otherOperation = TransactionRecordSchema.parse({ ...transaction, arcTransaction: mockTransaction("CONFIRMED", operationType) });
       expect(() => transitionApplication("SUBMITTED", "CONFIRMED", { ...confirmation, confirmationTransaction: otherOperation, expectedOperationType: operationType })).toThrow(InvalidTransitionError);
     }
@@ -354,6 +354,9 @@ describe("separate state machines", () => {
     const completionTransaction = TransactionRecordSchema.parse({ ...transaction, arcTransaction: mockTransaction("CONFIRMED", "JOB_EVALUATE") });
     const submittedCompletionTransaction = TransactionRecordSchema.parse({ ...submittedTransaction, arcTransaction: mockTransaction("SUBMITTED", "JOB_EVALUATE") });
     expect(transitionApplication("SUBMITTED", "CONFIRMED", { ...confirmation, submissionTransaction: submittedCompletionTransaction, confirmationTransaction: completionTransaction, expectedOperationType: "JOB_EVALUATE" }).state).toBe("CONFIRMED");
+    const rejectionTransaction = TransactionRecordSchema.parse({ ...transaction, arcTransaction: mockTransaction("CONFIRMED", "JOB_REJECT") });
+    const submittedRejectionTransaction = TransactionRecordSchema.parse({ ...submittedTransaction, arcTransaction: mockTransaction("SUBMITTED", "JOB_REJECT") });
+    expect(transitionApplication("SUBMITTED", "CONFIRMED", { ...confirmation, submissionTransaction: submittedRejectionTransaction, confirmationTransaction: rejectionTransaction, expectedOperationType: "JOB_REJECT" }).state).toBe("CONFIRMED");
     expect(() => transitionApplication("SUBMITTED", "CONFIRMED", { ...confirmation, confirmationTransaction: refundTransaction, expectedOperationType: "SETTLEMENT" })).toThrow(InvalidTransitionError);
     for (const actorType of ["AI", "FOUNDER", "EVALUATOR"] as const) expect(() => transitionApplication("SUBMITTED", "CONFIRMED", { ...confirmation, actor: { actorId: "adapter:authorized", actorType } })).toThrow(InvalidTransitionError);
     expect(() => transitionApplication("SUBMITTED", "CONFIRMED", { ...confirmation, actor: { actorId: "adapter:other", actorType: "ADAPTER" } })).toThrow(InvalidTransitionError);
@@ -449,6 +452,7 @@ describe("separate state machines", () => {
     const openContext = { ...context, aggregateId: open.jobId, actor: adapter, authorizedAdapterId: adapter.actorId, currentJobEvidence: open, jobEvidence: openRejected, ...openAuthorization };
     expect(openAuthorization.jobApprovalDecision.decision).toBe("APPROVED");
     expect((await transitionAgenticJob("OPEN", "REJECTED", openContext)).status).toBe("REJECTED");
+    expect((await transitionAgenticJob("OPEN", "REJECTED", { ...openContext, occurredAt: open.expiresAt })).status).toBe("REJECTED");
     const openReasonlessRejected = AgenticJobRefSchema.parse({ ...openRejected, reasonReference: null });
     const openReasonlessContext = { ...openContext, jobEvidence: openReasonlessRejected, ...await jobClientRejectionAuthorization(openReasonlessRejected, "transaction:job-reject:client:reasonless") };
     expect((await transitionAgenticJob("OPEN", "REJECTED", openReasonlessContext)).status).toBe("REJECTED");
@@ -768,6 +772,19 @@ describe("lifecycle evidence schemas", () => {
       expect(() => TransactionRecordSchema.parse({ ...base, destinationReference: "mock:recipient", operationState: "CONFIRMED", arcTransaction })).toThrow();
       expect(() => TransactionRecordSchema.parse({ ...base, destinationReference: liveDestination, operationState: "CONFIRMED", arcTransaction: mockTransaction("CONFIRMED", operationType) })).toThrow();
     }
+  });
+  it("requires a positive budget for every non-open ERC-8183 job state", () => {
+    expect(AgenticJobRefSchema.safeParse({ ...mockJob("OPEN"), budget: usdc("0") }).success).toBe(true);
+    const funded = mockJob("FUNDED", mockTransaction("CONFIRMED", "JOB_FUND"));
+    const expired = AgenticJobRefSchema.parse({ ...funded, status: "EXPIRED", transaction: mockTransaction("CONFIRMED", "REFUND"), escrowTransaction: funded.transaction });
+    const nonOpenJobs = [
+      funded,
+      mockJob("SUBMITTED", mockTransaction("CONFIRMED", "JOB_SUBMIT")),
+      mockJob("COMPLETED", mockTransaction("CONFIRMED", "JOB_EVALUATE")),
+      mockJob("REJECTED", mockTransaction("CONFIRMED", "JOB_REJECT")),
+      expired,
+    ];
+    for (const job of nonOpenJobs) expect(AgenticJobRefSchema.safeParse({ ...job, budget: usdc("0") }).success).toBe(false);
   });
   it("restricts LaunchVault value-moving records to USDC", async () => {
     const { vault } = createPawPovAiSeed();
