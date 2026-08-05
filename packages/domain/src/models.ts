@@ -180,6 +180,7 @@ export const SettlementRecordSchema = z.object({ id: Id, projectId: Id, releaseR
     (value.state === "FAILED" && (transaction === null || (transaction.status === "FAILED" && (transaction.operationType === "SETTLEMENT" || transaction.operationType === "REFUND"))));
   if (!allowed) context.addIssue({ code: "custom", message: `${value.state} settlement requires compatible persisted transaction evidence.` });
   if (value.job !== null && transaction?.status === "CONFIRMED") {
+    if (value.job.budget.asset !== value.amount.asset || value.job.budget.atomicUnits !== value.amount.atomicUnits) context.addIssue({ code: "custom", message: "Job-backed settlement amount must match the ERC-8183 job budget exactly." });
     if (transaction.operationType === "SETTLEMENT" && value.job.status !== "COMPLETED") context.addIssue({ code: "custom", message: "Confirmed settlement requires a completed ERC-8183 job." });
     if (transaction.operationType === "REFUND" && value.job.status !== "REJECTED" && value.job.status !== "EXPIRED") context.addIssue({ code: "custom", message: "Confirmed refund requires a rejected or expired ERC-8183 job." });
   }
