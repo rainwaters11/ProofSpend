@@ -2,11 +2,16 @@
   "name": "@proofspend/domain",
   "private": true,
   "version": "0.1.0",
+  "type": "module",
+  "exports": "./src/index.ts",
   "scripts": {
     "lint": "tsc --noEmit",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run --passWithNoTests",
+    "test": "vitest run",
     "build": "tsc --noEmit"
+  },
+  "dependencies": {
+    "zod": "^4.0.0"
   },
   "devDependencies": {
     "typescript": "^5.5.0",
