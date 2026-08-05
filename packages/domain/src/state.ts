@@ -1,4 +1,4 @@
-import { AgenticJobRefSchema, ApprovalRecordSchema, CanonicalExecutionIntentSchema, ExecutionAuthorizationBindingSchema, JobEvaluationEvidenceSchema, ReconciliationRecordSchema, ReleaseRequestSchema, SettlementRecordSchema, SubmissionOperationRecordSchema, TransactionRecordSchema, type Actor, type AgenticJobRef, type AgenticJobStatus, type ApprovalRecord, type AuditEvent, type ExecutionAuthorizationBinding, type JobEvaluationEvidence, type ReconciliationRecord, type ReleaseRequest, type SettlementRecord, type SubmissionOperationRecord, type TransactionRecord } from "./models";
+import { AgenticJobRefSchema, ApprovalRecordSchema, CanonicalExecutionIntentSchema, ExecutionAuthorizationBindingSchema, JobEvaluationEvidenceSchema, JobRefundOperationRecordSchema, ReconciliationRecordSchema, ReleaseRequestSchema, SettlementRecordSchema, SubmissionOperationRecordSchema, TransactionRecordSchema, type Actor, type AgenticJobRef, type AgenticJobStatus, type ApprovalRecord, type AuditEvent, type ExecutionAuthorizationBinding, type JobEvaluationEvidence, type JobRefundOperationRecord, type ReconciliationRecord, type ReleaseRequest, type SettlementRecord, type SubmissionOperationRecord, type TransactionRecord } from "./models";
 import { hashCanonicalExecutionIntent, hashJobParameterCommitment, validateReconciliation } from "./integrity";
 
 export class InvalidTransitionError extends Error {
@@ -25,7 +25,7 @@ export interface TransitionContext {
   reconciliationTransaction?: TransactionRecord; reconciliationSettlement?: SettlementRecord; reconciliationRecord?: ReconciliationRecord;
   approvalDecision?: ApprovalRecord; lifecycleTransaction?: TransactionRecord;
   jobEvidence?: AgenticJobRef; currentJobEvidence?: AgenticJobRef; jobApprovalDecision?: ApprovalRecord;
-  jobEvaluationEvidence?: JobEvaluationEvidence;
+  jobEvaluationEvidence?: JobEvaluationEvidence; jobRefundOperation?: JobRefundOperationRecord;
 }
 type ApplicationEdge = `${ProofSpendApplicationState}->${ProofSpendApplicationState}`;
 type AuthorityRule = { actorTypes: readonly Actor["actorType"][]; identifier: "authorizedSystemId" | "authorizedApproverId" | "authorizedAdapterId" };
@@ -57,8 +57,8 @@ const jobAuthority: Partial<Record<JobEdge, JobAuthorityRule>> = {
   "FUNDED->REJECTED": { actorType: "ADAPTER", identifier: "authorizedAdapterId" },
   "SUBMITTED->COMPLETED": { actorType: "ADAPTER", identifier: "authorizedAdapterId" },
   "SUBMITTED->REJECTED": { actorType: "ADAPTER", identifier: "authorizedAdapterId" },
-   "FUNDED->EXPIRED": { actorType: "SYSTEM", identifier: "authorizedSystemId" },
-  "SUBMITTED->EXPIRED": { actorType: "SYSTEM", identifier: "authorizedSystemId" },
+   "FUNDED->EXPIRED": { actorType: "ADAPTER", identifier: "authorizedAdapterId" },
+  "SUBMITTED->EXPIRED": { actorType: "ADAPTER", identifier: "authorizedAdapterId" },
 };
 function event(context: TransitionContext, from: string, to: string): AuditEvent {
   return { id: context.eventId, aggregateType: context.aggregateType, aggregateId: context.aggregateId, eventType: "STATE_TRANSITIONED", actor: context.actor, idempotencyKey: context.idempotencyKey ?? null, occurredAt: context.occurredAt, details: { from, to } };
@@ -152,25 +152,16 @@ const immutableJobFieldsMatch = (current: AgenticJobRef, target: AgenticJobRef):
   current.descriptionReference === target.descriptionReference &&
   current.isMock === target.isMock;
 
-const mutableJobEvidenceMatches = (current: AgenticJobRef, target: AgenticJobRef): boolean => {
-  const currentTransaction = current.transaction;
-  const targetTransaction = target.transaction;
-  const transactionMatches = currentTransaction === null
-    ? targetTransaction === null
-    : targetTransaction !== null &&
-      currentTransaction.network === targetTransaction.network &&
-      currentTransaction.chainId === targetTransaction.chainId &&
-      currentTransaction.transactionHash === targetTransaction.transactionHash &&
-      currentTransaction.status === targetTransaction.status &&
-      currentTransaction.blockNumber === targetTransaction.blockNumber &&
-      currentTransaction.blockHash === targetTransaction.blockHash &&
-      currentTransaction.explorerUrl === targetTransaction.explorerUrl &&
-      currentTransaction.operationType === targetTransaction.operationType &&
-      currentTransaction.isMock === targetTransaction.isMock;
-  return current.deliverableReference === target.deliverableReference &&
-    current.reasonReference === target.reasonReference &&
-    transactionMatches;
-};
+const arcTransactionEvidenceMatches = (left: NonNullable<AgenticJobRef["transaction"]>, right: NonNullable<AgenticJobRef["transaction"]>): boolean =>
+  left.network === right.network &&
+  left.chainId === right.chainId &&
+  left.transactionHash === right.transactionHash &&
+  left.status === right.status &&
+  left.blockNumber === right.blockNumber &&
+  left.blockHash === right.blockHash &&
+  left.explorerUrl === right.explorerUrl &&
+  left.operationType === right.operationType &&
+  left.isMock === right.isMock;
 
 async function validateJobExecutionAuthorization(context: TransitionContext, target: AgenticJobRef, from: AgenticJobStatus, to: AgenticJobStatus, policy: {
   actionKind: "RELEASE_APPROVAL" | "JOB_SUBMISSION" | "JOB_EVALUATION" | "JOB_REJECTION";
@@ -258,10 +249,25 @@ export async function transitionAgenticJob(from: AgenticJobStatus, to: AgenticJo
   if (authority === undefined || context.actor.actorType !== authority.actorType || context[authority.identifier] === undefined || context.actor.actorId !== context[authority.identifier]) throw new InvalidTransitionError("agentic job authority", from, to);
   if (to === "EXPIRED") {
     const current = AgenticJobRefSchema.safeParse(context.currentJobEvidence);
+    const target = AgenticJobRefSchema.safeParse(context.jobEvidence);
+    const refund = JobRefundOperationRecordSchema.safeParse(context.jobRefundOperation);
     const occurredAt = Date.parse(context.occurredAt);
-    if (!current.success || !current.data.isMock || current.data.jobId !== context.aggregateId || current.data.status !== from || !Number.isFinite(occurredAt) || occurredAt < Date.parse(current.data.expiresAt)) throw new InvalidTransitionError("agentic job expiry evidence", from, to);
-    const target = AgenticJobRefSchema.safeParse(context.jobEvidence ?? { ...current.data, status: to });
-    if (!target.success || !target.data.isMock || target.data.jobId !== context.aggregateId || target.data.status !== to || !immutableJobFieldsMatch(current.data, target.data) || !mutableJobEvidenceMatches(current.data, target.data)) throw new InvalidTransitionError("agentic job expiry evidence", from, to);
+    const expiresAt = current.success ? Date.parse(current.data.expiresAt) : Number.NaN;
+    const refundedAt = refund.success ? Date.parse(refund.data.createdAt) : Number.NaN;
+    const targetTransaction = target.success ? target.data.transaction : null;
+    if (
+      !current.success || !target.success || !refund.success ||
+      !current.data.isMock || !target.data.isMock ||
+      current.data.jobId !== context.aggregateId || target.data.jobId !== context.aggregateId || refund.data.jobId !== context.aggregateId ||
+      current.data.status !== from || target.data.status !== to ||
+      !immutableJobFieldsMatch(current.data, target.data) ||
+      target.data.deliverableReference !== current.data.deliverableReference || target.data.reasonReference !== null ||
+      targetTransaction === null || !arcTransactionEvidenceMatches(refund.data.arcTransaction, targetTransaction) ||
+      context.idempotencyKey === undefined || refund.data.idempotencyKey !== context.idempotencyKey ||
+      context.expectedTransactionId === undefined || refund.data.transactionId !== context.expectedTransactionId ||
+      !Number.isFinite(occurredAt) || !Number.isFinite(expiresAt) || !Number.isFinite(refundedAt) ||
+      occurredAt < expiresAt || refundedAt < expiresAt || refundedAt > occurredAt
+    ) throw new InvalidTransitionError("agentic job expiry evidence", from, to);
     return { status: to, auditEvent: event(context, from, to) } as const;
   }
   const current = AgenticJobRefSchema.safeParse(context.currentJobEvidence);
@@ -305,7 +311,7 @@ export async function transitionAgenticJob(from: AgenticJobStatus, to: AgenticJo
       (from === "OPEN" && current.data.deliverableReference === null && current.data.reasonReference === null && priorTransaction === null) ||
       (from === "FUNDED" && current.data.deliverableReference === null && current.data.reasonReference === null && priorTransaction?.operationType === "JOB_FUND" && priorTransaction.status === "CONFIRMED" && priorTransaction.transactionHash !== null && priorTransaction.blockNumber !== null && priorTransaction.blockHash !== null) ||
       (from === "SUBMITTED" && current.data.deliverableReference !== null && current.data.reasonReference === null && priorTransaction?.operationType === "JOB_SUBMIT" && priorTransaction.status === "CONFIRMED" && priorTransaction.transactionHash !== null && priorTransaction.blockNumber !== null && priorTransaction.blockHash !== null);
-    if (!priorStateEvidenceValid || !deliverablePreserved || target.data.reasonReference === null || transaction === null || transaction.status !== "CONFIRMED" || transaction.operationType !== "JOB_REJECT" || transaction.transactionHash === null) throw new InvalidTransitionError("agentic job rejection evidence", from, to);
+    if (!priorStateEvidenceValid || !deliverablePreserved || transaction === null || transaction.status !== "CONFIRMED" || transaction.operationType !== "JOB_REJECT" || transaction.transactionHash === null) throw new InvalidTransitionError("agentic job rejection evidence", from, to);
     if (evaluatorRejection) {
       const evaluationEvidence = JobEvaluationEvidenceSchema.safeParse(context.jobEvaluationEvidence);
       if (!evaluationEvidence.success || approval.approver?.actorType !== "EVALUATOR" || approval.authorizedActorId !== target.data.evaluatorAddress || evaluationEvidence.data.jobId !== target.data.jobId || evaluationEvidence.data.approvalId !== approval.id || evaluationEvidence.data.intentId !== approval.intentId || evaluationEvidence.data.exactIntentHash !== approval.exactIntentHash || evaluationEvidence.data.decision !== "REJECTED" || evaluationEvidence.data.transactionHash !== transaction.transactionHash || evaluationEvidence.data.transactionNetwork !== transaction.network || evaluationEvidence.data.transactionChainId !== transaction.chainId) throw new InvalidTransitionError("agentic job rejection evidence", from, to);
