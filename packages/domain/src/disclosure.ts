@@ -26,7 +26,7 @@ export function filterBackerDisclosure(input: {
       ? validatedProofs.filter((proof) => proof.projectId === preferences.projectId && preferences.approvedProofIds.includes(proof.id) && (proof.visibility === "BACKER_SHARED" || proof.visibility === "ONCHAIN_PUBLIC")).map(({ id, projectId, milestoneId, version, recordHash, createdAt }) => ({ id, projectId, milestoneId, version, recordHash, createdAt }))
       : [],
     settlements: preferences.discloseSettlementState
-      ? validatedSettlements.filter((settlement) => settlement.projectId === input.project.id).map(({ id, releaseRequestId, amount, state, transaction, updatedAt }) => ({ id, releaseRequestId, amount: structuredClone(amount), state, disposition: transaction?.operationType === "SETTLEMENT" ? "SETTLEMENT" : transaction?.operationType === "REFUND" || transaction?.operationType === "JOB_REJECT" ? "REFUND" : null, updatedAt }))
+      ? validatedSettlements.filter((settlement) => settlement.projectId === input.project.id).map(({ id, releaseRequestId, amount, state, transaction, updatedAt }) => ({ id, releaseRequestId, amount: structuredClone(amount), state, disposition: transaction?.operationType === "SETTLEMENT" || transaction?.operationType === "JOB_EVALUATE" ? "SETTLEMENT" : transaction?.operationType === "REFUND" || transaction?.operationType === "JOB_REJECT" ? "REFUND" : null, updatedAt }))
       : [],
   };
 }
