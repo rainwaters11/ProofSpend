@@ -49,12 +49,12 @@ const applicationAuthority: Partial<Record<ApplicationEdge, AuthorityRule>> = {
   "CONFIRMED->RECONCILED": { actorTypes: ["ADAPTER"], identifier: "authorizedAdapterId" },
 };
 type JobEdge = `${AgenticJobStatus}->${AgenticJobStatus}`;
-type JobAuthorityRule = { actorType: "ADAPTER" | "EVALUATOR" | "SYSTEM"; identifier: "authorizedAdapterId" | "authorizedEvaluatorId" | "authorizedSystemId" };
+type JobAuthorityRule = { actorType: "ADAPTER" | "SYSTEM"; identifier: "authorizedAdapterId" | "authorizedSystemId" };
 const jobAuthority: Partial<Record<JobEdge, JobAuthorityRule>> = {
   "OPEN->FUNDED": { actorType: "ADAPTER", identifier: "authorizedAdapterId" },
   "FUNDED->SUBMITTED": { actorType: "ADAPTER", identifier: "authorizedAdapterId" },
-  "SUBMITTED->COMPLETED": { actorType: "EVALUATOR", identifier: "authorizedEvaluatorId" },
-  "SUBMITTED->REJECTED": { actorType: "EVALUATOR", identifier: "authorizedEvaluatorId" },
+  "SUBMITTED->COMPLETED": { actorType: "ADAPTER", identifier: "authorizedAdapterId" },
+  "SUBMITTED->REJECTED": { actorType: "ADAPTER", identifier: "authorizedAdapterId" },
   "OPEN->EXPIRED": { actorType: "SYSTEM", identifier: "authorizedSystemId" },
   "FUNDED->EXPIRED": { actorType: "SYSTEM", identifier: "authorizedSystemId" },
   "SUBMITTED->EXPIRED": { actorType: "SYSTEM", identifier: "authorizedSystemId" },
@@ -266,7 +266,7 @@ export async function transitionAgenticJob(from: AgenticJobStatus, to: AgenticJo
     const terminalFieldsValid = to === "COMPLETED" ? target.data.reasonReference === null : target.data.reasonReference !== null;
     const providerSubmission = current.data.transaction;
     const providerSubmissionConfirmed = providerSubmission?.operationType === "JOB_SUBMIT" && providerSubmission.status === "CONFIRMED" && providerSubmission.transactionHash !== null && providerSubmission.blockNumber !== null && providerSubmission.blockHash !== null;
-    if (!evaluationEvidence.success || !providerSubmissionConfirmed || !deliverablePreserved || !terminalFieldsValid || approval.approver?.actorType !== "EVALUATOR" || approval.approver.actorId !== context.actor.actorId || approval.authorizedActorId !== target.data.evaluatorAddress || transaction === null || transaction.status !== "CONFIRMED" || transaction.operationType !== "JOB_EVALUATE" || transaction.transactionHash === null || evaluationEvidence.data.jobId !== target.data.jobId || evaluationEvidence.data.approvalId !== approval.id || evaluationEvidence.data.intentId !== approval.intentId || evaluationEvidence.data.exactIntentHash !== approval.exactIntentHash || evaluationEvidence.data.decision !== decision || evaluationEvidence.data.transactionHash !== transaction.transactionHash || evaluationEvidence.data.transactionNetwork !== transaction.network || evaluationEvidence.data.transactionChainId !== transaction.chainId) throw new InvalidTransitionError("agentic job evaluation evidence", from, to);
+    if (!evaluationEvidence.success || !providerSubmissionConfirmed || !deliverablePreserved || !terminalFieldsValid || approval.approver?.actorType !== "EVALUATOR" || approval.authorizedActorId !== target.data.evaluatorAddress || transaction === null || transaction.status !== "CONFIRMED" || transaction.operationType !== "JOB_EVALUATE" || transaction.transactionHash === null || evaluationEvidence.data.jobId !== target.data.jobId || evaluationEvidence.data.approvalId !== approval.id || evaluationEvidence.data.intentId !== approval.intentId || evaluationEvidence.data.exactIntentHash !== approval.exactIntentHash || evaluationEvidence.data.decision !== decision || evaluationEvidence.data.transactionHash !== transaction.transactionHash || evaluationEvidence.data.transactionNetwork !== transaction.network || evaluationEvidence.data.transactionChainId !== transaction.chainId) throw new InvalidTransitionError("agentic job evaluation evidence", from, to);
   }
   return { status: to, auditEvent: event(context, from, to) } as const;
 }
