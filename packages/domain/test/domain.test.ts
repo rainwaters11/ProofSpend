@@ -22,6 +22,22 @@ const mockTransaction = (status: "NONE" | "PREPARED" | "SUBMITTED" | "CONFIRMED"
   explorerUrl: null, operationType, isMock: true,
 });
 const mockJob = (status: "OPEN" | "FUNDED" | "SUBMITTED" | "COMPLETED" | "REJECTED" | "EXPIRED", transaction: ArcTransactionRef | null = null) => AgenticJobRefSchema.parse({ standard: "ERC-8183", network: "mock:network", chainId: "mock:chain", contractAddress: "mock:contract", jobId: "mock:job", clientAddress: "mock:client", providerAddress: "mock:provider", evaluatorAddress: "mock:evaluator", budget: usdc("1"), expiresAt: "2026-01-01T00:00:00.000Z", descriptionReference: "mock:description", deliverableReference: ["SUBMITTED", "COMPLETED", "REJECTED"].includes(status) ? "mock:deliverable" : null, reasonReference: status === "REJECTED" ? "mock:reason" : null, status, transaction, isMock: true });
+const jobFundingAuthorization = async (job: ReturnType<typeof mockJob>, transactionId = "transaction:job-fund") => {
+  if (job.transaction === null) throw new Error("Job funding authorization requires transaction evidence.");
+  const intentId = "intent:job-fund";
+  const approvalId = "approval:job-fund";
+  const bindingId = "binding:job-fund";
+  const projectId = "project:job";
+  const executionIntent = CanonicalExecutionIntentSchema.parse({
+    version: 1, actionKind: "RELEASE_APPROVAL", projectId, releaseRequestId: job.jobId, transactionRecordId: transactionId, intentId,
+    asset: job.budget.asset, atomicAmount: job.budget.atomicUnits, operationType: "JOB_FUND",
+    protocolTarget: { kind: "ERC8183", standard: "ERC-8183", network: job.transaction.network, chainId: job.transaction.chainId, contractReference: job.contractAddress, jobId: job.jobId, method: "JOB_FUND", parameterCommitment: `sha256:${"a".repeat(64)}`, clientReference: job.clientAddress, providerReference: job.providerAddress, evaluatorReference: job.evaluatorAddress, destination: job.contractAddress },
+  });
+  const exactIntentHash = await hashCanonicalExecutionIntent(executionIntent);
+  const jobApprovalDecision = ApprovalRecordSchema.parse({ id: approvalId, aggregateId: job.jobId, intentId, actionKind: "RELEASE_APPROVAL", authorizedActorType: "FOUNDER", authorizedActorId: job.clientAddress, exactIntentHash, idempotencyKey: "approval:job-fund:key", decision: "APPROVED", approver: { actorId: job.clientAddress, actorType: "FOUNDER" }, expiresAt: "2027-01-01T00:00:00.000Z", decidedAt: context.occurredAt });
+  const executionBinding = ExecutionAuthorizationBindingSchema.parse({ id: bindingId, releaseRequestId: job.jobId, approvalId, intentId, exactIntentHash, transactionRecordId: transactionId, executionIntent, status: "CONSUMED", consumedAt: context.occurredAt, consumedByTransactionId: transactionId, createdAt: context.occurredAt });
+  return { authorizedApproverId: job.clientAddress, jobApprovalDecision, executionBinding, expectedProjectId: projectId, expectedReleaseRequestId: job.jobId, expectedTransactionId: transactionId, expectedIntentId: intentId, expectedApprovalId: approvalId, expectedApprovalBindingId: bindingId, expectedExactIntentHash: exactIntentHash };
+};
 const providerSubmissionAuthorization = async (job: ReturnType<typeof mockJob>, transactionId = "transaction:job-submit") => {
   if (job.transaction === null) throw new Error("Provider submission authorization requires transaction evidence.");
   const intentId = "intent:job-submit";
@@ -163,6 +179,8 @@ describe("separate state machines", () => {
     await expect(transitionApplicationSubmission({ ...submitted, executionBinding: { ...binding, exactIntentHash: `sha256:${"b".repeat(64)}` } })).rejects.toThrow(InvalidTransitionError);
     await expect(transitionApplicationSubmission({ ...submitted, expectedExactIntentHash: undefined })).rejects.toThrow(InvalidTransitionError);
     await expect(transitionApplicationSubmission({ ...submitted, expectedExactIntentHash: `sha256:${"b".repeat(64)}` })).rejects.toThrow(InvalidTransitionError);
+    await expect(transitionApplicationSubmission({ ...submitted, executionBinding: { ...binding, consumedAt: "2026-01-02T00:00:00.000Z" } })).rejects.toThrow(InvalidTransitionError);
+    await expect(transitionApplicationSubmission({ ...submitted, occurredAt: "2026-01-03T00:00:00.000Z", approvalDecision: { ...approvalDecision, decidedAt: "2026-01-02T00:00:00.000Z" }, executionBinding: { ...binding, consumedAt: "2026-01-01T00:00:00.000Z" } })).rejects.toThrow(InvalidTransitionError);
     await expect(transitionApplicationSubmission(submitted)).resolves.toMatchObject({ state: "SUBMITTED" });
     type SubmissionOperationType = NonNullable<typeof transaction.arcTransaction>["operationType"];
     const erc8183Target = (method: "JOB_FUND" | "JOB_SUBMIT" | "JOB_EVALUATE") => ({ kind: "ERC8183" as const, standard: "ERC-8183" as const, network: "ARC_TESTNET" as const, chainId: "synthetic:chain", contractReference: "mock:contract", jobId: "mock:job", method, parameterCommitment: `sha256:${"c".repeat(64)}`, clientReference: "mock:client", providerReference: "mock:provider", evaluatorReference: "mock:evaluator", destination: transaction.destinationReference });
@@ -298,8 +316,12 @@ describe("separate state machines", () => {
     const adapter = { actorId: "adapter", actorType: "ADAPTER" as const };
     const open = mockJob("OPEN");
     const funded = mockJob("FUNDED", mockTransaction("CONFIRMED", "JOB_FUND"));
-    const fundingContext = { ...context, aggregateId: funded.jobId, actor: adapter, authorizedAdapterId: adapter.actorId, currentJobEvidence: open, jobEvidence: funded };
+    const fundingContext = { ...context, aggregateId: funded.jobId, actor: adapter, authorizedAdapterId: adapter.actorId, currentJobEvidence: open, jobEvidence: funded, ...await jobFundingAuthorization(funded) };
     expect((await transitionAgenticJob("OPEN", "FUNDED", fundingContext)).status).toBe("FUNDED");
+    await expect(transitionAgenticJob("OPEN", "FUNDED", { ...fundingContext, jobApprovalDecision: undefined })).rejects.toThrow(InvalidTransitionError);
+    await expect(transitionAgenticJob("OPEN", "FUNDED", { ...fundingContext, executionBinding: undefined })).rejects.toThrow(InvalidTransitionError);
+    await expect(transitionAgenticJob("OPEN", "FUNDED", { ...fundingContext, authorizedApproverId: "mock:other-client" })).rejects.toThrow(InvalidTransitionError);
+    await expect(transitionAgenticJob("OPEN", "FUNDED", { ...fundingContext, expectedExactIntentHash: `sha256:${"e".repeat(64)}` })).rejects.toThrow(InvalidTransitionError);
     await expect(transitionAgenticJob("OPEN", "FUNDED", { ...fundingContext, currentJobEvidence: undefined })).rejects.toThrow(InvalidTransitionError);
     await expect(transitionAgenticJob("OPEN", "FUNDED", { ...fundingContext, currentJobEvidence: funded })).rejects.toThrow(InvalidTransitionError);
     for (const changed of [
@@ -575,7 +597,7 @@ describe("lifecycle evidence schemas", () => {
     ["REFUND_PENDING", null, true], ["REFUND_PENDING", mockTransaction("PREPARED", "REFUND"), true], ["REFUND_PENDING", mockTransaction("SUBMITTED", "REFUND"), true], ["REFUND_PENDING", mockTransaction("SUBMITTED"), false],
     ["REFUNDED", mockTransaction("CONFIRMED", "REFUND"), true], ["REFUNDED", mockTransaction("CONFIRMED"), false],
     ["RECONCILED", mockTransaction("CONFIRMED"), true], ["RECONCILED", mockTransaction("CONFIRMED", "REFUND"), true], ["RECONCILED", mockTransaction("SUBMITTED"), false],
-    ["FAILED", null, true], ["FAILED", mockTransaction("FAILED"), true], ["FAILED", mockTransaction("CONFIRMED"), false],
+    ["FAILED", null, true], ["FAILED", mockTransaction("FAILED"), true], ["FAILED", mockTransaction("FAILED", "REFUND"), true], ["FAILED", mockTransaction("FAILED", "JOB_SUBMIT"), false], ["FAILED", mockTransaction("CONFIRMED"), false],
   ] as const)("validates %s settlement evidence", (state: "PENDING" | "CONFIRMED" | "REFUND_PENDING" | "REFUNDED" | "RECONCILED" | "FAILED", transaction: ReturnType<typeof mockTransaction> | null, valid: boolean) => {
     const candidate = { id: "settlement:matrix", projectId: "project:1", releaseRequestId: "release:1", reconciliationId: state === "RECONCILED" ? "reconciliation:1" : null, idempotencyKey: "settlement:key", amount: usdc("1"), state, job: null, transaction, updatedAt: context.occurredAt };
     expect(SettlementRecordSchema.safeParse(candidate).success).toBe(valid);
