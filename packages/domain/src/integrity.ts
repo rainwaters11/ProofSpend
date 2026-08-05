@@ -35,10 +35,19 @@ export async function hashJobParameterCommitment(input: JobParameterCommitmentIn
   return `sha256:${Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
 }
 
-function requiredApprovalPolicy(intent: CanonicalExecutionIntent): { actionKind: "RELEASE_APPROVAL"; actorType: "FOUNDER" } {
-  if (intent.operationType !== "SETTLEMENT" && intent.operationType !== "REFUND") throw new RelationshipIntegrityError(`Release execution authorization cannot authorize job-scoped ${intent.operationType} writes.`);
-  assert(intent.protocolTarget.kind === "DESTINATION", `${intent.operationType} requires an exact destination target.`);
-  return { actionKind: "RELEASE_APPROVAL", actorType: "FOUNDER" };
+type ExecutionApprovalPolicy =
+  | { actionKind: "RELEASE_APPROVAL"; actorType: "FOUNDER"; targetKind: "DESTINATION" }
+  | { actionKind: "JOB_EVALUATION" | "JOB_REJECTION"; actorType: "EVALUATOR"; targetKind: "ERC8183" };
+function requiredApprovalPolicy(intent: CanonicalExecutionIntent): ExecutionApprovalPolicy {
+  if (intent.operationType === "SETTLEMENT" || intent.operationType === "REFUND") {
+    assert(intent.protocolTarget.kind === "DESTINATION", `${intent.operationType} requires an exact destination target.`);
+    return { actionKind: "RELEASE_APPROVAL", actorType: "FOUNDER", targetKind: "DESTINATION" };
+  }
+  if (intent.operationType === "JOB_EVALUATE" || intent.operationType === "JOB_REJECT") {
+    assert(intent.protocolTarget.kind === "ERC8183" && intent.protocolTarget.method === intent.operationType, `${intent.operationType} requires its exact ERC-8183 job target.`);
+    return { actionKind: intent.operationType === "JOB_EVALUATE" ? "JOB_EVALUATION" : "JOB_REJECTION", actorType: "EVALUATOR", targetKind: "ERC8183" };
+  }
+  throw new RelationshipIntegrityError(`Release execution authorization cannot authorize job-scoped ${intent.operationType} writes.`);
 }
 
 export async function validateExecutionAuthorization(approval: ApprovalRecord, release: ReleaseRequest, transaction: TransactionRecord, binding: ExecutionAuthorizationBinding, asOf: string): Promise<true> {
@@ -48,11 +57,18 @@ export async function validateExecutionAuthorization(approval: ApprovalRecord, r
   assert(transaction.arcTransaction.transactionHash === null && transaction.arcTransaction.blockNumber === null && transaction.arcTransaction.blockHash === null && transaction.arcTransaction.explorerUrl === null, "PREPARED transaction cannot contain submission or confirmation evidence.");
   assert(binding.status === "ACTIVE" && binding.consumedAt === null && binding.consumedByTransactionId === null, "Execution authorization binding is not active.");
   assert(binding.releaseRequestId === release.id && binding.approvalId === approval.id && binding.transactionRecordId === transaction.id, "Authorization binding record IDs do not match.");
-  assert(approval.aggregateId === release.id && approval.intentId === binding.intentId, "Approval subject does not match the release intent.");
+  assert(approval.intentId === binding.intentId, "Approval subject does not match the release intent.");
   assert(release.approvalId === approval.id && transaction.approvalId === approval.id && transaction.approvalBindingId === binding.id, "Release or transaction does not reference the approval and authorization binding.");
   assert(approval.decision === "APPROVED", "Execution requires an approved decision.");
   const intent = CanonicalExecutionIntentSchema.parse(binding.executionIntent);
   const policy = requiredApprovalPolicy(intent);
+  const approvalSubjectMatches =
+    policy.targetKind === "DESTINATION"
+      ? approval.aggregateId === release.id
+      : intent.protocolTarget.kind === "ERC8183" &&
+        approval.aggregateId === intent.protocolTarget.jobId &&
+        approval.authorizedActorId === intent.protocolTarget.evaluatorReference;
+  assert(approvalSubjectMatches, "Approval subject does not match the release or terminal ERC-8183 job intent.");
   assert(approval.actionKind === policy.actionKind && approval.authorizedActorType === policy.actorType && approval.approver?.actorType === policy.actorType && approval.approver.actorId === approval.authorizedActorId, "Approval policy or exact authorized actor does not match.");
   const decidedAt = approval.decidedAt === null ? Number.NaN : Date.parse(approval.decidedAt);
   const authorizationAt = Date.parse(asOf);
