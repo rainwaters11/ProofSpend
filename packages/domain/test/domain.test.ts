@@ -623,7 +623,17 @@ describe("lifecycle evidence schemas", () => {
     expect(() => SettlementRecordSchema.parse({ ...base, state: "REFUNDED", transaction: mockTransaction("CONFIRMED") })).toThrow();
     expect(SettlementRecordSchema.parse({ ...base, state: "REFUNDED", transaction: mockTransaction("CONFIRMED", "REFUND") })).toBeDefined();
     expect(() => SettlementRecordSchema.parse({ ...base, state: "RECONCILED", transaction: null })).toThrow();
-    const completedJob = { standard: "ERC-8183" as const, network: "synthetic:arc-testnet", chainId: "synthetic:chain", contractAddress: "mock:contract", jobId: "mock:job", clientAddress: "mock:client", providerAddress: "mock:provider", evaluatorAddress: "mock:evaluator", budget: usdc("1"), expiresAt: "2026-02-01T00:00:00.000Z", descriptionReference: "mock:description", deliverableReference: "mock:deliverable", reasonReference: null, status: "COMPLETED" as const, transaction: null, isMock: true };
+    const completedJob = mockJob("COMPLETED", mockTransaction("CONFIRMED", "JOB_EVALUATE"));
+    const submittedJob = mockJob("SUBMITTED", mockTransaction("CONFIRMED", "JOB_SUBMIT"));
+    const rejectedJob = mockJob("REJECTED", mockTransaction("CONFIRMED", "JOB_EVALUATE"));
+    const expiredJob = mockJob("EXPIRED");
+    expect(SettlementRecordSchema.parse({ ...base, state: "CONFIRMED", job: completedJob, transaction: mockTransaction("CONFIRMED") })).toBeDefined();
+    expect(() => SettlementRecordSchema.parse({ ...base, state: "CONFIRMED", job: submittedJob, transaction: mockTransaction("CONFIRMED") })).toThrow();
+    expect(SettlementRecordSchema.parse({ ...base, state: "REFUNDED", job: rejectedJob, transaction: mockTransaction("CONFIRMED", "REFUND") })).toBeDefined();
+    expect(SettlementRecordSchema.parse({ ...base, state: "REFUNDED", job: expiredJob, transaction: mockTransaction("CONFIRMED", "REFUND") })).toBeDefined();
+    expect(() => SettlementRecordSchema.parse({ ...base, state: "REFUNDED", job: completedJob, transaction: mockTransaction("CONFIRMED", "REFUND") })).toThrow();
+    expect(SettlementRecordSchema.parse({ ...base, state: "RECONCILED", reconciliationId: "reconciliation:1", job: completedJob, transaction: mockTransaction("CONFIRMED") })).toBeDefined();
+    expect(SettlementRecordSchema.parse({ ...base, state: "RECONCILED", reconciliationId: "reconciliation:1", job: rejectedJob, transaction: mockTransaction("CONFIRMED", "REFUND") })).toBeDefined();
     expect(() => SettlementRecordSchema.parse({ ...base, state: "CONFIRMED", job: completedJob, transaction: null })).toThrow();
   });
   it.each([
@@ -794,6 +804,11 @@ describe("append-only ledger reversal relationships", () => {
     expect(() => validateLedgerReversal(reversal, target, [prior])).toThrow();
     expect(() => validateLedgerReversal(reversal, target, [{ ...prior, reversesEntryId: "ledger:other" }])).toThrow();
     expect(() => validateLedgerReversal(reversal, target, [{ ...prior, vaultId: "vault:other" }])).toThrow();
+    const reservedTarget = LedgerEntrySchema.parse({ ...target, id: "ledger:reserved", reserveId: "reserve:1" });
+    const reservedReversal = LedgerEntrySchema.parse({ ...reversal, id: "ledger:reserved-reversal", reserveId: "reserve:1", reversesEntryId: reservedTarget.id }) as ReversalEntry;
+    expect(validateLedgerReversal(reservedReversal, reservedTarget)).toBe(true);
+    expect(() => validateLedgerReversal({ ...reservedReversal, reserveId: "reserve:other" }, reservedTarget)).toThrow();
+    expect(() => validateLedgerReversal(reservedReversal, reservedTarget, [{ ...reservedReversal, id: "ledger:reserved-prior", reserveId: "reserve:other" }])).toThrow();
     expect(() => validateLedgerReversal({ ...reversal, amount: { asset: "EURC", atomicUnits: "1" } } as never, target)).toThrow();
   });
 });
