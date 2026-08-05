@@ -37,7 +37,9 @@ const jobFundingAuthorization = async (job: ReturnType<typeof mockJob>, transact
   const exactIntentHash = await hashCanonicalExecutionIntent(executionIntent);
   const jobApprovalDecision = ApprovalRecordSchema.parse({ id: approvalId, aggregateId: job.jobId, intentId, actionKind: "RELEASE_APPROVAL", authorizedActorType: "FOUNDER", authorizedActorId: job.clientAddress, exactIntentHash, idempotencyKey: "approval:job-fund:key", decision: "APPROVED", approver: { actorId: job.clientAddress, actorType: "FOUNDER" }, expiresAt: "2027-01-01T00:00:00.000Z", decidedAt: context.occurredAt });
   const executionBinding = ExecutionAuthorizationBindingSchema.parse({ id: bindingId, releaseRequestId: job.jobId, approvalId, intentId, exactIntentHash, transactionRecordId: transactionId, executionIntent, status: "CONSUMED", consumedAt: context.occurredAt, consumedByTransactionId: transactionId, createdAt: context.occurredAt });
-  return { authorizedApproverId: job.clientAddress, jobApprovalDecision, executionBinding, expectedProjectId: projectId, expectedReleaseRequestId: job.jobId, expectedTransactionId: transactionId, expectedIntentId: intentId, expectedApprovalId: approvalId, expectedApprovalBindingId: bindingId, expectedExactIntentHash: exactIntentHash };
+  const idempotencyKey = "submission:job-fund:key";
+  const submissionOperation = SubmissionOperationRecordSchema.parse({ id: "submission:job-fund", transactionId, idempotencyKey, createdAt: context.occurredAt });
+  return { authorizedApproverId: job.clientAddress, jobApprovalDecision, executionBinding, submissionOperation, idempotencyKey, expectedProjectId: projectId, expectedReleaseRequestId: job.jobId, expectedTransactionId: transactionId, expectedIntentId: intentId, expectedApprovalId: approvalId, expectedApprovalBindingId: bindingId, expectedExactIntentHash: exactIntentHash };
 };
 const providerSubmissionAuthorization = async (job: ReturnType<typeof mockJob>, transactionId = "transaction:job-submit") => {
   if (job.transaction === null) throw new Error("Provider submission authorization requires transaction evidence.");
@@ -54,7 +56,9 @@ const providerSubmissionAuthorization = async (job: ReturnType<typeof mockJob>, 
   const exactIntentHash = await hashCanonicalExecutionIntent(executionIntent);
   const jobApprovalDecision = ApprovalRecordSchema.parse({ id: approvalId, aggregateId: job.jobId, intentId, actionKind: "JOB_SUBMISSION", authorizedActorType: "PROVIDER", authorizedActorId: job.providerAddress, exactIntentHash, idempotencyKey: "approval:job-submit:key", decision: "APPROVED", approver: { actorId: job.providerAddress, actorType: "PROVIDER" }, expiresAt: "2027-01-01T00:00:00.000Z", decidedAt: context.occurredAt });
   const executionBinding = ExecutionAuthorizationBindingSchema.parse({ id: bindingId, releaseRequestId: job.jobId, approvalId, intentId, exactIntentHash, transactionRecordId: transactionId, executionIntent, status: "CONSUMED", consumedAt: context.occurredAt, consumedByTransactionId: transactionId, createdAt: context.occurredAt });
-  return { authorizedProviderId: job.providerAddress, jobApprovalDecision, executionBinding, expectedProjectId: projectId, expectedReleaseRequestId: job.jobId, expectedTransactionId: transactionId, expectedIntentId: intentId, expectedApprovalId: approvalId, expectedApprovalBindingId: bindingId, expectedExactIntentHash: exactIntentHash };
+  const idempotencyKey = "submission:job-submit:key";
+  const submissionOperation = SubmissionOperationRecordSchema.parse({ id: "submission:job-submit", transactionId, idempotencyKey, createdAt: context.occurredAt });
+  return { authorizedProviderId: job.providerAddress, jobApprovalDecision, executionBinding, submissionOperation, idempotencyKey, expectedProjectId: projectId, expectedReleaseRequestId: job.jobId, expectedTransactionId: transactionId, expectedIntentId: intentId, expectedApprovalId: approvalId, expectedApprovalBindingId: bindingId, expectedExactIntentHash: exactIntentHash };
 };
 const jobEvaluationAuthorization = async (job: ReturnType<typeof mockJob>, decision: "APPROVED" | "REJECTED", transactionId = `transaction:job-evaluate:${decision.toLowerCase()}`) => {
   if (job.transaction === null) throw new Error("Job evaluation authorization requires transaction evidence.");
@@ -71,8 +75,10 @@ const jobEvaluationAuthorization = async (job: ReturnType<typeof mockJob>, decis
   const exactIntentHash = await hashCanonicalExecutionIntent(executionIntent);
   const jobApprovalDecision = ApprovalRecordSchema.parse({ id: approvalId, aggregateId: job.jobId, intentId, actionKind: "JOB_EVALUATION", authorizedActorType: "EVALUATOR", authorizedActorId: job.evaluatorAddress, exactIntentHash, idempotencyKey: `approval:${decision}:key`, decision, approver: { actorId: job.evaluatorAddress, actorType: "EVALUATOR" }, expiresAt: "2027-01-01T00:00:00.000Z", decidedAt: context.occurredAt });
   const executionBinding = ExecutionAuthorizationBindingSchema.parse({ id: bindingId, releaseRequestId: job.jobId, approvalId, intentId, exactIntentHash, transactionRecordId: transactionId, executionIntent, status: "CONSUMED", consumedAt: context.occurredAt, consumedByTransactionId: transactionId, createdAt: context.occurredAt });
+  const idempotencyKey = `submission:job-evaluate:${decision.toLowerCase()}:key`;
+  const submissionOperation = SubmissionOperationRecordSchema.parse({ id: `submission:job-evaluate:${decision.toLowerCase()}`, transactionId, idempotencyKey, createdAt: context.occurredAt });
   const jobEvaluationEvidence = JobEvaluationEvidenceSchema.parse({ id: `evaluation:${decision}`, jobId: job.jobId, approvalId, intentId, exactIntentHash, decision, transactionHash: job.transaction.transactionHash, transactionNetwork: job.transaction.network, transactionChainId: job.transaction.chainId });
-  return { authorizedEvaluatorId: job.evaluatorAddress, jobApprovalDecision, executionBinding, jobEvaluationEvidence, expectedProjectId: projectId, expectedReleaseRequestId: job.jobId, expectedTransactionId: transactionId, expectedIntentId: intentId, expectedApprovalId: approvalId, expectedApprovalBindingId: bindingId, expectedExactIntentHash: exactIntentHash };
+  return { authorizedEvaluatorId: job.evaluatorAddress, jobApprovalDecision, executionBinding, submissionOperation, idempotencyKey, jobEvaluationEvidence, expectedProjectId: projectId, expectedReleaseRequestId: job.jobId, expectedTransactionId: transactionId, expectedIntentId: intentId, expectedApprovalId: approvalId, expectedApprovalBindingId: bindingId, expectedExactIntentHash: exactIntentHash };
 };
 const liveHash = `0x${"a".repeat(64)}`;
 const liveBlockHash = `0x${"b".repeat(64)}`;
@@ -330,6 +336,8 @@ describe("separate state machines", () => {
     await expect(transitionAgenticJob("SUBMITTED", "REJECTED", { ...rejectedContext, occurredAt: submittedCurrent.expiresAt })).rejects.toThrow(InvalidTransitionError);
     await expect(transitionAgenticJob("SUBMITTED", "COMPLETED", { ...completedContext, currentJobEvidence: unconfirmedSubmittedCurrent })).rejects.toThrow(InvalidTransitionError);
     await expect(transitionAgenticJob("SUBMITTED", "COMPLETED", { ...completedContext, executionBinding: undefined })).rejects.toThrow(InvalidTransitionError);
+    await expect(transitionAgenticJob("SUBMITTED", "COMPLETED", { ...completedContext, idempotencyKey: undefined })).rejects.toThrow(InvalidTransitionError);
+    await expect(transitionAgenticJob("SUBMITTED", "COMPLETED", { ...completedContext, submissionOperation: undefined })).rejects.toThrow(InvalidTransitionError);
     await expect(transitionAgenticJob("SUBMITTED", "COMPLETED", { ...completedContext, authorizedEvaluatorId: "mock:other-evaluator" })).rejects.toThrow(InvalidTransitionError);
     await expect(transitionAgenticJob("SUBMITTED", "COMPLETED", { ...completedContext, authorizedAdapterId: "adapter:other" })).rejects.toThrow(InvalidTransitionError);
     await expect(transitionAgenticJob("SUBMITTED", "COMPLETED", { ...completedContext, actor: { actorId: "mock:evaluator", actorType: "EVALUATOR" } })).rejects.toThrow(InvalidTransitionError);
@@ -356,6 +364,10 @@ describe("separate state machines", () => {
     await expect(transitionAgenticJob("OPEN", "FUNDED", { ...fundingContext, occurredAt: open.expiresAt })).rejects.toThrow(InvalidTransitionError);
     await expect(transitionAgenticJob("OPEN", "FUNDED", { ...fundingContext, jobApprovalDecision: undefined })).rejects.toThrow(InvalidTransitionError);
     await expect(transitionAgenticJob("OPEN", "FUNDED", { ...fundingContext, executionBinding: undefined })).rejects.toThrow(InvalidTransitionError);
+    await expect(transitionAgenticJob("OPEN", "FUNDED", { ...fundingContext, idempotencyKey: undefined })).rejects.toThrow(InvalidTransitionError);
+    await expect(transitionAgenticJob("OPEN", "FUNDED", { ...fundingContext, submissionOperation: undefined })).rejects.toThrow(InvalidTransitionError);
+    await expect(transitionAgenticJob("OPEN", "FUNDED", { ...fundingContext, submissionOperation: { ...fundingContext.submissionOperation, idempotencyKey: "submission:other:key" } })).rejects.toThrow(InvalidTransitionError);
+    await expect(transitionAgenticJob("OPEN", "FUNDED", { ...fundingContext, submissionOperation: { ...fundingContext.submissionOperation, transactionId: "transaction:other" } })).rejects.toThrow(InvalidTransitionError);
     await expect(transitionAgenticJob("OPEN", "FUNDED", { ...fundingContext, authorizedApproverId: "mock:other-client" })).rejects.toThrow(InvalidTransitionError);
     await expect(transitionAgenticJob("OPEN", "FUNDED", { ...fundingContext, expectedExactIntentHash: `sha256:${"e".repeat(64)}` })).rejects.toThrow(InvalidTransitionError);
     await expect(transitionAgenticJob("OPEN", "FUNDED", { ...fundingContext, currentJobEvidence: undefined })).rejects.toThrow(InvalidTransitionError);
@@ -381,6 +393,8 @@ describe("separate state machines", () => {
     await expect(transitionAgenticJob("FUNDED", "SUBMITTED", { ...submissionContext, occurredAt: funded.expiresAt })).rejects.toThrow(InvalidTransitionError);
     await expect(transitionAgenticJob("FUNDED", "SUBMITTED", { ...submissionContext, jobApprovalDecision: undefined })).rejects.toThrow(InvalidTransitionError);
     await expect(transitionAgenticJob("FUNDED", "SUBMITTED", { ...submissionContext, executionBinding: undefined })).rejects.toThrow(InvalidTransitionError);
+    await expect(transitionAgenticJob("FUNDED", "SUBMITTED", { ...submissionContext, idempotencyKey: undefined })).rejects.toThrow(InvalidTransitionError);
+    await expect(transitionAgenticJob("FUNDED", "SUBMITTED", { ...submissionContext, submissionOperation: undefined })).rejects.toThrow(InvalidTransitionError);
     await expect(transitionAgenticJob("FUNDED", "SUBMITTED", { ...submissionContext, authorizedProviderId: "mock:other-provider" })).rejects.toThrow(InvalidTransitionError);
     await expect(transitionAgenticJob("FUNDED", "SUBMITTED", { ...submissionContext, expectedExactIntentHash: `sha256:${"e".repeat(64)}` })).rejects.toThrow(InvalidTransitionError);
     const boundTarget = submissionContext.executionBinding!.executionIntent.protocolTarget;
