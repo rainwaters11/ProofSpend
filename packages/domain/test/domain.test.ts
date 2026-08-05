@@ -287,25 +287,30 @@ describe("separate state machines", () => {
     expect(() => transitionApplication(from, to, { ...context, actor: { ...actor, actorId: "wrong" }, ...authorized })).toThrow(InvalidTransitionError);
     expect(() => transitionApplication(from, to, { ...context, actor })).toThrow(InvalidTransitionError);
   });
-  it("requires the exact authorized evaluator and canonical evaluation evidence for terminal job decisions", async () => {
-    const actor = { actorId: "mock:evaluator", actorType: "EVALUATOR" as const };
+  it("separates exact evaluator approval from adapter terminal confirmation", async () => {
+    const adapter = { actorId: "adapter:terminal", actorType: "ADAPTER" as const };
     const submittedCurrent = mockJob("SUBMITTED", mockTransaction("CONFIRMED", "JOB_SUBMIT"));
     const unconfirmedSubmittedCurrent = mockJob("SUBMITTED", mockTransaction("SUBMITTED", "JOB_SUBMIT"));
     const completed = mockJob("COMPLETED", mockTransaction("CONFIRMED", "JOB_EVALUATE"));
     const rejected = mockJob("REJECTED", mockTransaction("CONFIRMED", "JOB_EVALUATE"));
     const completedAuthorization = await jobEvaluationAuthorization(completed, "APPROVED");
     const rejectedAuthorization = await jobEvaluationAuthorization(rejected, "REJECTED");
-    const completedContext = { ...context, aggregateId: completed.jobId, actor, currentJobEvidence: submittedCurrent, jobEvidence: completed, ...completedAuthorization };
-    const rejectedContext = { ...context, aggregateId: rejected.jobId, actor, currentJobEvidence: submittedCurrent, jobEvidence: rejected, ...rejectedAuthorization };
+    const completedContext = { ...context, aggregateId: completed.jobId, actor: adapter, authorizedAdapterId: adapter.actorId, currentJobEvidence: submittedCurrent, jobEvidence: completed, ...completedAuthorization };
+    const rejectedContext = { ...context, aggregateId: rejected.jobId, actor: adapter, authorizedAdapterId: adapter.actorId, currentJobEvidence: submittedCurrent, jobEvidence: rejected, ...rejectedAuthorization };
 
-    expect((await transitionAgenticJob("SUBMITTED", "COMPLETED", completedContext)).status).toBe("COMPLETED");
-    expect((await transitionAgenticJob("SUBMITTED", "REJECTED", rejectedContext)).status).toBe("REJECTED");
+    const completedResult = await transitionAgenticJob("SUBMITTED", "COMPLETED", completedContext);
+    const rejectedResult = await transitionAgenticJob("SUBMITTED", "REJECTED", rejectedContext);
+    expect(completedResult.status).toBe("COMPLETED");
+    expect(rejectedResult.status).toBe("REJECTED");
+    expect(completedResult.auditEvent.actor).toEqual(adapter);
+    expect(rejectedResult.auditEvent.actor).toEqual(adapter);
     await expect(transitionAgenticJob("SUBMITTED", "COMPLETED", { ...completedContext, occurredAt: submittedCurrent.expiresAt })).rejects.toThrow(InvalidTransitionError);
     await expect(transitionAgenticJob("SUBMITTED", "REJECTED", { ...rejectedContext, occurredAt: submittedCurrent.expiresAt })).rejects.toThrow(InvalidTransitionError);
     await expect(transitionAgenticJob("SUBMITTED", "COMPLETED", { ...completedContext, currentJobEvidence: unconfirmedSubmittedCurrent })).rejects.toThrow(InvalidTransitionError);
     await expect(transitionAgenticJob("SUBMITTED", "COMPLETED", { ...completedContext, executionBinding: undefined })).rejects.toThrow(InvalidTransitionError);
-    await expect(transitionAgenticJob("SUBMITTED", "COMPLETED", { ...completedContext, authorizedEvaluatorId: "mock:other-evaluator", actor: { actorId: "mock:other-evaluator", actorType: "EVALUATOR" } })).rejects.toThrow(InvalidTransitionError);
-    await expect(transitionAgenticJob("SUBMITTED", "COMPLETED", { ...completedContext, actor: { actorId: "mock:other-evaluator", actorType: "EVALUATOR" } })).rejects.toThrow(InvalidTransitionError);
+    await expect(transitionAgenticJob("SUBMITTED", "COMPLETED", { ...completedContext, authorizedEvaluatorId: "mock:other-evaluator" })).rejects.toThrow(InvalidTransitionError);
+    await expect(transitionAgenticJob("SUBMITTED", "COMPLETED", { ...completedContext, authorizedAdapterId: "adapter:other" })).rejects.toThrow(InvalidTransitionError);
+    await expect(transitionAgenticJob("SUBMITTED", "COMPLETED", { ...completedContext, actor: { actorId: "mock:evaluator", actorType: "EVALUATOR" } })).rejects.toThrow(InvalidTransitionError);
     await expect(transitionAgenticJob("SUBMITTED", "COMPLETED", { ...completedContext, jobEvidence: { ...completed, deliverableReference: "mock:replacement" } })).rejects.toThrow(InvalidTransitionError);
     await expect(transitionAgenticJob("SUBMITTED", "REJECTED", { ...rejectedContext, jobEvidence: { ...rejected, reasonReference: null } })).rejects.toThrow(InvalidTransitionError);
     await expect(transitionAgenticJob("SUBMITTED", "REJECTED", { ...rejectedContext, jobEvaluationEvidence: { ...rejectedAuthorization.jobEvaluationEvidence, transactionHash: "mock:other" } })).rejects.toThrow(InvalidTransitionError);
