@@ -1,4 +1,4 @@
-import { SettlementRecordSchema, type DisclosurePreferences, type EvidenceItem, type ProofOfProgress, type Project, type SettlementRecord } from "./models";
+import { DisclosurePreferencesSchema, ProofOfProgressSchema, SettlementRecordSchema, type DisclosurePreferences, type EvidenceItem, type ProofOfProgress, type Project, type SettlementRecord } from "./models";
 
 export interface BackerSafeProjectRecord {
   project: Pick<Project, "id" | "name" | "description">;
@@ -15,15 +15,17 @@ export function filterBackerDisclosure(input: {
   settlements: SettlementRecord[];
   preferences: DisclosurePreferences;
 }): BackerSafeProjectRecord {
-  if (input.project.id !== input.preferences.projectId) throw new Error("Disclosure preferences belong to another project.");
+  const preferences = DisclosurePreferencesSchema.parse(input.preferences);
+  if (input.project.id !== preferences.projectId) throw new Error("Disclosure preferences belong to another project.");
+  const validatedProofs = input.proofs.map((proof) => ProofOfProgressSchema.parse(proof));
   const validatedSettlements = input.settlements.map((settlement) => SettlementRecordSchema.parse(settlement));
   return {
     project: { id: input.project.id, name: input.project.name, description: input.project.description },
     evidence: [],
-    proofs: input.preferences.discloseProofRecords
-      ? input.proofs.filter((proof) => proof.projectId === input.preferences.projectId && input.preferences.approvedProofIds.includes(proof.id) && proof.visibility !== "FOUNDER_PRIVATE").map(({ id, projectId, milestoneId, version, recordHash, createdAt }) => ({ id, projectId, milestoneId, version, recordHash, createdAt }))
+    proofs: preferences.discloseProofRecords
+      ? validatedProofs.filter((proof) => proof.projectId === preferences.projectId && preferences.approvedProofIds.includes(proof.id) && (proof.visibility === "BACKER_SHARED" || proof.visibility === "ONCHAIN_PUBLIC")).map(({ id, projectId, milestoneId, version, recordHash, createdAt }) => ({ id, projectId, milestoneId, version, recordHash, createdAt }))
       : [],
-    settlements: input.preferences.discloseSettlementState
+    settlements: preferences.discloseSettlementState
       ? validatedSettlements.filter((settlement) => settlement.projectId === input.project.id).map(({ id, releaseRequestId, amount, state, updatedAt }) => ({ id, releaseRequestId, amount: structuredClone(amount), state, updatedAt }))
       : [],
   };

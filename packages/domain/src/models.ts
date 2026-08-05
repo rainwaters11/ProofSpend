@@ -104,7 +104,7 @@ export const TransactionRecordSchema = z.object({ id: Id, projectId: Id, release
 });
 export type TransactionRecord = z.infer<typeof TransactionRecordSchema>;
 export const ApprovalActionKindSchema = z.enum(["RELEASE_APPROVAL", "MILESTONE_EVALUATION", "JOB_EVALUATION"]);
-const ApprovalRecordBaseSchema = z.object({ id: Id, exactIntentHash: Hash, idempotencyKey: Id, decision: z.enum(["PENDING", "APPROVED", "REJECTED"]), approver: ActorSchema.nullable(), expiresAt: Time, decidedAt: Time.nullable() });
+const ApprovalRecordBaseSchema = z.object({ id: Id, aggregateId: Id, intentId: Id, exactIntentHash: Hash, idempotencyKey: Id, decision: z.enum(["PENDING", "APPROVED", "REJECTED"]), approver: ActorSchema.nullable(), expiresAt: Time, decidedAt: Time.nullable() });
 export const ApprovalRecordSchema = z.discriminatedUnion("actionKind", [
   ApprovalRecordBaseSchema.extend({ actionKind: z.literal("RELEASE_APPROVAL"), authorizedActorType: z.literal("FOUNDER"), authorizedActorId: Id }),
   ApprovalRecordBaseSchema.extend({ actionKind: z.literal("MILESTONE_EVALUATION"), authorizedActorType: z.literal("EVALUATOR"), authorizedActorId: Id }),
@@ -112,6 +112,7 @@ export const ApprovalRecordSchema = z.discriminatedUnion("actionKind", [
 ]).superRefine((value, context) => {
   if (value.decision === "PENDING" && (value.approver !== null || value.decidedAt !== null)) context.addIssue({ code: "custom", message: "Pending approval cannot contain a completed approver or decision timestamp." });
   if (value.decision !== "PENDING" && (value.approver === null || value.approver.actorType !== value.authorizedActorType || value.approver.actorId !== value.authorizedActorId || value.decidedAt === null)) context.addIssue({ code: "custom", message: "Completed approval requires the exact authorized actor and decision timestamp." });
+  if (value.decision !== "PENDING" && value.decidedAt !== null && Date.parse(value.decidedAt) > Date.parse(value.expiresAt)) context.addIssue({ code: "custom", message: "Approval decision cannot occur after expiration." });
 });
 export type ApprovalRecord = z.infer<typeof ApprovalRecordSchema>;
 export const AuditEventSchema = z.object({ id: Id, aggregateType: z.string().min(1), aggregateId: Id, eventType: z.string().min(1), actor: ActorSchema, idempotencyKey: Id.nullable(), occurredAt: Time, details: z.record(z.string(), z.union([z.string(), z.boolean(), z.null()])) });
@@ -121,11 +122,11 @@ const RequirementBaseSchema = z.object({ id: Id, milestoneId: Id, description: z
 export const MilestoneRequirementSchema = z.discriminatedUnion("kind", [
   RequirementBaseSchema.extend({ kind: z.literal("DELIVERABLE"), requiredCount: z.never().optional(), spendLimit: z.never().optional() }),
   RequirementBaseSchema.extend({ kind: z.literal("EXPENSE_RECORDS"), requiredCount: z.number().int().positive(), spendLimit: z.never().optional() }),
-  RequirementBaseSchema.extend({ kind: z.literal("SPEND_LIMIT"), requiredCount: z.never().optional(), spendLimit: MoneyAmountSchema }),
+  RequirementBaseSchema.extend({ kind: z.literal("SPEND_LIMIT"), requiredCount: z.never().optional(), spendLimit: SettlementMoneyAmountSchema }),
   RequirementBaseSchema.extend({ kind: z.literal("FOUNDER_CONFIRMATION"), requiredCount: z.never().optional(), spendLimit: z.never().optional() }),
 ]);
 export type MilestoneRequirement = z.infer<typeof MilestoneRequirementSchema>;
-export const MilestoneSchema = z.object({ id: Id, projectId: Id, title: z.string().min(1), proposedAmount: MoneyAmountSchema, status: z.enum(["INCOMPLETE", "NEEDS_REVIEW", "ELIGIBLE", "APPROVAL_PENDING", "APPROVED", "REJECTED"]), requirementIds: z.array(Id), dueAt: Time.nullable() });
+export const MilestoneSchema = z.object({ id: Id, projectId: Id, title: z.string().min(1), proposedAmount: SettlementMoneyAmountSchema, status: z.enum(["INCOMPLETE", "NEEDS_REVIEW", "ELIGIBLE", "APPROVAL_PENDING", "APPROVED", "REJECTED"]), requirementIds: z.array(Id), dueAt: Time.nullable() });
 export type Milestone = z.infer<typeof MilestoneSchema>;
 export const EvidenceItemSchema = z.object({ id: Id, projectId: Id, kind: z.enum(["RECEIPT", "SCREENSHOT", "INVOICE", "DELIVERABLE", "STATEMENT", "CONFIRMATION"]), sourceHash: Hash, storageRef: z.string().min(1), visibility: z.literal("FOUNDER_PRIVATE"), submittedAt: Time });
 export type EvidenceItem = z.infer<typeof EvidenceItemSchema>;
@@ -135,10 +136,10 @@ export const ProofGapSchema = z.object({ id: Id, milestoneId: Id, requirementId:
 export type ProofGap = z.infer<typeof ProofGapSchema>;
 export const ProofOfProgressSchema = z.object({ id: Id, projectId: Id, milestoneId: Id, version: z.number().int().positive(), approvedEvidenceHashes: z.array(Hash), recordHash: Hash, visibility: VisibilitySchema, createdAt: Time });
 export type ProofOfProgress = z.infer<typeof ProofOfProgressSchema>;
-export const ReleaseRequestSchema = z.object({ id: Id, projectId: Id, milestoneId: Id, proofId: Id, intentId: Id, settlementId: Id.nullable(), amount: SettlementMoneyAmountSchema, state: z.enum(["DRAFT", "ELIGIBLE", "APPROVAL_PENDING", "APPROVED", "PREPARED", "SUBMITTED", "CONFIRMED", "REJECTED", "FAILED"]), approvalId: Id.nullable(), idempotencyKey: Id, createdAt: Time }).superRefine((value, context) => {
-  if (["APPROVED", "PREPARED", "SUBMITTED", "CONFIRMED"].includes(value.state) && value.approvalId === null) context.addIssue({ code: "custom", message: `${value.state} release requires a persisted approval.` });
+export const ReleaseRequestSchema = z.object({ id: Id, projectId: Id, milestoneId: Id, proofId: Id, intentId: Id, settlementId: Id.nullable(), amount: SettlementMoneyAmountSchema, state: z.enum(["DRAFT", "ELIGIBLE", "APPROVAL_PENDING", "APPROVED", "PREPARED", "SUBMITTED", "CONFIRMED", "RECONCILED", "REJECTED", "FAILED"]), approvalId: Id.nullable(), idempotencyKey: Id, createdAt: Time }).superRefine((value, context) => {
+  if (["APPROVED", "PREPARED", "SUBMITTED", "CONFIRMED", "RECONCILED"].includes(value.state) && value.approvalId === null) context.addIssue({ code: "custom", message: `${value.state} release requires a persisted approval.` });
   if (["DRAFT", "ELIGIBLE", "APPROVAL_PENDING"].includes(value.state) && value.approvalId !== null) context.addIssue({ code: "custom", message: `${value.state} release cannot claim completed approval.` });
-  if (value.state === "CONFIRMED" ? value.settlementId === null : value.settlementId !== null) context.addIssue({ code: "custom", message: "Release settlement reference must exist only in CONFIRMED state." });
+  if (["CONFIRMED", "RECONCILED"].includes(value.state) ? value.settlementId === null : value.settlementId !== null) context.addIssue({ code: "custom", message: "Release settlement reference must exist only in CONFIRMED or RECONCILED state." });
 });
 export type ReleaseRequest = z.infer<typeof ReleaseRequestSchema>;
 export const SettlementRecordSchema = z.object({ id: Id, projectId: Id, releaseRequestId: Id, reconciliationId: Id.nullable(), idempotencyKey: Id, amount: SettlementMoneyAmountSchema, state: z.enum(["PENDING", "CONFIRMED", "REFUND_PENDING", "REFUNDED", "RECONCILED", "FAILED"]), job: AgenticJobRefSchema.nullable(), transaction: ArcTransactionRefSchema.nullable(), updatedAt: Time }).superRefine((value, context) => {
@@ -163,8 +164,13 @@ const Erc8183ProtocolTargetSchema = z.object({
 }).strict();
 export const ProtocolTargetSchema = z.discriminatedUnion("kind", [DestinationProtocolTargetSchema, Erc8183ProtocolTargetSchema]);
 export const CanonicalExecutionIntentSchema = z.object({ version: z.literal(1), actionKind: ApprovalActionKindSchema, projectId: Id, releaseRequestId: Id, transactionRecordId: Id, intentId: Id, asset: z.literal(LAUNCHVAULT_SETTLEMENT_ASSET), atomicAmount: AtomicUnitsSchema, operationType: TransactionOperationTypeSchema, protocolTarget: ProtocolTargetSchema }).superRefine((value, context) => {
+  const supportedActionPolicy = { SETTLEMENT: "RELEASE_APPROVAL", REFUND: "RELEASE_APPROVAL", JOB_FUND: "RELEASE_APPROVAL", JOB_EVALUATE: "JOB_EVALUATION" } as const;
   const isJobOperation = ["JOB_FUND", "JOB_SUBMIT", "JOB_EVALUATE"].includes(value.operationType);
   if (isJobOperation !== (value.protocolTarget.kind === "ERC8183")) context.addIssue({ code: "custom", message: "Execution operation and protocol target are incompatible." });
+  const expectedActionKind = supportedActionPolicy[value.operationType as keyof typeof supportedActionPolicy];
+  if (expectedActionKind === undefined) context.addIssue({ code: "custom", message: `${value.operationType} execution authorization is deferred to its owning issue.` });
+  else if (value.actionKind !== expectedActionKind) context.addIssue({ code: "custom", message: `${value.operationType} requires ${expectedActionKind} authorization.` });
+  if (value.protocolTarget.kind === "ERC8183" && (value.operationType !== "JOB_FUND" && value.operationType !== "JOB_EVALUATE" || value.protocolTarget.method !== value.operationType)) context.addIssue({ code: "custom", message: "ERC-8183 execution method must match the supported operation type." });
 });
 export type CanonicalExecutionIntent = z.infer<typeof CanonicalExecutionIntentSchema>;
 export const ExecutionAuthorizationBindingSchema = z.object({ id: Id, releaseRequestId: Id, approvalId: Id, intentId: Id, exactIntentHash: Hash, transactionRecordId: Id, executionIntent: CanonicalExecutionIntentSchema, status: z.enum(["ACTIVE", "CONSUMED", "REVOKED"]), consumedAt: Time.nullable(), consumedByTransactionId: Id.nullable(), createdAt: Time }).superRefine((value, context) => {
@@ -177,6 +183,8 @@ export const AllocationOperationRecordSchema = z.object({ id: Id, reserveId: Id,
 export type AllocationOperationRecord = z.infer<typeof AllocationOperationRecordSchema>;
 export const SubmissionOperationRecordSchema = z.object({ id: Id, transactionId: Id, idempotencyKey: Id, createdAt: Time });
 export type SubmissionOperationRecord = z.infer<typeof SubmissionOperationRecordSchema>;
+export const JobEvaluationEvidenceSchema = z.object({ id: Id, jobId: Id, approvalId: Id, intentId: Id, exactIntentHash: Hash, decision: z.enum(["APPROVED", "REJECTED"]), transactionHash: z.string().min(1), transactionNetwork: z.literal(ARC_TESTNET_NETWORK), transactionChainId: z.string().min(1) });
+export type JobEvaluationEvidence = z.infer<typeof JobEvaluationEvidenceSchema>;
 export const RecoveryOperationRecordSchema = z.object({ id: Id, proofGapId: Id, idempotencyKey: Id, responseReference: z.string().min(1), createdAt: Time });
 export type RecoveryOperationRecord = z.infer<typeof RecoveryOperationRecordSchema>;
 export const DisclosurePreferencesSchema = z.object({ projectId: Id, discloseCapitalSummary: z.boolean(), discloseRequirementOutcomes: z.boolean(), discloseProofRecords: z.boolean(), discloseSettlementState: z.boolean(), approvedProofIds: z.array(Id), updatedAt: Time });

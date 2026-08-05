@@ -1,4 +1,4 @@
-import type { AgentIdentityRef, AgenticJobRef } from "./models";
+import { AgenticJobRefSchema, type AgentIdentityRef, type AgenticJobRef } from "./models";
 import { transitionAgenticJob, type TransitionContext } from "./state";
 
 export interface WalletReference { mode: "MOCK"; walletId: string; asset: "USDC"; balanceAtomic: string; canSubmitTransactions: false }
@@ -8,7 +8,11 @@ export class MockIdentityAdapter {
 }
 export class MockAgenticJobAdapter {
   transition(job: AgenticJobRef, to: AgenticJobRef["status"], context: TransitionContext): { job: AgenticJobRef; auditEvent: ReturnType<typeof transitionAgenticJob>["auditEvent"] } {
+    job = AgenticJobRefSchema.parse(job);
     if (!job.isMock) throw new Error("Mock adapter accepts only visibly synthetic jobs.");
-    const result = transitionAgenticJob(job.status, to, context); return { job: { ...job, status: result.status }, auditEvent: result.auditEvent };
+    const result = transitionAgenticJob(job.status, to, { ...context, currentJobEvidence: job });
+    const evidence = to === "EXPIRED" && context.jobEvidence === undefined ? { ...job, status: result.status } : context.jobEvidence;
+    if (evidence === undefined) throw new Error("Mock job transition requires persisted target evidence.");
+    return { job: AgenticJobRefSchema.parse(evidence), auditEvent: result.auditEvent };
   }
 }
