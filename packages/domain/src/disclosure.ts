@@ -4,7 +4,7 @@ export interface BackerSafeProjectRecord {
   project: Pick<Project, "id" | "name" | "description">;
   evidence: Array<Pick<EvidenceItem, "id" | "kind" | "sourceHash" | "submittedAt">>;
   proofs: Array<Pick<ProofOfProgress, "id" | "projectId" | "milestoneId" | "version" | "recordHash" | "createdAt">>;
-  settlements: Array<Pick<SettlementRecord, "id" | "releaseRequestId" | "amount" | "state" | "updatedAt">>;
+  settlements: Array<Pick<SettlementRecord, "id" | "releaseRequestId" | "amount" | "state" | "updatedAt"> & { disposition: "SETTLEMENT" | "REFUND" | null }>;
 }
 
 /** Builds an allowlisted disclosure projection; founder-private fields are never copied. */
@@ -26,7 +26,7 @@ export function filterBackerDisclosure(input: {
       ? validatedProofs.filter((proof) => proof.projectId === preferences.projectId && preferences.approvedProofIds.includes(proof.id) && (proof.visibility === "BACKER_SHARED" || proof.visibility === "ONCHAIN_PUBLIC")).map(({ id, projectId, milestoneId, version, recordHash, createdAt }) => ({ id, projectId, milestoneId, version, recordHash, createdAt }))
       : [],
     settlements: preferences.discloseSettlementState
-      ? validatedSettlements.filter((settlement) => settlement.projectId === input.project.id).map(({ id, releaseRequestId, amount, state, updatedAt }) => ({ id, releaseRequestId, amount: structuredClone(amount), state, updatedAt }))
+      ? validatedSettlements.filter((settlement) => settlement.projectId === input.project.id).map(({ id, releaseRequestId, amount, state, transaction, updatedAt }) => ({ id, releaseRequestId, amount: structuredClone(amount), state, disposition: transaction?.operationType === "SETTLEMENT" || transaction?.operationType === "REFUND" ? transaction.operationType : null, updatedAt }))
       : [],
   };
 }
