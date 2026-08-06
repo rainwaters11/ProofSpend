@@ -1242,7 +1242,16 @@ describe("LaunchVault treasury MVP slice", () => {
   const setup = (mode: "MOCK" | "ARC_TESTNET" = "MOCK", authority: { actorType: "SYSTEM" | "ADAPTER"; actorId: string } = authorizedSystem) => {
     const seed = createPawPovAiSeed();
     const vault = LaunchVaultSchema.parse({ ...seed.vault, mode });
-    return { seed, treasury: new LaunchVaultTreasury({ vault, reserves: seed.reserves, actor: authorizedSystem, executionAuthority: authority }) };
+    return {
+      seed,
+      treasury: new LaunchVaultTreasury({
+        vault,
+        reserves: seed.reserves,
+        actor: authorizedSystem,
+        executionAuthority: authority,
+        founderAuthority: founder,
+      }),
+    };
   };
   const buildApproval = async (proposal: ReturnType<LaunchVaultTreasury["createAllocationProposal"]>, overrides: Partial<ReturnType<typeof ApprovalRecordSchema.parse>> = {}) => ApprovalRecordSchema.parse({
     id: `approval:${proposal.id}`,
@@ -1362,6 +1371,7 @@ describe("LaunchVault treasury MVP slice", () => {
       eventId: "audit:proposal:authority",
       occurredAt: context.occurredAt,
     });
+
     await treasury.approveAllocationProposal({
       proposalId: proposal.id,
       approval: await buildApproval(proposal),
@@ -1383,6 +1393,28 @@ describe("LaunchVault treasury MVP slice", () => {
       expect(() => treasury.recordIncomingTranche({ trancheId: `tranche:unauthorized:${actor.actorType}`, amount: usdc("1"), transactionRef: mockTransaction("PREPARED", "SETTLEMENT"), actor, eventId: `audit:tranche:unauthorized:${actor.actorType}`, occurredAt: context.occurredAt })).toThrow(/exact authorized/);
       await expect(treasury.reconcileConfirmedTranche({ trancheId: "tranche:authority", actor, idempotencyKey: `reconcile:authority:${actor.actorType}`, eventId: `audit:reconcile:authority:${actor.actorType}`, occurredAt: context.occurredAt })).rejects.toThrow(/exact authorized/);
     }
+  });
+
+  it("binds allocation approval authority to the configured founder ID", async () => {
+    const { treasury } = setup();
+    const proposal = treasury.createAllocationProposal({
+      proposalId: "proposal:founder-authority",
+      instructions: [{ reserveId: "reserve:marketing", kind: "FIXED", atomicUnits: "1" }],
+      actor: founder,
+      eventId: "audit:proposal:founder-authority",
+      occurredAt: context.occurredAt,
+    });
+    const unrelatedFounder = { actorId: "founder:other", actorType: "FOUNDER" as const };
+    await expect(treasury.approveAllocationProposal({
+      proposalId: proposal.id,
+      approval: await buildApproval(proposal, {
+        authorizedActorId: unrelatedFounder.actorId,
+        approver: unrelatedFounder,
+      }),
+      actor: unrelatedFounder,
+      eventId: "audit:approval:founder-authority:unrelated",
+      occurredAt: context.occurredAt,
+    })).rejects.toThrow(/exact authorized FOUNDER actor/);
   });
 
   it("prevents allocated-plus-escrow overcommit against confirmed capital", async () => {
@@ -1431,7 +1463,7 @@ describe("LaunchVault treasury MVP slice", () => {
       eventId: "audit:proposal:raw-settlement",
       occurredAt: context.occurredAt,
       settlementTransactionRef: mockTransaction("CONFIRMED", "SETTLEMENT"),
-    })).toThrow(/persisted reconciled incoming tranche/);
+    })).toThrow(/explicit reconciled tranche ID|persisted reconciled incoming tranche/);
     const job = AgenticJobRefSchema.parse({ ...mockJob("COMPLETED", mockTransaction("CONFIRMED", "JOB_EVALUATE")), budget: usdc("250000000") });
     treasury.recordIncomingTranche({
       trancheId: "tranche:settlement-source",
@@ -1449,6 +1481,7 @@ describe("LaunchVault treasury MVP slice", () => {
       actor: founder,
       eventId: "audit:proposal:settlement-source",
       occurredAt: context.occurredAt,
+      sourceTrancheId: "tranche:settlement-source",
       settlementTransactionRef: mockTransaction("CONFIRMED", "SETTLEMENT"),
       sourceJobRef: job,
     });
@@ -1460,6 +1493,7 @@ describe("LaunchVault treasury MVP slice", () => {
       actor: founder,
       eventId: "audit:proposal:wrong-job",
       occurredAt: context.occurredAt,
+      sourceTrancheId: "tranche:settlement-source",
       settlementTransactionRef: mockTransaction("CONFIRMED", "SETTLEMENT"),
       sourceJobRef: AgenticJobRefSchema.parse({ ...job, jobId: "mock:job:other" }),
     })).toThrow(/does not match the reconciled tranche/);
@@ -1507,6 +1541,22 @@ describe("LaunchVault treasury MVP slice", () => {
       eventId: "audit:tranche:hash-substitution",
       occurredAt: context.occurredAt,
     })).toThrow(/cannot be substituted/);
+    treasury.recordIncomingTranche({
+      trancheId: "tranche:confirmed-freeze",
+      amount: usdc("7"),
+      transactionRef: mockTransaction("CONFIRMED", "SETTLEMENT"),
+      actor: authorizedSystem,
+      eventId: "audit:tranche:confirmed-freeze",
+      occurredAt: context.occurredAt,
+    });
+    expect(() => treasury.recordIncomingTranche({
+      trancheId: "tranche:confirmed-freeze",
+      amount: usdc("7"),
+      transactionRef: { ...mockTransaction("CONFIRMED", "SETTLEMENT"), blockNumber: "2" },
+      actor: authorizedSystem,
+      eventId: "audit:tranche:confirmed-freeze:altered",
+      occurredAt: context.occurredAt,
+    })).toThrow(/cannot be altered/);
     const sourceJob = AgenticJobRefSchema.parse({ ...mockJob("COMPLETED", mockTransaction("CONFIRMED", "JOB_EVALUATE")), budget: usdc("10") });
     treasury.recordIncomingTranche({
       trancheId: "tranche:job-source",
@@ -1525,7 +1575,52 @@ describe("LaunchVault treasury MVP slice", () => {
       actor: authorizedSystem,
       eventId: "audit:tranche:job-substitution",
       occurredAt: context.occurredAt,
-    })).toThrow(/source job cannot be substituted/);
+    })).toThrow(/source job evidence cannot be substituted/);
+    expect(() => treasury.recordIncomingTranche({
+      trancheId: "tranche:job-source",
+      amount: usdc("10"),
+      transactionRef: mockTransaction("SUBMITTED", "SETTLEMENT"),
+      sourceJobRef: AgenticJobRefSchema.parse({ ...sourceJob, budget: usdc("9") }),
+      actor: authorizedSystem,
+      eventId: "audit:tranche:job-substitution:budget",
+      occurredAt: context.occurredAt,
+    })).toThrow(/source job evidence cannot be substituted/);
+    expect(() => treasury.recordIncomingTranche({
+      trancheId: "tranche:job-amount-mismatch",
+      amount: usdc("11"),
+      transactionRef: mockTransaction("PREPARED", "SETTLEMENT"),
+      sourceJobRef: sourceJob,
+      actor: authorizedSystem,
+      eventId: "audit:tranche:job-amount-mismatch",
+      occurredAt: context.occurredAt,
+    })).toThrow(/must exactly match source job budget/);
+  });
+
+  it("rejects duplicate settlement transaction hashes across tranche IDs", async () => {
+    const { treasury } = setup();
+    treasury.recordIncomingTranche({
+      trancheId: "tranche:hash-a",
+      amount: usdc("5"),
+      transactionRef: { ...mockTransaction("CONFIRMED", "SETTLEMENT"), transactionHash: "mock:transaction:hash-a" },
+      actor: authorizedSystem,
+      eventId: "audit:tranche:hash-a",
+      occurredAt: context.occurredAt,
+    });
+    await treasury.reconcileConfirmedTranche({
+      trancheId: "tranche:hash-a",
+      actor: authorizedSystem,
+      idempotencyKey: "reconcile:hash-a",
+      eventId: "audit:reconcile:hash-a",
+      occurredAt: context.occurredAt,
+    });
+    expect(() => treasury.recordIncomingTranche({
+      trancheId: "tranche:hash-b",
+      amount: usdc("5"),
+      transactionRef: { ...mockTransaction("CONFIRMED", "SETTLEMENT"), transactionHash: "mock:transaction:hash-a" },
+      actor: authorizedSystem,
+      eventId: "audit:tranche:hash-b",
+      occurredAt: context.occurredAt,
+    })).toThrow(/already bound to another tranche/);
   });
 
   it("revalidates approval chronology and exact intent at apply time", async () => {

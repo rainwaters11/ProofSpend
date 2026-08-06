@@ -2,6 +2,7 @@ import { z } from "zod";
 import { type MoneyAmount, AtomicUnitsSchema, addMoney, money, subtractMoney } from "./money";
 import {
   ActorSchema,
+  type AgenticJobRef,
   AgenticJobRefSchema,
   ApprovalRecordSchema,
   ArcTransactionRefSchema,
@@ -104,6 +105,11 @@ const TreasuryExecutionAuthoritySchema = z.object({
   actorId: IdSchema,
 });
 type TreasuryExecutionAuthority = z.infer<typeof TreasuryExecutionAuthoritySchema>;
+const TreasuryFounderAuthoritySchema = z.object({
+  actorType: z.literal("FOUNDER"),
+  actorId: IdSchema,
+});
+type TreasuryFounderAuthority = z.infer<typeof TreasuryFounderAuthoritySchema>;
 
 export interface TreasuryReconciliationInvariant {
   dashboard: {
@@ -306,6 +312,7 @@ export class LaunchVaultTreasury {
 
   #vault: LaunchVault;
   readonly #executionAuthority: TreasuryExecutionAuthority;
+  readonly #founderAuthority: TreasuryFounderAuthority;
   #reserves: Reserve[];
   #proposals = new Map<string, AllocationProposal>();
   #incomingTranches = new Map<string, IncomingTranche>();
@@ -314,7 +321,7 @@ export class LaunchVaultTreasury {
   #confirmed: SettlementAmount;
   #escrowed: SettlementAmount;
 
-  constructor(input: { vault: LaunchVault; reserves: Reserve[]; actor: Actor; executionAuthority?: TreasuryExecutionAuthority }) {
+  constructor(input: { vault: LaunchVault; reserves: Reserve[]; actor: Actor; executionAuthority?: TreasuryExecutionAuthority; founderAuthority?: TreasuryFounderAuthority }) {
     this.#vault = LaunchVaultSchema.parse(input.vault);
     if (this.#vault.asset !== LAUNCHVAULT_SETTLEMENT_ASSET) throw new TreasuryError("UNSUPPORTED_ASSET", `Unsupported treasury asset ${this.#vault.asset}.`);
     const initializingActor = ActorSchema.parse(input.actor);
@@ -327,7 +334,17 @@ export class LaunchVaultTreasury {
     if (derivedAuthority === undefined) {
       throw new TreasuryError("INVALID_STATE", "Treasury execution authority must be explicitly configured for non-system initialization actors.");
     }
+    const derivedFounderAuthority =
+      input.founderAuthority ?? (
+        initializingActor.actorType === "FOUNDER"
+          ? { actorType: "FOUNDER" as const, actorId: initializingActor.actorId }
+          : undefined
+      );
+    if (derivedFounderAuthority === undefined) {
+      throw new TreasuryError("INVALID_STATE", "Treasury founder authority must be explicitly configured when initialization actor is not the founder.");
+    }
     this.#executionAuthority = TreasuryExecutionAuthoritySchema.parse(derivedAuthority);
+    this.#founderAuthority = TreasuryFounderAuthoritySchema.parse(derivedFounderAuthority);
     this.#reserves = input.reserves.map((reserve) => {
       const parsed = ReserveSchema.parse(reserve);
       if (parsed.vaultId !== this.#vault.id) throw new TreasuryError("INVALID_STATE", `Reserve ${parsed.id} belongs to another vault.`);
@@ -367,6 +384,79 @@ export class LaunchVaultTreasury {
         `Treasury operation requires the exact authorized ${this.#executionAuthority.actorType} actor ${this.#executionAuthority.actorId}.`,
       );
     }
+  }
+
+  #assertAuthorizedFounder(actor: Actor): void {
+    if (actor.actorType !== this.#founderAuthority.actorType || actor.actorId !== this.#founderAuthority.actorId) {
+      throw new TreasuryError(
+        "INVALID_STATE",
+        `Treasury founder approval requires the exact authorized ${this.#founderAuthority.actorType} actor ${this.#founderAuthority.actorId}; received ${actor.actorType} actor ${actor.actorId}.`,
+      );
+    }
+  }
+
+  #jobRefFingerprint(job: AgenticJobRef | null): string | null {
+    if (job === null) return null;
+    const parsed = AgenticJobRefSchema.parse(job);
+    return JSON.stringify([
+      parsed.standard,
+      parsed.network,
+      parsed.chainId,
+      parsed.contractAddress,
+      parsed.jobId,
+      parsed.clientAddress,
+      parsed.providerAddress,
+      parsed.evaluatorAddress,
+      parsed.budget.asset,
+      parsed.budget.atomicUnits,
+      parsed.expiresAt,
+      parsed.descriptionReference,
+      parsed.deliverableReference,
+      parsed.reasonReference,
+      parsed.status,
+      parsed.isMock,
+      parsed.transaction === null
+        ? null
+        : [
+          parsed.transaction.network,
+          parsed.transaction.chainId,
+          parsed.transaction.transactionHash,
+          parsed.transaction.status,
+          parsed.transaction.blockNumber,
+          parsed.transaction.blockHash,
+          parsed.transaction.explorerUrl,
+          parsed.transaction.operationType,
+          parsed.transaction.isMock,
+        ],
+      parsed.escrowTransaction === null
+        ? null
+        : [
+          parsed.escrowTransaction.network,
+          parsed.escrowTransaction.chainId,
+          parsed.escrowTransaction.transactionHash,
+          parsed.escrowTransaction.status,
+          parsed.escrowTransaction.blockNumber,
+          parsed.escrowTransaction.blockHash,
+          parsed.escrowTransaction.explorerUrl,
+          parsed.escrowTransaction.operationType,
+          parsed.escrowTransaction.isMock,
+        ],
+    ]);
+  }
+
+  #transactionFingerprint(transactionRef: ArcTransactionRef): string {
+    const parsed = ArcTransactionRefSchema.parse(transactionRef);
+    return JSON.stringify([
+      parsed.network,
+      parsed.chainId,
+      parsed.transactionHash,
+      parsed.status,
+      parsed.blockNumber,
+      parsed.blockHash,
+      parsed.explorerUrl,
+      parsed.operationType,
+      parsed.isMock,
+    ]);
   }
 
   #computeBalances(input: {
@@ -569,6 +659,7 @@ export class LaunchVaultTreasury {
     actor: Actor;
     eventId: string;
     occurredAt: string;
+    sourceTrancheId?: string | null;
     sourceJobRef?: z.infer<typeof AgenticJobRefSchema> | null;
     settlementTransactionRef?: ArcTransactionRef | null;
   }): AllocationProposal {
@@ -576,31 +667,42 @@ export class LaunchVaultTreasury {
     const eventId = IdSchema.parse(input.eventId);
     const occurredAt = z.string().datetime().parse(input.occurredAt);
     if (this.#proposals.has(input.proposalId)) throw new TreasuryError("INVALID_STATE", `Proposal ${input.proposalId} already exists.`);
+    const sourceTrancheId = input.sourceTrancheId === undefined || input.sourceTrancheId === null ? null : IdSchema.parse(input.sourceTrancheId);
     const sourceJobRef = input.sourceJobRef === undefined ? null : AgenticJobRefSchema.parse(input.sourceJobRef);
     const settlementTransactionRef = input.settlementTransactionRef === undefined ? null : ArcTransactionRefSchema.parse(input.settlementTransactionRef);
     if (settlementTransactionRef !== null && (settlementTransactionRef.status !== "CONFIRMED" || settlementTransactionRef.operationType !== "SETTLEMENT")) {
       throw new TreasuryError("INVALID_TRANSITION", "Allocation proposals may reference only confirmed SETTLEMENT transactions.");
     }
     if (sourceJobRef !== null && settlementTransactionRef === null) throw new TreasuryError("INVALID_TRANSITION", "Job-linked allocation proposals require a confirmed settlement transaction.");
+    if (settlementTransactionRef === null && sourceTrancheId !== null) throw new TreasuryError("INVALID_TRANSITION", "Allocation proposal source tranche requires settlement transaction evidence.");
+    if (settlementTransactionRef !== null && sourceTrancheId === null) throw new TreasuryError("INVALID_STATE", "Allocation proposal settlement source must include an explicit reconciled tranche ID.");
     if (settlementTransactionRef !== null && settlementTransactionRef.isMock !== (this.#vault.mode === "MOCK")) {
       throw new TreasuryError("INVALID_STATE", "Settlement transaction mock/live mode is incompatible with the treasury vault mode.");
     }
-    const linkedTranche = settlementTransactionRef === null
-      ? null
-      : [...this.#incomingTranches.values()].find((tranche) => (
-        tranche.vaultId === this.#vault.id &&
-        tranche.projectId === this.#vault.projectId &&
-        tranche.state === "RECONCILED" &&
-        tranche.transactionRef.transactionHash !== null &&
-        tranche.transactionRef.transactionHash === settlementTransactionRef.transactionHash
-      )) ?? null;
+    const linkedTranche = sourceTrancheId === null ? null : this.#incomingTranches.get(sourceTrancheId) ?? null;
     if (settlementTransactionRef !== null && linkedTranche === null) {
       throw new TreasuryError("INVALID_STATE", "Allocation proposal settlement source must reference a persisted reconciled incoming tranche.");
     }
+    if (linkedTranche !== null) {
+      if (
+        linkedTranche.vaultId !== this.#vault.id ||
+        linkedTranche.projectId !== this.#vault.projectId ||
+        linkedTranche.state !== "RECONCILED"
+      ) {
+        throw new TreasuryError("INVALID_STATE", "Allocation proposal source tranche must belong to this vault/project and be reconciled.");
+      }
+      if (settlementTransactionRef === null || this.#transactionFingerprint(linkedTranche.transactionRef) !== this.#transactionFingerprint(settlementTransactionRef)) {
+        throw new TreasuryError("INVALID_STATE", "Allocation proposal settlement transaction must exactly match the reconciled source tranche evidence.");
+      }
+    }
+    const canonicalJobRef = linkedTranche?.sourceJobRef ?? null;
     if (sourceJobRef !== null) {
       if (sourceJobRef.isMock !== (this.#vault.mode === "MOCK")) throw new TreasuryError("INVALID_STATE", "Source job mock/live mode is incompatible with the treasury vault mode.");
-      if (linkedTranche?.sourceJobRef === null) throw new TreasuryError("INVALID_STATE", "Job-linked allocation proposal requires matching tranche job evidence.");
-      if (linkedTranche?.sourceJobRef?.jobId !== sourceJobRef.jobId) throw new TreasuryError("INVALID_STATE", "Job-linked allocation proposal source does not match the reconciled tranche.");
+      if (canonicalJobRef === null) throw new TreasuryError("INVALID_STATE", "Job-linked allocation proposal requires matching tranche job evidence.");
+      if (this.#jobRefFingerprint(canonicalJobRef) !== this.#jobRefFingerprint(sourceJobRef)) throw new TreasuryError("INVALID_STATE", "Job-linked allocation proposal source does not match the reconciled tranche.");
+    }
+    if (canonicalJobRef !== null && sourceJobRef === null) {
+      throw new TreasuryError("INVALID_STATE", "Allocation proposal must preserve reconciled tranche job evidence.");
     }
 
     const unallocated = this.getSnapshot().balances.unallocated;
@@ -617,8 +719,8 @@ export class LaunchVaultTreasury {
       status: "PROPOSED",
       instructions: input.instructions,
       resolvedAllocations: resolved,
-      sourceJobRef,
-      settlementTransactionRef,
+      sourceJobRef: canonicalJobRef,
+      settlementTransactionRef: linkedTranche?.transactionRef ?? null,
       sourceTrancheId: linkedTranche?.id ?? null,
       approvalId: null,
       approvedIntentHash: null,
@@ -650,6 +752,7 @@ export class LaunchVaultTreasury {
     occurredAt: string;
   }): Promise<AllocationProposal> {
     const actor = ActorSchema.parse(input.actor);
+    this.#assertAuthorizedFounder(actor);
     const eventId = IdSchema.parse(input.eventId);
     const occurredAt = z.string().datetime().parse(input.occurredAt);
     const proposal = this.#proposals.get(input.proposalId);
@@ -666,9 +769,11 @@ export class LaunchVaultTreasury {
         approval.authorizedActorType !== "FOUNDER" ||
         actor.actorType !== "FOUNDER" ||
         approval.authorizedActorId !== actor.actorId ||
+        approval.authorizedActorId !== this.#founderAuthority.actorId ||
         approval.decision !== "APPROVED" ||
         approval.approver?.actorType !== "FOUNDER" ||
         approval.approver.actorId !== actor.actorId ||
+        approval.approver.actorId !== this.#founderAuthority.actorId ||
         approval.decidedAt === null
       ) {
         throw new TreasuryError("APPROVAL_MISMATCH", "Allocation approval must be an exact founder-approved RELEASE_APPROVAL for this proposal.");
@@ -737,6 +842,7 @@ export class LaunchVaultTreasury {
         approval.aggregateId !== current.id ||
         approval.actionKind !== "RELEASE_APPROVAL" ||
         approval.authorizedActorType !== "FOUNDER" ||
+        approval.authorizedActorId !== this.#founderAuthority.actorId ||
         approval.decision !== "APPROVED" ||
         approval.approver?.actorType !== "FOUNDER" ||
         approval.approver.actorId !== approval.authorizedActorId ||
@@ -837,6 +943,13 @@ export class LaunchVaultTreasury {
       if (sourceJobRef.transaction.network !== transactionRef.network || sourceJobRef.transaction.chainId !== transactionRef.chainId) {
         throw new TreasuryError("INVALID_STATE", "Incoming tranche job evidence network and chain must match settlement evidence.");
       }
+      if (sourceJobRef.budget.asset !== amountValue.asset || sourceJobRef.budget.atomicUnits !== amountValue.atomicUnits) {
+        throw new TreasuryError("INVALID_STATE", "Incoming tranche amount and asset must exactly match source job budget for this MVP path.");
+      }
+    }
+    if (transactionRef.transactionHash !== null) {
+      const conflicting = [...this.#incomingTranches.values()].find((entry) => entry.id !== input.trancheId && entry.transactionRef.transactionHash === transactionRef.transactionHash);
+      if (conflicting !== undefined) throw new TreasuryError("INVALID_STATE", "Incoming tranche transaction hash is already bound to another tranche.");
     }
     const state = transactionRef.status === "CONFIRMED" ? "CONFIRMED" : "PENDING_CONFIRMATION";
     const current = this.#incomingTranches.get(input.trancheId);
@@ -849,12 +962,15 @@ export class LaunchVaultTreasury {
       if (current.transactionRef.isMock !== transactionRef.isMock) throw new TreasuryError("INVALID_STATE", "Tranche mock/live mode cannot be altered.");
       const rank = (status: ArcTransactionRef["status"]): number => ({ NONE: 0, FAILED: 0, PREPARED: 1, SUBMITTED: 2, CONFIRMED: 3 })[status] ?? 0;
       if (rank(transactionRef.status) < rank(current.transactionRef.status)) throw new TreasuryError("INVALID_TRANSITION", "Incoming tranche status cannot move backward.");
+      if (current.transactionRef.status === "CONFIRMED" && this.#transactionFingerprint(current.transactionRef) !== this.#transactionFingerprint(transactionRef)) {
+        throw new TreasuryError("INVALID_STATE", "Confirmed incoming tranche transaction evidence cannot be altered.");
+      }
       if (current.transactionRef.transactionHash !== null && transactionRef.transactionHash !== current.transactionRef.transactionHash) {
         throw new TreasuryError("INVALID_STATE", "Incoming tranche transaction hash cannot be substituted.");
       }
-      const currentJobId = current.sourceJobRef?.jobId ?? null;
-      const nextJobId = sourceJobRef?.jobId ?? null;
-      if (currentJobId !== nextJobId) throw new TreasuryError("INVALID_STATE", "Incoming tranche source job cannot be substituted.");
+      if (this.#jobRefFingerprint(current.sourceJobRef) !== this.#jobRefFingerprint(sourceJobRef)) {
+        throw new TreasuryError("INVALID_STATE", "Incoming tranche source job evidence cannot be substituted.");
+      }
     }
 
     const tranche = IncomingTrancheSchema.parse({
