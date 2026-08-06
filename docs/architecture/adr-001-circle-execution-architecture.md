@@ -60,6 +60,12 @@ Assessment:
 - Contract execution and transaction polling are supported through the SDK and Arc App Kit.
 - Costs: Node 22.6+ upgrade, entity-secret lifecycle management, and API-key scoping are required.
 
+### Option C — Circle User-Controlled Wallets (considered, deferred)
+
+Circle also offers user-controlled wallets where each end user controls their own wallet with familiar sign-in (social, email, or PIN) and approves every transaction, and modular passkey wallets.
+
+This model is not selected for the MVP because LaunchVault's value-moving actions are backend-orchestrated (deterministic policy, exact human approval, server-side submission), which is the developer-controlled custody case. User-controlled wallets would move transaction approval to each backer's client session, change the authorization boundary, and are not the model used by Arc's ERC-8004/ERC-8183 example flows. A future backer self-custody flow may revisit this only through a separately approved ADR.
+
 ## Decision
 
 Select **Option B — Circle Developer-Controlled Wallets** as the single primary custody and contract-execution path for the LaunchVault MVP.
