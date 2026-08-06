@@ -1668,7 +1668,7 @@ describe("LaunchVault treasury MVP slice", () => {
       eventId: "audit:tranche:refund",
       occurredAt: context.occurredAt,
     })).toThrow(/SETTLEMENT transaction type/);
-    treasury.recordIncomingTranche({
+    const prepared = treasury.recordIncomingTranche({
       trancheId: "tranche:progression",
       amount: usdc("10"),
       transactionRef: mockTransaction("PREPARED", "SETTLEMENT"),
@@ -1676,7 +1676,9 @@ describe("LaunchVault treasury MVP slice", () => {
       eventId: "audit:tranche:prepared",
       occurredAt: context.occurredAt,
     });
-    treasury.recordIncomingTranche({
+    expect(prepared.state).toBe("PREPARED");
+    expect(prepared.state).not.toBe("SUBMITTED");
+    const submitted = treasury.recordIncomingTranche({
       trancheId: "tranche:progression",
       amount: usdc("10"),
       transactionRef: {
@@ -1687,6 +1689,10 @@ describe("LaunchVault treasury MVP slice", () => {
       eventId: "audit:tranche:submitted",
       occurredAt: context.occurredAt,
     });
+    expect(submitted.state).toBe("SUBMITTED");
+    expect(treasury.getSnapshot().audit).toContainEqual(expect.objectContaining({
+      details: expect.objectContaining({ previousState: "PREPARED", nextState: "SUBMITTED" }),
+    }));
     expect(() => treasury.recordIncomingTranche({
       trancheId: "tranche:progression",
       amount: usdc("10"),
@@ -1703,6 +1709,15 @@ describe("LaunchVault treasury MVP slice", () => {
       eventId: "audit:tranche:hash-substitution",
       occurredAt: context.occurredAt,
     })).toThrow(/cannot be substituted/);
+    const confirmed = treasury.recordIncomingTranche({
+      trancheId: "tranche:progression",
+      amount: usdc("10"),
+      transactionRef: { ...mockTransaction("CONFIRMED", "SETTLEMENT"), transactionHash: "mock:transaction:progression" },
+      actor: authorizedSystem,
+      eventId: "audit:tranche:confirmed",
+      occurredAt: context.occurredAt,
+    });
+    expect(confirmed.state).toBe("CONFIRMED");
     treasury.recordIncomingTranche({
       trancheId: "tranche:confirmed-freeze",
       amount: usdc("7"),
@@ -1759,7 +1774,7 @@ describe("LaunchVault treasury MVP slice", () => {
       actor: authorizedSystem,
       eventId: "audit:tranche:job-substitution:budget",
       occurredAt: context.occurredAt,
-    })).toThrow(/source job evidence cannot be substituted/);
+    })).toThrow(/must exactly match source job budget/);
     expect(() => treasury.recordIncomingTranche({
       trancheId: "tranche:job-amount-mismatch",
       amount: usdc("11"),
@@ -1848,6 +1863,14 @@ describe("LaunchVault treasury MVP slice", () => {
     });
     expect(failed.state).toBe("FAILED");
     expect(treasury.getSnapshot().incomingTranches).toContainEqual(failed);
+    expect(() => treasury.recordIncomingTranche({
+      trancheId: failed.id,
+      amount: failed.amount,
+      transactionRef: { ...mockTransaction("CONFIRMED", "SETTLEMENT"), transactionHash: "mock:transaction:failed" },
+      actor: authorizedSystem,
+      eventId: "audit:tranche:failed:terminal",
+      occurredAt: context.occurredAt,
+    })).toThrow(/Failed tranches cannot be modified/);
     await expect(treasury.reconcileConfirmedTranche({
       trancheId: failed.id,
       actor: authorizedSystem,
@@ -1918,6 +1941,14 @@ describe("LaunchVault treasury MVP slice", () => {
     const reconciled = await treasury.reconcileConfirmedTranche({ trancheId: "tranche:reconcile", actor: authorizedSystem, idempotencyKey: "reconcile:key", eventId: "audit:reconcile:key", occurredAt: context.occurredAt });
     const duplicate = await treasury.reconcileConfirmedTranche({ trancheId: "tranche:reconcile", actor: authorizedSystem, idempotencyKey: "reconcile:key", eventId: "audit:reconcile:key:duplicate", occurredAt: context.occurredAt });
     expect(reconciled).toEqual(duplicate);
+    expect(() => treasury.recordIncomingTranche({
+      trancheId: reconciled.id,
+      amount: reconciled.amount,
+      transactionRef: reconciled.transactionRef,
+      actor: authorizedSystem,
+      eventId: "audit:tranche:reconciled:terminal",
+      occurredAt: context.occurredAt,
+    })).toThrow(/Reconciled tranches cannot be modified/);
     const snapshot = treasury.getSnapshot();
     expect(snapshot.vault.totalCapital.atomicUnits).toBe("1250000000");
     expect(snapshot.balances.confirmed.atomicUnits).toBe("1250000000");

@@ -94,7 +94,7 @@ export const IncomingTrancheSchema = z.object({
   amount: SettlementMoneyAmountSchema,
   transactionRef: ArcTransactionRefSchema,
   sourceJobRef: AgenticJobRefSchema.nullable(),
-  state: z.enum(["PENDING_CONFIRMATION", "CONFIRMED", "FAILED", "RECONCILED"]),
+  state: z.enum(["PREPARED", "SUBMITTED", "CONFIRMED", "FAILED", "RECONCILED"]),
   reconciledAt: z.string().datetime().nullable(),
   createdAt: z.string().datetime(),
 });
@@ -985,7 +985,7 @@ export class LaunchVaultTreasury {
       );
       if (conflicting !== undefined) throw new TreasuryError("INVALID_STATE", "Incoming tranche transaction hash is already bound to another tranche.");
     }
-    const state = transactionRef.status === "CONFIRMED" ? "CONFIRMED" : transactionRef.status === "FAILED" ? "FAILED" : "PENDING_CONFIRMATION";
+    const state = transactionRef.status;
     const current = this.#incomingTranches.get(input.trancheId);
     if (current !== undefined && current.state === "RECONCILED") throw new TreasuryError("INVALID_STATE", "Reconciled tranches cannot be modified.");
     if (current !== undefined && current.state === "FAILED") throw new TreasuryError("INVALID_STATE", "Failed tranches cannot be modified.");
@@ -995,16 +995,13 @@ export class LaunchVaultTreasury {
       if (current.amount.asset !== amountValue.asset) throw new TreasuryError("INVALID_STATE", "Tranche asset cannot be altered.");
       if (current.transactionRef.operationType !== transactionRef.operationType) throw new TreasuryError("INVALID_STATE", "Tranche transaction type cannot be altered.");
       if (current.transactionRef.isMock !== transactionRef.isMock) throw new TreasuryError("INVALID_STATE", "Tranche mock/live mode cannot be altered.");
-      const rank = (status: ArcTransactionRef["status"]): number => {
-        switch (status) {
-          case "PREPARED": return 1;
-          case "SUBMITTED": return 2;
-          case "FAILED": return 3;
-          case "CONFIRMED": return 4;
-          default: return 0;
-        }
+      const allowedTransitions: Record<Exclude<IncomingTranche["state"], "RECONCILED">, ReadonlySet<IncomingTranche["state"]>> = {
+        PREPARED: new Set(["PREPARED", "SUBMITTED", "CONFIRMED", "FAILED"]),
+        SUBMITTED: new Set(["SUBMITTED", "CONFIRMED", "FAILED"]),
+        CONFIRMED: new Set(["CONFIRMED"]),
+        FAILED: new Set(),
       };
-      if (transactionRef.status !== "FAILED" && rank(transactionRef.status) < rank(current.transactionRef.status)) throw new TreasuryError("INVALID_TRANSITION", "Incoming tranche status cannot move backward.");
+      if (!allowedTransitions[current.state].has(state)) throw new TreasuryError("INVALID_TRANSITION", "Incoming tranche status cannot move backward or leave a terminal state.");
       if (current.transactionRef.status === "CONFIRMED" && this.#transactionFingerprint(current.transactionRef) !== this.#transactionFingerprint(transactionRef)) {
         throw new TreasuryError("INVALID_STATE", "Confirmed incoming tranche transaction evidence cannot be altered.");
       }
