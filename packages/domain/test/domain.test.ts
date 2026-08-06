@@ -1563,6 +1563,7 @@ describe("LaunchVault treasury MVP slice", () => {
   transactionHash: "mock:transaction:confirmed-freeze",
   blockNumber: "2",
 },
+      actor: authorizedSystem,
       eventId: "audit:tranche:confirmed-freeze:altered",
       occurredAt: context.occurredAt,
     })).toThrow(/cannot be altered/);
