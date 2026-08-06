@@ -95,6 +95,7 @@ const arcTx = (
 
 const baseRelease = (
   state: ReleaseLifecycleState,
+  releaseAmount: ReleaseRequest["amount"],
   overrides: Partial<ReleaseRequest> = {},
 ): ReleaseRequest => ({
   id: RELEASE_ID,
@@ -103,7 +104,7 @@ const baseRelease = (
   proofId: "proof:milestone-launch-ready:v1",
   intentId: INTENT_ID,
   settlementId: null,
-  amount: { asset: "USDC", atomicUnits: "150000000" },
+  amount: releaseAmount,
   state,
   approvalId: null,
   idempotencyKey: "release:milestone-launch-ready:key",
@@ -112,6 +113,7 @@ const baseRelease = (
 });
 
 const baseTransaction = (
+  releaseAmount: TransactionRecord["amount"],
   operationState: TransactionRecord["operationState"],
   arcStatus: ArcTransactionRef["status"],
   overrides: Partial<TransactionRecord> = {},
@@ -125,7 +127,7 @@ const baseTransaction = (
   approvalBindingId: "binding:milestone-launch-ready",
   reconciliationId: null,
   idempotencyKey: "transaction:milestone-launch-ready:key",
-  amount: { asset: "USDC", atomicUnits: "150000000" },
+  amount: releaseAmount,
   operationState,
   arcTransaction: arcTx(arcStatus),
   createdAt: "2026-01-20T14:55:30.000Z",
@@ -160,17 +162,20 @@ const rejectedApproval: ApprovalRecord = {
   decision: "REJECTED",
 };
 
-function buildSnapshot(key: ReleaseLifecycleState): ReleaseScenarioSnapshot {
+function buildSnapshot(
+  key: ReleaseLifecycleState,
+  releaseAmount: ReleaseRequest["amount"],
+): ReleaseScenarioSnapshot {
   switch (key) {
     case "DRAFT":
-      return { key, label: "Draft", release: baseRelease("DRAFT"), approval: null, transaction: null, settlement: null, reconciliation: null };
+      return { key, label: "Draft", release: baseRelease("DRAFT", releaseAmount), approval: null, transaction: null, settlement: null, reconciliation: null };
     case "ELIGIBLE":
-      return { key, label: "Eligible", release: baseRelease("ELIGIBLE"), approval: null, transaction: null, settlement: null, reconciliation: null };
+      return { key, label: "Eligible", release: baseRelease("ELIGIBLE", releaseAmount), approval: null, transaction: null, settlement: null, reconciliation: null };
     case "APPROVAL_PENDING":
       return {
         key,
         label: "Awaiting founder approval",
-        release: baseRelease("APPROVAL_PENDING"),
+        release: baseRelease("APPROVAL_PENDING", releaseAmount),
         approval: pendingApproval,
         transaction: null,
         settlement: null,
@@ -180,7 +185,7 @@ function buildSnapshot(key: ReleaseLifecycleState): ReleaseScenarioSnapshot {
       return {
         key,
         label: "Approved",
-        release: baseRelease("APPROVED", { approvalId: APPROVAL_ID }),
+        release: baseRelease("APPROVED", releaseAmount, { approvalId: APPROVAL_ID }),
         approval,
         transaction: null,
         settlement: null,
@@ -190,9 +195,9 @@ function buildSnapshot(key: ReleaseLifecycleState): ReleaseScenarioSnapshot {
       return {
         key,
         label: "Prepared",
-        release: baseRelease("PREPARED", { approvalId: APPROVAL_ID }),
+        release: baseRelease("PREPARED", releaseAmount, { approvalId: APPROVAL_ID }),
         approval,
-        transaction: baseTransaction("PREPARED", "PREPARED"),
+        transaction: baseTransaction(releaseAmount, "PREPARED", "PREPARED"),
         settlement: null,
         reconciliation: null,
       };
@@ -200,16 +205,16 @@ function buildSnapshot(key: ReleaseLifecycleState): ReleaseScenarioSnapshot {
       return {
         key,
         label: "Submitted",
-        release: baseRelease("SUBMITTED", { approvalId: APPROVAL_ID }),
+        release: baseRelease("SUBMITTED", releaseAmount, { approvalId: APPROVAL_ID }),
         approval,
-        transaction: baseTransaction("SUBMITTED", "SUBMITTED"),
+        transaction: baseTransaction(releaseAmount, "SUBMITTED", "SUBMITTED"),
         settlement: {
           id: SETTLEMENT_ID,
           projectId: "project:pawpovai",
           releaseRequestId: RELEASE_ID,
           reconciliationId: null,
           idempotencyKey: "settlement:milestone-launch-ready:key",
-          amount: { asset: "USDC", atomicUnits: "150000000" },
+          amount: releaseAmount,
           state: "PENDING",
           job: null,
           transaction: arcTx("SUBMITTED"),
@@ -224,16 +229,16 @@ function buildSnapshot(key: ReleaseLifecycleState): ReleaseScenarioSnapshot {
       return {
         key,
         label: "Confirmed",
-        release: baseRelease("CONFIRMED", { approvalId: APPROVAL_ID, settlementId: SETTLEMENT_ID }),
+        release: baseRelease("CONFIRMED", releaseAmount, { approvalId: APPROVAL_ID, settlementId: SETTLEMENT_ID }),
         approval,
-        transaction: baseTransaction("CONFIRMED", "CONFIRMED"),
+        transaction: baseTransaction(releaseAmount, "CONFIRMED", "CONFIRMED"),
         settlement: {
           id: SETTLEMENT_ID,
           projectId: "project:pawpovai",
           releaseRequestId: RELEASE_ID,
           reconciliationId: null,
           idempotencyKey: "settlement:milestone-launch-ready:key",
-          amount: { asset: "USDC", atomicUnits: "150000000" },
+          amount: releaseAmount,
           state: "CONFIRMED",
           job: null,
           transaction: confirmedTx,
@@ -247,16 +252,16 @@ function buildSnapshot(key: ReleaseLifecycleState): ReleaseScenarioSnapshot {
       return {
         key,
         label: "Reconciled",
-        release: baseRelease("RECONCILED", { approvalId: APPROVAL_ID, settlementId: SETTLEMENT_ID }),
+        release: baseRelease("RECONCILED", releaseAmount, { approvalId: APPROVAL_ID, settlementId: SETTLEMENT_ID }),
         approval,
-        transaction: baseTransaction("RECONCILED", "CONFIRMED", { reconciliationId: RECONCILIATION_ID }),
+        transaction: baseTransaction(releaseAmount, "RECONCILED", "CONFIRMED", { reconciliationId: RECONCILIATION_ID }),
         settlement: {
           id: SETTLEMENT_ID,
           projectId: "project:pawpovai",
           releaseRequestId: RELEASE_ID,
           reconciliationId: RECONCILIATION_ID,
           idempotencyKey: "settlement:milestone-launch-ready:key",
-          amount: { asset: "USDC", atomicUnits: "150000000" },
+          amount: releaseAmount,
           state: "RECONCILED",
           job: null,
           transaction: confirmedTx,
@@ -278,7 +283,7 @@ function buildSnapshot(key: ReleaseLifecycleState): ReleaseScenarioSnapshot {
       return {
         key,
         label: "Rejected",
-        release: baseRelease("REJECTED", { approvalId: APPROVAL_ID }),
+        release: baseRelease("REJECTED", releaseAmount, { approvalId: APPROVAL_ID }),
         approval: rejectedApproval,
         transaction: null,
         settlement: null,
@@ -288,9 +293,9 @@ function buildSnapshot(key: ReleaseLifecycleState): ReleaseScenarioSnapshot {
       return {
         key,
         label: "Failed",
-        release: baseRelease("FAILED", { approvalId: APPROVAL_ID }),
+        release: baseRelease("FAILED", releaseAmount, { approvalId: APPROVAL_ID }),
         approval,
-        transaction: baseTransaction("FAILED", "FAILED", {
+        transaction: baseTransaction(releaseAmount, "FAILED", "FAILED", {
           arcTransaction: arcTx("FAILED", { transactionHash: null }),
         }),
         settlement: null,
@@ -397,7 +402,7 @@ export function buildReleaseScenario(): ReleaseScenario {
         submittedAt: "2026-01-18T09:10:00.000Z",
       },
       requirementId: "requirement:confirmation",
-      matchExplanation: "Founder confirmed spend stayed within the 150 USDC eligible limit.",
+      matchExplanation: "Founder-submitted statement asserting spend stayed within the 150 test USDC eligible-spend limit.",
     },
   ];
 
@@ -412,8 +417,9 @@ export function buildReleaseScenario(): ReleaseScenario {
     createdAt: "2026-01-19T12:00:00.000Z",
   };
 
+  const releaseAmount = milestone.proposedAmount;
   const snapshots = Object.fromEntries(
-    LIFECYCLE_KEYS.map((key) => [key, buildSnapshot(key)]),
+    LIFECYCLE_KEYS.map((key) => [key, buildSnapshot(key, releaseAmount)]),
   ) as Record<ReleaseLifecycleState, ReleaseScenarioSnapshot>;
 
   return {

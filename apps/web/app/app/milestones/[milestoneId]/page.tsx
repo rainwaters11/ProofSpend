@@ -103,7 +103,7 @@ export default async function MilestoneDetailPage({
 
       <ReleaseRequestCard
         release={snapshot.release}
-        purpose="Cover confirmed launch-identity, landing-page, and InvestFest promotional deliverables plus two reconciled expense records within the founder-confirmed 150 USDC eligible spend limit."
+        purpose="Cover submitted launch-identity, landing-page, and InvestFest promotional deliverables plus two submitted expense records, within the 150 test USDC eligible-spend limit."
         destination="mock:destination:pawpovai-operating-wallet"
         evidence={scenario.evidence}
       />
