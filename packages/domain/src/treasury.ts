@@ -94,7 +94,7 @@ export const IncomingTrancheSchema = z.object({
   amount: SettlementMoneyAmountSchema,
   transactionRef: ArcTransactionRefSchema,
   sourceJobRef: AgenticJobRefSchema.nullable(),
-  state: z.enum(["PENDING_CONFIRMATION", "CONFIRMED", "RECONCILED"]),
+  state: z.enum(["PENDING_CONFIRMATION", "CONFIRMED", "FAILED", "RECONCILED"]),
   reconciledAt: z.string().datetime().nullable(),
   createdAt: z.string().datetime(),
 });
@@ -347,12 +347,15 @@ export class LaunchVaultTreasury {
     }
     this.#executionAuthority = TreasuryExecutionAuthoritySchema.parse(derivedAuthority);
     this.#founderAuthority = TreasuryFounderAuthoritySchema.parse(derivedFounderAuthority);
+    const reserveIds = new Set<string>();
     this.#reserves = input.reserves.map((reserve) => {
       const parsed = ReserveSchema.parse(reserve);
       if (parsed.vaultId !== this.#vault.id) throw new TreasuryError("INVALID_STATE", `Reserve ${parsed.id} belongs to another vault.`);
+      if (reserveIds.has(parsed.id)) throw new TreasuryError("INVALID_STATE", `Reserve ${parsed.id} is defined more than once.`);
       if (parsed.allocated.atomicUnits !== "0" || parsed.status !== "PROPOSED") {
         throw new TreasuryError("INVALID_STATE", `Reserve ${parsed.id} is not an empty PROPOSED definition for fresh treasury initialization.`);
       }
+      reserveIds.add(parsed.id);
       return parsed;
     });
     this.#confirmed = amount(this.#vault.asset, this.#vault.totalCapital.atomicUnits);
@@ -462,6 +465,10 @@ export class LaunchVaultTreasury {
       parsed.operationType,
       parsed.isMock,
     ]);
+  }
+
+  #transactionHashIdentity(transactionHash: string | null): string | null {
+    return transactionHash?.toLowerCase() ?? null;
   }
 
   #computeBalances(input: {
@@ -789,7 +796,8 @@ export class LaunchVaultTreasury {
       const expiresAt = Date.parse(approval.expiresAt);
       const appliedAt = Date.parse(occurredAt);
       const decidedAt = Date.parse(approval.decidedAt);
-      if (!Number.isFinite(expiresAt) || !Number.isFinite(appliedAt) || !Number.isFinite(decidedAt) || decidedAt > appliedAt || appliedAt >= expiresAt) {
+      const proposalCreatedAt = Date.parse(current.createdAt);
+      if (!Number.isFinite(expiresAt) || !Number.isFinite(appliedAt) || !Number.isFinite(decidedAt) || !Number.isFinite(proposalCreatedAt) || decidedAt < proposalCreatedAt || decidedAt > appliedAt || appliedAt >= expiresAt) {
         throw new TreasuryError("INVALID_STATE", "Allocation approval chronology is invalid or expired.");
       }
       const expectedHash = await hashAllocationProposalIntent(current);
@@ -953,8 +961,8 @@ export class LaunchVaultTreasury {
     if (amountValue.asset !== this.#vault.asset) throw new TreasuryError("ASSET_MISMATCH", "Incoming tranche asset mismatch.");
     const transactionRef = ArcTransactionRefSchema.parse(input.transactionRef);
     if (transactionRef.operationType !== "SETTLEMENT") throw new TreasuryError("INVALID_TRANSITION", "Incoming tranche evidence must use SETTLEMENT transaction type.");
-    if (!["PREPARED", "SUBMITTED", "CONFIRMED"].includes(transactionRef.status)) {
-      throw new TreasuryError("INVALID_TRANSITION", "Incoming tranche lifecycle accepts PREPARED, SUBMITTED, or CONFIRMED transaction evidence.");
+    if (!["PREPARED", "SUBMITTED", "CONFIRMED", "FAILED"].includes(transactionRef.status)) {
+      throw new TreasuryError("INVALID_TRANSITION", "Incoming tranche lifecycle accepts PREPARED, SUBMITTED, CONFIRMED, or FAILED transaction evidence.");
     }
     if (transactionRef.isMock !== (this.#vault.mode === "MOCK")) throw new TreasuryError("INVALID_STATE", "Incoming tranche transaction mode is incompatible with treasury mode.");
     const sourceJobRef = input.sourceJobRef === undefined ? null : AgenticJobRefSchema.parse(input.sourceJobRef);
@@ -971,24 +979,36 @@ export class LaunchVaultTreasury {
       }
     }
     if (transactionRef.transactionHash !== null) {
-      const conflicting = [...this.#incomingTranches.values()].find((entry) => entry.id !== input.trancheId && entry.transactionRef.transactionHash === transactionRef.transactionHash);
+      const transactionIdentity = this.#transactionHashIdentity(transactionRef.transactionHash);
+      const conflicting = [...this.#incomingTranches.values()].find((entry) =>
+        entry.id !== input.trancheId && this.#transactionHashIdentity(entry.transactionRef.transactionHash) === transactionIdentity,
+      );
       if (conflicting !== undefined) throw new TreasuryError("INVALID_STATE", "Incoming tranche transaction hash is already bound to another tranche.");
     }
-    const state = transactionRef.status === "CONFIRMED" ? "CONFIRMED" : "PENDING_CONFIRMATION";
+    const state = transactionRef.status === "CONFIRMED" ? "CONFIRMED" : transactionRef.status === "FAILED" ? "FAILED" : "PENDING_CONFIRMATION";
     const current = this.#incomingTranches.get(input.trancheId);
     if (current !== undefined && current.state === "RECONCILED") throw new TreasuryError("INVALID_STATE", "Reconciled tranches cannot be modified.");
+    if (current !== undefined && current.state === "FAILED") throw new TreasuryError("INVALID_STATE", "Failed tranches cannot be modified.");
     if (current !== undefined) {
       if (current.projectId !== this.#vault.projectId || current.vaultId !== this.#vault.id) throw new TreasuryError("INVALID_STATE", "Incoming tranche target must preserve project and vault identity.");
       if (current.amount.atomicUnits !== amountValue.atomicUnits) throw new TreasuryError("INVALID_STATE", "Tranche amount cannot be altered.");
       if (current.amount.asset !== amountValue.asset) throw new TreasuryError("INVALID_STATE", "Tranche asset cannot be altered.");
       if (current.transactionRef.operationType !== transactionRef.operationType) throw new TreasuryError("INVALID_STATE", "Tranche transaction type cannot be altered.");
       if (current.transactionRef.isMock !== transactionRef.isMock) throw new TreasuryError("INVALID_STATE", "Tranche mock/live mode cannot be altered.");
-      const rank = (status: ArcTransactionRef["status"]): number => ({ NONE: 0, FAILED: 0, PREPARED: 1, SUBMITTED: 2, CONFIRMED: 3 })[status] ?? 0;
-      if (rank(transactionRef.status) < rank(current.transactionRef.status)) throw new TreasuryError("INVALID_TRANSITION", "Incoming tranche status cannot move backward.");
+      const rank = (status: ArcTransactionRef["status"]): number => {
+        switch (status) {
+          case "PREPARED": return 1;
+          case "SUBMITTED": return 2;
+          case "FAILED": return 3;
+          case "CONFIRMED": return 4;
+          default: return 0;
+        }
+      };
+      if (transactionRef.status !== "FAILED" && rank(transactionRef.status) < rank(current.transactionRef.status)) throw new TreasuryError("INVALID_TRANSITION", "Incoming tranche status cannot move backward.");
       if (current.transactionRef.status === "CONFIRMED" && this.#transactionFingerprint(current.transactionRef) !== this.#transactionFingerprint(transactionRef)) {
         throw new TreasuryError("INVALID_STATE", "Confirmed incoming tranche transaction evidence cannot be altered.");
       }
-      if (current.transactionRef.transactionHash !== null && transactionRef.transactionHash !== current.transactionRef.transactionHash) {
+      if (current.transactionRef.transactionHash !== null && this.#transactionHashIdentity(transactionRef.transactionHash) !== this.#transactionHashIdentity(current.transactionRef.transactionHash)) {
         throw new TreasuryError("INVALID_STATE", "Incoming tranche transaction hash cannot be substituted.");
       }
       if (this.#jobRefFingerprint(current.sourceJobRef) !== this.#jobRefFingerprint(sourceJobRef)) {

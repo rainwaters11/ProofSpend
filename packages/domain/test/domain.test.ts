@@ -1327,6 +1327,12 @@ describe("LaunchVault treasury MVP slice", () => {
       })).toThrow(TreasuryError);
       expect(invalidReserve).not.toEqual(emptyReserves[0]);
     }
+    expect(() => new LaunchVaultTreasury({
+      vault: seed.vault,
+      reserves: [emptyReserves[0]!, emptyReserves[0]!, ...emptyReserves.slice(2)],
+      actor: authorizedSystem,
+      founderAuthority: founder,
+    })).toThrow(/defined more than once/);
   });
 
   it("requires explicit adapter authority for Arc Testnet while preserving mock system accounting", () => {
@@ -1522,6 +1528,25 @@ describe("LaunchVault treasury MVP slice", () => {
     expect(settled.filter((result) => result.status === "fulfilled")).toHaveLength(1);
     expect(settled.filter((result) => result.status === "rejected")).toHaveLength(1);
     expect(treasury.getSnapshot().audit.filter((entry) => entry.details.nextState === "APPROVED")).toHaveLength(1);
+  });
+
+  it("rejects founder approvals decided before their proposal existed", async () => {
+    const { treasury } = setup();
+    const proposal = treasury.createAllocationProposal({
+      proposalId: "proposal:predated-approval",
+      instructions: [{ reserveId: "reserve:marketing", kind: "FIXED", atomicUnits: "10" }],
+      actor: founder,
+      eventId: "audit:proposal:predated-approval",
+      occurredAt: "2026-01-02T00:00:00.000Z",
+    });
+    await expect(treasury.approveAllocationProposal({
+      proposalId: proposal.id,
+      approval: await buildApproval(proposal, { decidedAt: "2026-01-01T00:00:00.000Z" }),
+      actor: founder,
+      eventId: "audit:approval:predated-approval",
+      occurredAt: "2026-01-02T00:00:00.000Z",
+    })).rejects.toThrow(/chronology is invalid/);
+    expect(treasury.getSnapshot().proposals.find((entry) => entry.id === proposal.id)?.status).toBe("PROPOSED");
   });
 
   it("allows exactly one concurrent application and applies balances and ledger entries once", async () => {
@@ -1773,6 +1798,65 @@ describe("LaunchVault treasury MVP slice", () => {
     })).toThrow(/already bound to another tranche/);
   });
 
+  it("deduplicates settlement transaction hashes using canonical casing", () => {
+    const { treasury } = setup("ARC_TESTNET", authorizedAdapter);
+    const lowercaseHash = `0x${"ab".repeat(32)}`;
+    const uppercaseHash = `0x${"AB".repeat(32)}`;
+    treasury.recordIncomingTranche({
+      trancheId: "tranche:canonical-hash-a",
+      amount: usdc("5"),
+      transactionRef: {
+        ...liveTransaction,
+        transactionHash: lowercaseHash,
+        explorerUrl: arcTestnetExplorerTransactionUrl(lowercaseHash),
+      },
+      actor: authorizedAdapter,
+      eventId: "audit:tranche:canonical-hash-a",
+      occurredAt: context.occurredAt,
+    });
+    expect(() => treasury.recordIncomingTranche({
+      trancheId: "tranche:canonical-hash-b",
+      amount: usdc("5"),
+      transactionRef: {
+        ...liveTransaction,
+        transactionHash: uppercaseHash,
+        explorerUrl: arcTestnetExplorerTransactionUrl(uppercaseHash),
+      },
+      actor: authorizedAdapter,
+      eventId: "audit:tranche:canonical-hash-b",
+      occurredAt: context.occurredAt,
+    })).toThrow(/already bound to another tranche/);
+  });
+
+  it("persists failed incoming tranche evidence without allowing reconciliation", async () => {
+    const { treasury } = setup();
+    treasury.recordIncomingTranche({
+      trancheId: "tranche:failed",
+      amount: usdc("5"),
+      transactionRef: { ...mockTransaction("SUBMITTED", "SETTLEMENT"), transactionHash: "mock:transaction:failed" },
+      actor: authorizedSystem,
+      eventId: "audit:tranche:failed:submitted",
+      occurredAt: context.occurredAt,
+    });
+    const failed = treasury.recordIncomingTranche({
+      trancheId: "tranche:failed",
+      amount: usdc("5"),
+      transactionRef: { ...mockTransaction("FAILED", "SETTLEMENT"), transactionHash: "mock:transaction:failed" },
+      actor: authorizedSystem,
+      eventId: "audit:tranche:failed",
+      occurredAt: context.occurredAt,
+    });
+    expect(failed.state).toBe("FAILED");
+    expect(treasury.getSnapshot().incomingTranches).toContainEqual(failed);
+    await expect(treasury.reconcileConfirmedTranche({
+      trancheId: failed.id,
+      actor: authorizedSystem,
+      idempotencyKey: "reconcile:failed",
+      eventId: "audit:reconcile:failed",
+      occurredAt: context.occurredAt,
+    })).rejects.toThrow(/Only CONFIRMED tranches/);
+  });
+
   it("revalidates approval chronology and exact intent at apply time", async () => {
     const { treasury } = setup();
     const proposal = treasury.createAllocationProposal({
@@ -1780,7 +1864,7 @@ describe("LaunchVault treasury MVP slice", () => {
       instructions: [{ reserveId: "reserve:marketing", kind: "FIXED", atomicUnits: "10" }],
       actor: founder,
       eventId: "audit:proposal:expired-approval",
-      occurredAt: context.occurredAt,
+      occurredAt: "2025-12-30T00:00:00.000Z",
     });
     await treasury.approveAllocationProposal({
       proposalId: proposal.id,
