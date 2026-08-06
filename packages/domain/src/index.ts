@@ -7,3 +7,4 @@ export * from "./network";
 export * from "./repositories";
 export * from "./seed";
 export * from "./state";
+export * from "./treasury";
