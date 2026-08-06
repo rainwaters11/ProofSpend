@@ -1242,11 +1242,18 @@ describe("LaunchVault treasury MVP slice", () => {
   const setup = (mode: "MOCK" | "ARC_TESTNET" = "MOCK", authority: { actorType: "SYSTEM" | "ADAPTER"; actorId: string } = authorizedSystem) => {
     const seed = createPawPovAiSeed();
     const vault = LaunchVaultSchema.parse({ ...seed.vault, mode });
+    const emptyReserves = seed.reserves.map((reserve) => ReserveSchema.parse({
+      id: reserve.id,
+      vaultId: reserve.vaultId,
+      name: reserve.name,
+      allocated: usdc("0"),
+      status: "PROPOSED",
+    }));
     return {
       seed,
       treasury: new LaunchVaultTreasury({
         vault,
-        reserves: seed.reserves,
+        reserves: emptyReserves,
         actor: authorizedSystem,
         executionAuthority: authority,
         founderAuthority: founder,
@@ -1285,6 +1292,67 @@ describe("LaunchVault treasury MVP slice", () => {
     expect(seed.vault.totalCapital.atomicUnits).toBe("1000000000");
     const names = treasury.getSnapshot().reserves.map((reserve) => reserve.name).sort();
     expect(names).toEqual(["Contingency", "InvestFest travel", "Marketing", "Operations", "Product and platform"]);
+  });
+
+  it("initializes only from empty PROPOSED reserve definitions without changing the canonical seed", () => {
+    const seed = createPawPovAiSeed();
+    const emptyReserves = seed.reserves.map((reserve) => ReserveSchema.parse({
+      id: reserve.id,
+      vaultId: reserve.vaultId,
+      name: reserve.name,
+      allocated: usdc("0"),
+      status: "PROPOSED",
+    }));
+    const treasury = new LaunchVaultTreasury({
+      vault: seed.vault,
+      reserves: emptyReserves,
+      actor: authorizedSystem,
+      founderAuthority: founder,
+    });
+    expect(treasury.getSnapshot().reserves).toEqual(emptyReserves);
+    expect(seed.reserves.map((reserve) => reserve.allocated.atomicUnits)).toEqual([
+      "350000000", "250000000", "200000000", "100000000", "100000000",
+    ]);
+
+    for (const invalidReserve of [
+      { ...emptyReserves[0]!, allocated: usdc("1") },
+      { ...emptyReserves[0]!, status: "ACTIVE" as const },
+      { ...emptyReserves[0]!, status: "CLOSED" as const },
+    ]) {
+      expect(() => new LaunchVaultTreasury({
+        vault: seed.vault,
+        reserves: [invalidReserve, ...emptyReserves.slice(1)],
+        actor: authorizedSystem,
+        founderAuthority: founder,
+      })).toThrow(TreasuryError);
+      expect(invalidReserve).not.toEqual(emptyReserves[0]);
+    }
+  });
+
+  it("requires explicit adapter authority for Arc Testnet while preserving mock system accounting", () => {
+    const seed = createPawPovAiSeed();
+    const reserves = seed.reserves.map((reserve) => ReserveSchema.parse({ ...reserve, allocated: usdc("0"), status: "PROPOSED" }));
+    expect(() => new LaunchVaultTreasury({ vault: seed.vault, reserves, actor: authorizedSystem, founderAuthority: founder })).not.toThrow();
+    const liveVault = LaunchVaultSchema.parse({ ...seed.vault, mode: "ARC_TESTNET" });
+    expect(() => new LaunchVaultTreasury({ vault: liveVault, reserves, actor: authorizedSystem, founderAuthority: founder })).toThrow(/explicitly configured/);
+    expect(() => new LaunchVaultTreasury({ vault: liveVault, reserves, actor: authorizedSystem, executionAuthority: authorizedSystem, founderAuthority: founder })).toThrow(/explicit ADAPTER/);
+    const treasury = new LaunchVaultTreasury({ vault: liveVault, reserves, actor: authorizedSystem, executionAuthority: authorizedAdapter, founderAuthority: founder });
+    expect(() => treasury.recordIncomingTranche({ trancheId: "tranche:wrong-adapter", amount: usdc("1"), transactionRef: liveTransaction, actor: unauthorizedAdapter, eventId: "audit:wrong-adapter", occurredAt: context.occurredAt })).toThrow(/exact authorized ADAPTER/);
+  });
+
+  it("normalizes null and undefined allocation source references as absent", () => {
+    const { treasury } = setup();
+    const create = (proposalId: string, sourceJobRef: null | undefined, settlementTransactionRef: null | undefined) => treasury.createAllocationProposal({
+      proposalId,
+      instructions: [{ reserveId: "reserve:marketing", kind: "FIXED", atomicUnits: "1" }],
+      actor: founder,
+      eventId: `audit:${proposalId}`,
+      occurredAt: context.occurredAt,
+      sourceJobRef,
+      settlementTransactionRef,
+    });
+    expect(create("proposal:null-sources", null, null)).toMatchObject({ sourceJobRef: null, settlementTransactionRef: null });
+    expect(create("proposal:undefined-sources", undefined, undefined)).toMatchObject({ sourceJobRef: null, settlementTransactionRef: null });
   });
 
   it("keeps unapproved proposals from mutating active reserves and supports deterministic percentage rounding", () => {
@@ -1362,6 +1430,25 @@ describe("LaunchVault treasury MVP slice", () => {
     }));
   });
 
+  it("rejects duplicate escrow audit and ledger identities before financial mutation", async () => {
+    const { treasury } = setup();
+    await treasury.recordEscrowedCapital({
+      amount: usdc("10"),
+      actor: authorizedSystem,
+      idempotencyKey: "escrow:duplicate:first",
+      eventId: "audit:escrow:duplicate",
+      occurredAt: context.occurredAt,
+    });
+    await expectNoMutation(treasury, () => treasury.recordEscrowedCapital({
+      amount: usdc("5"),
+      actor: authorizedSystem,
+      idempotencyKey: "escrow:duplicate:second",
+      eventId: "audit:escrow:duplicate",
+      occurredAt: context.occurredAt,
+    }));
+    expect(treasury.getSnapshot().balances.escrowed.atomicUnits).toBe("10");
+  });
+
   it("enforces exact operator authority for apply, escrow, tranche recording, and reconciliation", async () => {
     const { treasury } = setup("MOCK", authorizedSystem);
     const proposal = treasury.createAllocationProposal({
@@ -1415,6 +1502,53 @@ describe("LaunchVault treasury MVP slice", () => {
       eventId: "audit:approval:founder-authority:unrelated",
       occurredAt: context.occurredAt,
     })).rejects.toThrow(/exact authorized FOUNDER actor/);
+  });
+
+  it("allows exactly one concurrent approval for a proposal", async () => {
+    const { treasury } = setup();
+    const proposal = treasury.createAllocationProposal({
+      proposalId: "proposal:concurrent-approval",
+      instructions: [{ reserveId: "reserve:marketing", kind: "FIXED", atomicUnits: "10" }],
+      actor: founder,
+      eventId: "audit:proposal:concurrent-approval",
+      occurredAt: context.occurredAt,
+    });
+    const firstApproval = await buildApproval(proposal, { id: "approval:concurrent:first", idempotencyKey: "approval:concurrent:first:key" });
+    const secondApproval = await buildApproval(proposal, { id: "approval:concurrent:second", idempotencyKey: "approval:concurrent:second:key" });
+    const settled = await Promise.allSettled([
+      treasury.approveAllocationProposal({ proposalId: proposal.id, approval: firstApproval, actor: founder, eventId: "audit:approval:concurrent:first", occurredAt: context.occurredAt }),
+      treasury.approveAllocationProposal({ proposalId: proposal.id, approval: secondApproval, actor: founder, eventId: "audit:approval:concurrent:second", occurredAt: context.occurredAt }),
+    ]);
+    expect(settled.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    expect(settled.filter((result) => result.status === "rejected")).toHaveLength(1);
+    expect(treasury.getSnapshot().audit.filter((entry) => entry.details.nextState === "APPROVED")).toHaveLength(1);
+  });
+
+  it("allows exactly one concurrent application and applies balances and ledger entries once", async () => {
+    const { treasury } = setup();
+    const proposal = treasury.createAllocationProposal({
+      proposalId: "proposal:concurrent-application",
+      instructions: [{ reserveId: "reserve:marketing", kind: "FIXED", atomicUnits: "10" }],
+      actor: founder,
+      eventId: "audit:proposal:concurrent-application",
+      occurredAt: context.occurredAt,
+    });
+    await treasury.approveAllocationProposal({
+      proposalId: proposal.id,
+      approval: await buildApproval(proposal),
+      actor: founder,
+      eventId: "audit:approval:concurrent-application",
+      occurredAt: context.occurredAt,
+    });
+    const settled = await Promise.allSettled([
+      treasury.applyApprovedProposal({ proposalId: proposal.id, actor: authorizedSystem, idempotencyKey: "apply:concurrent:first", eventId: "audit:apply:concurrent:first", occurredAt: context.occurredAt }),
+      treasury.applyApprovedProposal({ proposalId: proposal.id, actor: authorizedSystem, idempotencyKey: "apply:concurrent:second", eventId: "audit:apply:concurrent:second", occurredAt: context.occurredAt }),
+    ]);
+    expect(settled.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    expect(settled.filter((result) => result.status === "rejected")).toHaveLength(1);
+    const snapshot = treasury.getSnapshot();
+    expect(snapshot.reserves.find((reserve) => reserve.id === "reserve:marketing")?.allocated.atomicUnits).toBe("10");
+    expect(snapshot.ledger.filter((entry) => entry.kind === "ALLOCATION" && entry.reserveId === "reserve:marketing")).toHaveLength(1);
   });
 
   it("prevents allocated-plus-escrow overcommit against confirmed capital", async () => {

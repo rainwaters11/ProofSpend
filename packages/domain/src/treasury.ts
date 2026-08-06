@@ -325,14 +325,16 @@ export class LaunchVaultTreasury {
     this.#vault = LaunchVaultSchema.parse(input.vault);
     if (this.#vault.asset !== LAUNCHVAULT_SETTLEMENT_ASSET) throw new TreasuryError("UNSUPPORTED_ASSET", `Unsupported treasury asset ${this.#vault.asset}.`);
     const initializingActor = ActorSchema.parse(input.actor);
-    const derivedAuthority =
-      input.executionAuthority ?? (
-        initializingActor.actorType === "SYSTEM" || initializingActor.actorType === "ADAPTER"
-          ? { actorType: initializingActor.actorType, actorId: initializingActor.actorId }
-          : undefined
-      );
+    const derivedAuthority = input.executionAuthority ?? (
+      this.#vault.mode === "MOCK" && (initializingActor.actorType === "SYSTEM" || initializingActor.actorType === "ADAPTER")
+        ? { actorType: initializingActor.actorType, actorId: initializingActor.actorId }
+        : undefined
+    );
     if (derivedAuthority === undefined) {
-      throw new TreasuryError("INVALID_STATE", "Treasury execution authority must be explicitly configured for non-system initialization actors.");
+      throw new TreasuryError("INVALID_STATE", "Treasury execution authority must be explicitly configured for Arc Testnet or non-operator initialization actors.");
+    }
+    if (this.#vault.mode === "ARC_TESTNET" && derivedAuthority.actorType !== "ADAPTER") {
+      throw new TreasuryError("INVALID_STATE", "Arc Testnet treasury execution authority must be an explicit ADAPTER.");
     }
     const derivedFounderAuthority =
       input.founderAuthority ?? (
@@ -348,7 +350,10 @@ export class LaunchVaultTreasury {
     this.#reserves = input.reserves.map((reserve) => {
       const parsed = ReserveSchema.parse(reserve);
       if (parsed.vaultId !== this.#vault.id) throw new TreasuryError("INVALID_STATE", `Reserve ${parsed.id} belongs to another vault.`);
-      return { ...parsed, allocated: amount(this.#vault.asset, "0"), status: "PROPOSED" as const };
+      if (parsed.allocated.atomicUnits !== "0" || parsed.status !== "PROPOSED") {
+        throw new TreasuryError("INVALID_STATE", `Reserve ${parsed.id} is not an empty PROPOSED definition for fresh treasury initialization.`);
+      }
+      return parsed;
     });
     this.#confirmed = amount(this.#vault.asset, this.#vault.totalCapital.atomicUnits);
     this.#escrowed = amount(this.#vault.asset, "0");
@@ -571,6 +576,9 @@ export class LaunchVaultTreasury {
     if (escrowAmount.asset !== this.#vault.asset) throw new TreasuryError("ASSET_MISMATCH", "Escrow asset mismatch.");
     const fingerprint = JSON.stringify([this.#vault.id, escrowAmount.atomicUnits]);
     await this.#idempotency.execute("escrow-record", input.idempotencyKey, fingerprint, () => {
+      const ledgerId = `ledger:escrow:${eventId}`;
+      if (this.#audit.some((record) => record.id === eventId)) throw new TreasuryError("INVALID_STATE", `Audit event ${eventId} already exists.`);
+      if (this.#ledger.some((entry) => entry.id === ledgerId)) throw new TreasuryError("INVALID_STATE", `Ledger entry ${ledgerId} already exists.`);
       const nextEscrowed = addSettlement(this.#escrowed, escrowAmount);
       const currentAllocated = this.#computeBalances({ reserves: this.#reserves, confirmed: this.#confirmed, escrowed: this.#escrowed }).allocated;
       if (toBigInt(currentAllocated.atomicUnits) + toBigInt(nextEscrowed.atomicUnits) > toBigInt(this.#confirmed.atomicUnits)) {
@@ -578,7 +586,7 @@ export class LaunchVaultTreasury {
       }
       this.#computeBalances({ reserves: this.#reserves, confirmed: this.#confirmed, escrowed: nextEscrowed });
       const nextLedgerEntry = LedgerEntrySchema.parse({
-        id: `ledger:escrow:${eventId}`,
+        id: ledgerId,
         kind: "COMMITMENT",
         vaultId: this.#vault.id,
         reserveId: null,
@@ -668,8 +676,8 @@ export class LaunchVaultTreasury {
     const occurredAt = z.string().datetime().parse(input.occurredAt);
     if (this.#proposals.has(input.proposalId)) throw new TreasuryError("INVALID_STATE", `Proposal ${input.proposalId} already exists.`);
     const sourceTrancheId = input.sourceTrancheId === undefined || input.sourceTrancheId === null ? null : IdSchema.parse(input.sourceTrancheId);
-    const sourceJobRef = input.sourceJobRef === undefined ? null : AgenticJobRefSchema.parse(input.sourceJobRef);
-    const settlementTransactionRef = input.settlementTransactionRef === undefined ? null : ArcTransactionRefSchema.parse(input.settlementTransactionRef);
+    const sourceJobRef = input.sourceJobRef == null ? null : AgenticJobRefSchema.parse(input.sourceJobRef);
+    const settlementTransactionRef = input.settlementTransactionRef == null ? null : ArcTransactionRefSchema.parse(input.settlementTransactionRef);
     if (settlementTransactionRef !== null && (settlementTransactionRef.status !== "CONFIRMED" || settlementTransactionRef.operationType !== "SETTLEMENT")) {
       throw new TreasuryError("INVALID_TRANSITION", "Allocation proposals may reference only confirmed SETTLEMENT transactions.");
     }
@@ -785,9 +793,13 @@ export class LaunchVaultTreasury {
         throw new TreasuryError("INVALID_STATE", "Allocation approval chronology is invalid or expired.");
       }
       const expectedHash = await hashAllocationProposalIntent(current);
+      const persisted = this.#proposals.get(input.proposalId);
+      if (persisted === undefined || persisted.status !== "PROPOSED" || JSON.stringify(persisted) !== JSON.stringify(current)) {
+        throw new TreasuryError("INVALID_STATE", "Allocation proposal changed while approval was being recorded.");
+      }
       if (approval.exactIntentHash !== expectedHash) throw new TreasuryError("APPROVAL_MISMATCH", "Approval hash does not match the exact allocation proposal.");
       const approved = AllocationProposalSchema.parse({
-        ...current,
+        ...persisted,
         status: "APPROVED",
         approvalId: approval.id,
         approvedIntentHash: expectedHash,
@@ -857,6 +869,17 @@ export class LaunchVaultTreasury {
         throw new TreasuryError("INVALID_STATE", "Allocation approval is no longer valid at apply time.");
       }
       const expectedHash = await hashAllocationProposalIntent(current);
+      const persisted = this.#proposals.get(input.proposalId);
+      if (
+        persisted === undefined ||
+        persisted.status !== "APPROVED" ||
+        persisted.approvalId !== current.approvalId ||
+        persisted.approvedIntentHash !== current.approvedIntentHash ||
+        JSON.stringify(persisted.approvalRecord) !== JSON.stringify(current.approvalRecord) ||
+        JSON.stringify(persisted) !== JSON.stringify(current)
+      ) {
+        throw new TreasuryError("INVALID_STATE", "Allocation proposal changed while application was being recorded.");
+      }
       if (current.approvedIntentHash !== expectedHash || approval.exactIntentHash !== expectedHash) {
         throw new TreasuryError("PROPOSAL_ALTERED", "Approved allocation proposal no longer matches its approved intent.");
       }
