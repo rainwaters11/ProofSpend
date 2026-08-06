@@ -9,16 +9,22 @@
 
 LaunchVault helps founders organize project capital, submit evidence of progress, and participate in explicitly authorized milestone settlement while preserving privacy and an append-only history. It is a testnet prototype, not an investment product, auditor, tax service, or guarantee against fraud.
 
+## Design lineage
+
+ProofSpend carries forward the deterministic preflight, plain-language explanation, fail-closed state handling, and human-oversight principles first explored in SendSure. That relationship is conceptual and vocabulary-based. ProofSpend is not described as a SendSure fork, and no SendSure implementation is assumed to be present unless a future change explicitly imports and documents it.
+
+The LLM is a core assistance layer, not the financial authority. It interprets unstructured evidence, extracts structured candidates, maps evidence to requirements, identifies ambiguity, asks Proof Recovery questions, explains results, and prepares proposed next actions. Deterministic services validate those candidates and own formal policy and money-state outcomes.
+
 ## Canonical authority model
 
 The system has four separate layers:
 
-1. **AI assistance:** extract, match, summarize, and explain evidence.
+1. **LLM-assisted AI analysis:** extract, match, summarize, explain, and propose from untrusted evidence.
 2. **Deterministic policy:** validate schemas and atomic-unit money, produce requirement outcomes `PASS`, `REVIEW`, or `FAIL`, and calculate internal eligibility.
 3. **Explicit authority:** an authorized human or evaluator approves an exact action.
-4. **Arc execution:** a typed server-side adapter separately prepares, submits, confirms, and reconciles the transaction.
+4. **Arc execution:** a typed server-side Circle adapter separately prepares, submits, confirms, and reconciles the transaction.
 
-The AI never calculates final balances, finalizes milestone state, approves or submits a value-moving action, completes/rejects a job, or writes reputation.
+The LLM and Verification Agent never calculate final balances, produce the authoritative policy result, finalize milestone state, approve or alter an exact intent, submit a value-moving action without approval, complete/reject a job on their own authority, or write reputation.
 
 ## Canonical Arc flow
 
@@ -34,15 +40,16 @@ Every protocol write below requires its own exact persisted intent, approval by 
 8. The authorized client/funder separately approves each allowance or funding intent.
 9. The server separately prepares, immediately revalidates, submits, confirms, and reconciles each approved allowance or funding write before escrow is treated as funded.
 10. The founder submits receipts, deliverables, and business context offchain.
-11. AI produces structured evidence candidates, mappings, and explanations.
-12. Deterministic policy produces `PASS`, `REVIEW`, or `FAIL` outcomes and internal eligibility.
-13. The provider's deliverable-hash submission is represented by its own exact intent and approved by the authorized provider role.
-14. The server prepares, immediately revalidates, submits, confirms, and reconciles the approved deliverable submission.
-15. Completion or rejection is represented by a separate exact evaluator intent and approved by the authorized evaluator.
-16. The server prepares, immediately revalidates, submits, confirms, and reconciles the approved evaluator action.
-17. USDC settles or becomes refundable only through the confirmed ERC-8183 lifecycle; any refund claim is a separate authorized protocol write.
-18. The application reconciles settlement or refund results before updating confirmed balances.
-19. Any ERC-8004 reputation write is a separate exact intent approved and submitted by an independent reputation writer after the result; the agent owner may not write its own reputation.
+11. The LLM-assisted Verification Agent produces structured evidence candidates, mappings, confidence, warnings, and explanations.
+12. Deterministic policy validates the candidates and produces `PASS`, `REVIEW`, or `FAIL` outcomes and internal eligibility.
+13. The Verification Agent may prepare a proposed next action, but that proposal has no financial authority.
+14. The provider's deliverable-hash submission is represented by its own exact intent and approved by the authorized provider role.
+15. The server prepares, immediately revalidates, submits, confirms, and reconciles the approved deliverable submission.
+16. Completion or rejection is represented by a separate exact evaluator intent and approved by the authorized evaluator.
+17. The server prepares, immediately revalidates, submits, confirms, and reconciles the approved evaluator action.
+18. USDC settles or becomes refundable only through the confirmed ERC-8183 lifecycle; any refund claim is a separate authorized protocol write.
+19. The application reconciles settlement or refund results before updating confirmed balances.
+20. Any ERC-8004 reputation write is a separate exact intent approved and submitted by an independent reputation writer after the result; the agent owner may not write its own reputation.
 
 ERC-8004 registration identifies an agent; it does not prove trustworthiness, correctness, auditing, or financial authority. The agent owner may not write reputation for its own agent. Internal `ELIGIBLE` and ERC-8183 `COMPLETED` are different states.
 
@@ -50,7 +57,7 @@ ERC-8004 registration identifies an agent; it does not prove trustworthiness, co
 
 The fictional PawPOVAI InvestFest Soft Launch starts with 1,000 test USDC allocated in integer atomic units across Product and platform (350), Marketing (250), InvestFest travel (200), Operations (100), and Contingency (100).
 
-Milestone 1, “Launch identity and outreach ready,” requires a visual identity asset, landing-page screenshot, promotional flyer, two expense records, eligible spend no greater than 150 USDC, and founder confirmation. The proposed next amount is 250 test USDC. The demo must show evidence review, deterministic outcomes, exact approval, and truthful mock or Arc lifecycle states without implying that preparation, submission, or internal eligibility equals settlement.
+Milestone 1, “Launch identity and outreach ready,” requires a visual identity asset, landing-page screenshot, promotional flyer, two expense records, eligible spend no greater than 150 USDC, and founder confirmation. The proposed next amount is 250 test USDC. The demo must show LLM-assisted evidence review, deterministic outcomes, an agent-prepared proposal, exact human approval, and truthful mock or Arc lifecycle states without implying that analysis, preparation, submission, or internal eligibility equals settlement.
 
 ## Core modules
 
@@ -64,7 +71,7 @@ Stores milestone requirements, spend limit, due date, proposed amount, and appli
 
 ### Evidence Engine and Proof Recovery
 
-Captures receipt images, screenshots, transactions, invoices, deliverables, business-purpose statements, and confirmations. Original evidence stays separate from AI-derived fields. Raw receipts and founder-private evidence remain offchain. Recovery identifies the highest-priority gap and asks one question at a time.
+Captures receipt images, screenshots, transactions, invoices, deliverables, business-purpose statements, and confirmations. The LLM converts these untrusted inputs into structured candidates and explanations; deterministic validation decides whether those candidates are acceptable inputs to policy. Original evidence stays separate from AI-derived fields. Raw receipts and founder-private evidence remain offchain. Recovery identifies the highest-priority gap and asks one question at a time.
 
 ### Proof-of-Progress record
 
@@ -83,9 +90,9 @@ Issue #8 consumes the registered identity but does not absorb Issue #13.
 
 ## Agent architecture
 
-The Founder Copilot routes and explains; Evidence Agent creates structured candidates; Milestone Agent explains deterministic results; Recovery Agent finds gaps; Backer Brief Agent summarizes approved disclosure. The ProofSpend Verification Agent has an ERC-8004 identity but no inherent trust or payment authority.
+The Founder Copilot routes and explains; Evidence Agent creates structured candidates; Milestone Agent explains deterministic results; Recovery Agent finds gaps; Backer Brief Agent summarizes approved disclosure. These roles may use an LLM for interpretation and language generation. The ProofSpend Verification Agent coordinates approved tools and has an ERC-8004 identity, but no inherent trust, policy, approval, or payment authority.
 
-The complete Verification Agent orchestration—controlled OpenAI Agents SDK loop, structured evidence-service calls, policy explanation, human interruption, and transaction-proposal preparation—is a backlog gap requiring a dedicated future issue unless the live backlog assigns it elsewhere. It must prohibit direct submission.
+The complete Verification Agent orchestration—controlled OpenAI Agents SDK loop, structured evidence-service calls, deterministic-policy explanation, human interruption, and transaction-proposal preparation—is a backlog gap requiring a dedicated future issue unless the live backlog assigns it elsewhere. It must prohibit direct submission and preserve a record of tool calls, policy results, approval references, and transaction outcomes.
 
 ## Circle execution boundary
 
@@ -97,28 +104,28 @@ ERC-8183 is the default MVP settlement primitive. A custom LaunchVault contract,
 
 ## Conceptual records
 
-Projects, vaults, reserves, ledger entries, milestones, requirements, evidence items, matches, policy decisions, proof records, approvals, exact transaction intents, prepared transactions, submissions, confirmations, reconciliation events, ERC-8004 registrations, ERC-8183 jobs/deliverables/evaluations/settlements/refunds, disclosure preferences, reputation results, proof gaps, and audit events.
+Projects, vaults, reserves, ledger entries, milestones, requirements, evidence items, AI-derived candidates, matches, policy decisions, proof records, approvals, exact transaction intents, prepared transactions, submissions, confirmations, reconciliation events, ERC-8004 registrations, ERC-8183 jobs/deliverables/evaluations/settlements/refunds, disclosure preferences, reputation results, proof gaps, agent runs, tool calls, and audit events.
 
 ## Security and governance
 
 - Never commit secrets or expose privileged actions to the browser.
-- Validate all external input with Zod and treat uploaded content as untrusted data.
+- Validate all external input with Zod and treat uploaded content and LLM output as untrusted data.
 - Validate chain, asset, addresses, roles, amount, balance, state, approval, expiry, and idempotency.
 - Persist intent before execution and result afterward; revalidate immediately before submission.
-- Keep preparation, approval, submission, confirmation, failure, and reconciliation separate.
-- Preserve append-only audit history, corrections, and approvals.
+- Keep AI analysis, deterministic policy, approval, preparation, submission, confirmation, failure, and reconciliation separate.
+- Preserve append-only audit history, corrections, agent tool calls, and approvals.
 - Keep private evidence offchain and use approved hashes/commitments only.
 - Never describe the prototype as audited, production-ready, investment advice, tax advice, or guaranteed fraud prevention.
 
 ## UX principles
 
-Be founder-first, accessible, responsive, and explicit. Display `ModeBadge` and role context on money/protocol screens. Visually distinguish mock, Arc Testnet, awaiting approval, prepared, submitted, confirmed, failed, rejected, refunded, and reconciled states. Never show a fabricated identifier as live. Explain every `REVIEW`/`FAIL` and why a milestone is not eligible. Separate private, shared, and onchain-public data.
+Be founder-first, accessible, responsive, and explicit. Display `ModeBadge` and role context on money/protocol screens. Visually distinguish AI observation, deterministic result, awaiting approval, approved intent, mock, Arc Testnet, prepared, submitted, confirmed, failed, rejected, refunded, and reconciled states. Never show a fabricated identifier as live. Explain every `REVIEW`/`FAIL` and why a milestone is not eligible. Separate private, shared, and onchain-public data.
 
 Issue #14 uses only the Phase A–D structure in `docs/roadmap.md`.
 
 ## Testing
 
-Test atomic arithmetic, allocation/rounding, deterministic policy, malformed agent output, duplicate evidence, invalid transitions, disclosure filtering, exact approvals, stale-intent rejection, idempotency, preparation/submission separation, ERC-8183 completion/rejection and settlement/refund, owner self-reputation prohibition, confirmation/reconciliation, and truthful UI states.
+Test atomic arithmetic, allocation/rounding, deterministic policy, malformed or adversarial LLM output, duplicate evidence, invalid transitions, disclosure filtering, exact approvals, stale-intent rejection, idempotency, preparation/submission separation, ERC-8183 completion/rejection and settlement/refund, owner self-reputation prohibition, confirmation/reconciliation, agent tool boundaries, and truthful UI states.
 
 ## Definition of done
 
