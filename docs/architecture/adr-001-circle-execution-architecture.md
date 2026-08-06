@@ -1,7 +1,5 @@
 # ADR-001 — Circle execution and custody architecture
 
-Status: **Proposed — pending approval** (Issue #7 decision gate)
-
 ## Context
 
 Issue #7 requires ProofSpend to select **one** primary Circle custody and contract-execution path for Arc Testnet, then implement a typed server-side adapter behind the existing `WalletProvider` boundary. The selected path must support the ERC-8004 registration calls (Issue #13) and ERC-8183 job/settlement calls (Issue #8) on Arc Testnet, while preserving explicit mock mode, prepare/submit separation, idempotency, redaction, and server-side credentials.
@@ -48,7 +46,7 @@ Verified facts (2026-08-06, official Circle docs and npm):
 - Setup uses a Circle Console API key plus a registered entity secret; the SDK provides `generateEntitySecret` and `registerEntitySecretCiphertext` helpers and returns a recovery file that must be stored server-side.
 - The client is initialized with `initiateDeveloperControlledWalletsClient({ apiKey, entitySecret })`.
 - Wallets are organized into wallet sets; one wallet set groups wallets under a single entity secret.
-- `createWallets({ walletSetId, blockchains: ["ARC-TESTNET"], count, accountType: "EOA" | "SCA" })` creates wallets on demand; wallet sets and wallets are effectively unlimited, enabling one wallet per client and per role.
+- `createWallets({ walletSetId, blockchains: ["ARC-TESTNET"], count, accountType: "EOA" | "SCA" })` creates wallets on demand. Circle supports scalable wallet creation: up to 200 wallets per request, up to 10 million wallets per wallet set, and up to 1,000 wallet sets per account; other account/API limits may apply. This supports one wallet per client and per role at MVP scale.
 - Package: `@circle-fin/developer-controlled-wallets` (current 10.8.0, TypeScript declarations included).
 - Arc's current ERC-8004 and ERC-8183 examples and the Arc App Kit (with a Circle Wallets adapter) are built on this path.
 
@@ -56,7 +54,7 @@ Assessment:
 
 - Directly aligns with the ERC-8004/ERC-8183 implementation issues.
 - Persistent server-side credentials are simpler to reproduce in CI than expiring CLI sessions.
-- Unlimited wallets cleanly model backer/client, founder/provider, evaluator, and validator roles.
+- Scalable wallet creation (up to 200 wallets per request, 10 million per wallet set, 1,000 wallet sets per account) cleanly models backer/client, founder/provider, evaluator, and validator roles.
 - Contract execution and transaction polling are supported through the SDK and Arc App Kit.
 - Costs: Node 22.6+ upgrade, entity-secret lifecycle management, and API-key scoping are required.
 
@@ -78,7 +76,7 @@ Positive:
 
 - ERC-8004 (Issue #13) and ERC-8183 (Issue #8) can consume the same adapter without a second custody stack.
 - Wallet-per-client and wallet-per-role mapping supports the required authority model; a shared entity secret signs only the authorized wallet's action, never mixing balances.
-- CI and deployment use environment-variable credentials rather than expiring sessions.
+- CI stays credential-free and uses the mock adapter only. Live `CIRCLE_API_KEY`/`CIRCLE_ENTITY_SECRET` values exist only in an approved server-side deployment or a secured, human-in-the-loop manual smoke-test environment; they are never committed, logged, or exposed in the browser.
 - The existing `WalletProvider` boundary remains the controlling application architecture; `MockWalletProvider` and the Circle adapter implement the same typed interface.
 
 Risks and required follow-ups:
@@ -93,7 +91,8 @@ Risks and required follow-ups:
 ## References
 
 - Circle Developer-Controlled Wallets quickstart: https://developers.circle.com/wallets/dev-controlled/create-your-first-wallet (verified 2026-08-06)
-- Circle Wallets documentation: https://developers.circle.com/wallets (verified 2026-08-06)
+- Batch-create dev-controlled wallets (200 per request limit): https://developers.circle.com/wallets/dev-controlled/batch-create-wallets (verified 2026-08-06)
+- Wallets product overview and limits (wallet sets, wallets per wallet set): https://developers.circle.com/wallets and https://developers.circle.com/wallets/unified-wallet-addressing-evm (verified 2026-08-06)
 - `@circle-fin/developer-controlled-wallets` on npm: https://www.npmjs.com/package/@circle-fin/developer-controlled-wallets (verified 2026-08-06)
 - Arc App Kit — Circle Wallets adapter: https://docs.arc.io/app-kit/tutorials/adapter-setups#circle-wallets (referenced 2026-08-06)
 - Circle Agent Stack supported blockchains: https://developers.circle.com/agent-stack/agent-wallets/supported-blockchains (verified 2026-08-06)
