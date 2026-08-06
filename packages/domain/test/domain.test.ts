@@ -1520,7 +1520,10 @@ describe("LaunchVault treasury MVP slice", () => {
     treasury.recordIncomingTranche({
       trancheId: "tranche:progression",
       amount: usdc("10"),
-      transactionRef: mockTransaction("SUBMITTED", "SETTLEMENT"),
+      transactionRef: {
+  ...mockTransaction("SUBMITTED", "SETTLEMENT"),
+  transactionHash: "mock:transaction:progression",
+},
       actor: authorizedSystem,
       eventId: "audit:tranche:submitted",
       occurredAt: context.occurredAt,
@@ -1544,7 +1547,10 @@ describe("LaunchVault treasury MVP slice", () => {
     treasury.recordIncomingTranche({
       trancheId: "tranche:confirmed-freeze",
       amount: usdc("7"),
-      transactionRef: mockTransaction("CONFIRMED", "SETTLEMENT"),
+      transactionRef: {
+  ...mockTransaction("CONFIRMED", "SETTLEMENT"),
+  transactionHash: "mock:transaction:confirmed-freeze",
+},
       actor: authorizedSystem,
       eventId: "audit:tranche:confirmed-freeze",
       occurredAt: context.occurredAt,
@@ -1552,8 +1558,11 @@ describe("LaunchVault treasury MVP slice", () => {
     expect(() => treasury.recordIncomingTranche({
       trancheId: "tranche:confirmed-freeze",
       amount: usdc("7"),
-      transactionRef: { ...mockTransaction("CONFIRMED", "SETTLEMENT"), blockNumber: "2" },
-      actor: authorizedSystem,
+      transactionRef: {
+  ...mockTransaction("CONFIRMED", "SETTLEMENT"),
+  transactionHash: "mock:transaction:confirmed-freeze",
+  blockNumber: "2",
+},
       eventId: "audit:tranche:confirmed-freeze:altered",
       occurredAt: context.occurredAt,
     })).toThrow(/cannot be altered/);
@@ -1570,7 +1579,10 @@ describe("LaunchVault treasury MVP slice", () => {
     expect(() => treasury.recordIncomingTranche({
       trancheId: "tranche:job-source",
       amount: usdc("10"),
-      transactionRef: mockTransaction("SUBMITTED", "SETTLEMENT"),
+     transactionRef: {
+  ...mockTransaction("SUBMITTED", "SETTLEMENT"),
+  transactionHash: "mock:transaction:job-source",
+},
       sourceJobRef: AgenticJobRefSchema.parse({ ...sourceJob, jobId: "mock:job:changed" }),
       actor: authorizedSystem,
       eventId: "audit:tranche:job-substitution",
@@ -1579,7 +1591,10 @@ describe("LaunchVault treasury MVP slice", () => {
     expect(() => treasury.recordIncomingTranche({
       trancheId: "tranche:job-source",
       amount: usdc("10"),
-      transactionRef: mockTransaction("SUBMITTED", "SETTLEMENT"),
+      transactionRef: {
+  ...mockTransaction("SUBMITTED", "SETTLEMENT"),
+  transactionHash: "mock:transaction:job-source",
+},
       sourceJobRef: AgenticJobRefSchema.parse({ ...sourceJob, budget: usdc("9") }),
       actor: authorizedSystem,
       eventId: "audit:tranche:job-substitution:budget",
