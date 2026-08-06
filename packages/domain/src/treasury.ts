@@ -76,8 +76,10 @@ export const AllocationProposalSchema = z.object({
   resolvedAllocations: z.array(ResolvedAllocationSchema).min(1),
   sourceJobRef: AgenticJobRefSchema.nullable(),
   settlementTransactionRef: ArcTransactionRefSchema.nullable(),
+  sourceTrancheId: IdSchema.nullable(),
   approvalId: IdSchema.nullable(),
   approvedIntentHash: HashSchema.nullable(),
+  approvalRecord: ApprovalRecordSchema.nullable(),
   createdAt: z.string().datetime(),
   approvedAt: z.string().datetime().nullable(),
   appliedAt: z.string().datetime().nullable(),
@@ -96,6 +98,32 @@ export const IncomingTrancheSchema = z.object({
   createdAt: z.string().datetime(),
 });
 export type IncomingTranche = z.infer<typeof IncomingTrancheSchema>;
+
+const TreasuryExecutionAuthoritySchema = z.object({
+  actorType: z.enum(["SYSTEM", "ADAPTER"]),
+  actorId: IdSchema,
+});
+type TreasuryExecutionAuthority = z.infer<typeof TreasuryExecutionAuthoritySchema>;
+
+export interface TreasuryReconciliationInvariant {
+  dashboard: {
+    totalCapital: MoneyAmount;
+    confirmed: MoneyAmount;
+    escrowed: MoneyAmount;
+    allocated: MoneyAmount;
+    available: MoneyAmount;
+    unallocated: MoneyAmount;
+  };
+  ledger: {
+    totalCapital: MoneyAmount;
+    confirmed: MoneyAmount;
+    escrowed: MoneyAmount;
+    allocated: MoneyAmount;
+    available: MoneyAmount;
+    unallocated: MoneyAmount;
+  };
+  isConsistent: boolean;
+}
 
 export interface TreasurySnapshot {
   vault: LaunchVault;
@@ -124,14 +152,49 @@ function subtractSettlement(left: SettlementAmount, right: SettlementAmount): Se
 }
 
 function createIntentPayload(proposal: AllocationProposal): string {
-  const sorted = [...proposal.resolvedAllocations].sort((a, b) => a.reserveId.localeCompare(b.reserveId));
+  const sortedResolved = [...proposal.resolvedAllocations].sort((a, b) => a.reserveId.localeCompare(b.reserveId));
+  const sortedInstructions = [...proposal.instructions]
+    .map((instruction) => (instruction.kind === "FIXED"
+      ? ["FIXED", instruction.reserveId, instruction.atomicUnits]
+      : ["PERCENTAGE", instruction.reserveId, instruction.basisPoints.toString()]))
+    .sort((a, b) => {
+      const reserveOrder = a[1]!.localeCompare(b[1]!);
+      if (reserveOrder !== 0) return reserveOrder;
+      return a[0]!.localeCompare(b[0]!);
+    });
+  const sourceJob = proposal.sourceJobRef === null
+    ? null
+    : {
+      standard: proposal.sourceJobRef.standard,
+      network: proposal.sourceJobRef.network,
+      chainId: proposal.sourceJobRef.chainId,
+      contractAddress: proposal.sourceJobRef.contractAddress,
+      jobId: proposal.sourceJobRef.jobId,
+      status: proposal.sourceJobRef.status,
+      transactionHash: proposal.sourceJobRef.transaction?.transactionHash ?? null,
+      transactionStatus: proposal.sourceJobRef.transaction?.status ?? null,
+    };
+  const settlementRef = proposal.settlementTransactionRef === null
+    ? null
+    : {
+      network: proposal.settlementTransactionRef.network,
+      chainId: proposal.settlementTransactionRef.chainId,
+      transactionHash: proposal.settlementTransactionRef.transactionHash,
+      status: proposal.settlementTransactionRef.status,
+      operationType: proposal.settlementTransactionRef.operationType,
+      isMock: proposal.settlementTransactionRef.isMock,
+    };
   return JSON.stringify([
     1,
     proposal.projectId,
     proposal.vaultId,
     proposal.id,
     proposal.asset,
-    sorted.map((entry) => [entry.reserveId, entry.amount.atomicUnits]),
+    sortedInstructions,
+    sortedResolved.map((entry) => [entry.reserveId, entry.amount.atomicUnits]),
+    proposal.sourceTrancheId,
+    sourceJob,
+    settlementRef,
   ]);
 }
 
@@ -242,6 +305,7 @@ export class LaunchVaultTreasury {
   readonly #idempotency = new InMemoryIdempotencyRepository();
 
   #vault: LaunchVault;
+  readonly #executionAuthority: TreasuryExecutionAuthority;
   #reserves: Reserve[];
   #proposals = new Map<string, AllocationProposal>();
   #incomingTranches = new Map<string, IncomingTranche>();
@@ -250,9 +314,20 @@ export class LaunchVaultTreasury {
   #confirmed: SettlementAmount;
   #escrowed: SettlementAmount;
 
-  constructor(input: { vault: LaunchVault; reserves: Reserve[]; actor: Actor }) {
+  constructor(input: { vault: LaunchVault; reserves: Reserve[]; actor: Actor; executionAuthority?: TreasuryExecutionAuthority }) {
     this.#vault = LaunchVaultSchema.parse(input.vault);
     if (this.#vault.asset !== LAUNCHVAULT_SETTLEMENT_ASSET) throw new TreasuryError("UNSUPPORTED_ASSET", `Unsupported treasury asset ${this.#vault.asset}.`);
+    const initializingActor = ActorSchema.parse(input.actor);
+    const derivedAuthority =
+      input.executionAuthority ?? (
+        initializingActor.actorType === "SYSTEM" || initializingActor.actorType === "ADAPTER"
+          ? { actorType: initializingActor.actorType, actorId: initializingActor.actorId }
+          : undefined
+      );
+    if (derivedAuthority === undefined) {
+      throw new TreasuryError("INVALID_STATE", "Treasury execution authority must be explicitly configured for non-system initialization actors.");
+    }
+    this.#executionAuthority = TreasuryExecutionAuthoritySchema.parse(derivedAuthority);
     this.#reserves = input.reserves.map((reserve) => {
       const parsed = ReserveSchema.parse(reserve);
       if (parsed.vaultId !== this.#vault.id) throw new TreasuryError("INVALID_STATE", `Reserve ${parsed.id} belongs to another vault.`);
@@ -276,7 +351,7 @@ export class LaunchVaultTreasury {
       event({
         id: "audit:treasury-initialized",
         aggregateId: this.#vault.id,
-        actor: input.actor,
+        actor: initializingActor,
         occurredAt: this.#vault.createdAt,
         idempotencyKey: null,
         previousState: "NONE",
@@ -285,11 +360,107 @@ export class LaunchVaultTreasury {
     ];
   }
 
-  getSnapshot(): TreasurySnapshot {
-    const allocated = this.#reserves.reduce<SettlementAmount>((total, reserve) => addSettlement(total, reserve.allocated), amount(this.#vault.asset, "0"));
-    if (toBigInt(allocated.atomicUnits) + toBigInt(this.#escrowed.atomicUnits) > toBigInt(this.#confirmed.atomicUnits)) throw new TreasuryError("UNDERFLOW", "Allocated and escrowed capital cannot exceed confirmed capital.");
-    const available = subtractSettlement(this.#confirmed, this.#escrowed);
+  #assertAuthorizedOperator(actor: Actor): void {
+    if (actor.actorType !== this.#executionAuthority.actorType || actor.actorId !== this.#executionAuthority.actorId) {
+      throw new TreasuryError(
+        "INVALID_STATE",
+        `Treasury operation requires the exact authorized ${this.#executionAuthority.actorType} actor ${this.#executionAuthority.actorId}.`,
+      );
+    }
+  }
+
+  #computeBalances(input: {
+    reserves: readonly Reserve[];
+    confirmed: SettlementAmount;
+    escrowed: SettlementAmount;
+  }): TreasurySnapshot["balances"] {
+    const allocated = input.reserves.reduce<SettlementAmount>((total, reserve) => addSettlement(total, reserve.allocated), amount(this.#vault.asset, "0"));
+    if (toBigInt(allocated.atomicUnits) + toBigInt(input.escrowed.atomicUnits) > toBigInt(input.confirmed.atomicUnits)) {
+      throw new TreasuryError("UNDERFLOW", "Allocated and escrowed capital cannot exceed confirmed capital.");
+    }
+    const available = subtractSettlement(input.confirmed, input.escrowed);
     const unallocated = subtractSettlement(available, allocated);
+    return {
+      confirmed: structuredClone(input.confirmed),
+      escrowed: structuredClone(input.escrowed),
+      available,
+      allocated,
+      unallocated,
+    };
+  }
+
+  #deriveLedgerReconciliationInvariant(input: {
+    reserves: readonly Reserve[];
+    confirmed: SettlementAmount;
+    escrowed: SettlementAmount;
+    ledger: readonly LedgerEntry[];
+    vault: LaunchVault;
+  }): TreasuryReconciliationInvariant {
+    let ledgerConfirmedAtomic = 0n;
+    let ledgerEscrowedAtomic = 0n;
+    let ledgerAllocatedAtomic = 0n;
+    for (const entry of input.ledger.map((value) => LedgerEntrySchema.parse(value))) {
+      const atomic = toBigInt(entry.amount.atomicUnits);
+      if (entry.kind === "CAPITAL" || entry.kind === "SETTLEMENT") ledgerConfirmedAtomic += atomic;
+      if (entry.kind === "REFUND") ledgerConfirmedAtomic -= atomic;
+      if (entry.kind === "COMMITMENT") ledgerEscrowedAtomic += atomic;
+      if (entry.kind === "REVERSAL") ledgerEscrowedAtomic -= atomic;
+      if (entry.kind === "ALLOCATION") ledgerAllocatedAtomic += atomic;
+    }
+    const ledgerConfirmed = amount(this.#vault.asset, ledgerConfirmedAtomic.toString());
+    const ledgerEscrowed = amount(this.#vault.asset, ledgerEscrowedAtomic.toString());
+    const ledgerAllocated = amount(this.#vault.asset, ledgerAllocatedAtomic.toString());
+    const ledgerAvailable = subtractSettlement(ledgerConfirmed, ledgerEscrowed);
+    const ledgerUnallocated = subtractSettlement(ledgerAvailable, ledgerAllocated);
+    const dashboard = this.#computeBalances({ reserves: input.reserves, confirmed: input.confirmed, escrowed: input.escrowed });
+    const isConsistent =
+      input.vault.totalCapital.atomicUnits === input.confirmed.atomicUnits &&
+      ledgerConfirmed.atomicUnits === dashboard.confirmed.atomicUnits &&
+      ledgerEscrowed.atomicUnits === dashboard.escrowed.atomicUnits &&
+      ledgerAllocated.atomicUnits === dashboard.allocated.atomicUnits &&
+      ledgerAvailable.atomicUnits === dashboard.available.atomicUnits &&
+      ledgerUnallocated.atomicUnits === dashboard.unallocated.atomicUnits;
+    return {
+      dashboard: {
+        totalCapital: amount(this.#vault.asset, input.vault.totalCapital.atomicUnits),
+        confirmed: dashboard.confirmed,
+        escrowed: dashboard.escrowed,
+        allocated: dashboard.allocated,
+        available: dashboard.available,
+        unallocated: dashboard.unallocated,
+      },
+      ledger: {
+        totalCapital: ledgerConfirmed,
+        confirmed: ledgerConfirmed,
+        escrowed: ledgerEscrowed,
+        allocated: ledgerAllocated,
+        available: ledgerAvailable,
+        unallocated: ledgerUnallocated,
+      },
+      isConsistent,
+    };
+  }
+
+  getReconciliationInvariant(): TreasuryReconciliationInvariant {
+    return structuredClone(this.#deriveLedgerReconciliationInvariant({
+      reserves: this.#reserves,
+      confirmed: this.#confirmed,
+      escrowed: this.#escrowed,
+      ledger: this.#ledger,
+      vault: this.#vault,
+    }));
+  }
+
+  getSnapshot(): TreasurySnapshot {
+    const balances = this.#computeBalances({ reserves: this.#reserves, confirmed: this.#confirmed, escrowed: this.#escrowed });
+    const invariant = this.#deriveLedgerReconciliationInvariant({
+      reserves: this.#reserves,
+      confirmed: this.#confirmed,
+      escrowed: this.#escrowed,
+      ledger: this.#ledger,
+      vault: this.#vault,
+    });
+    if (!invariant.isConsistent) throw new TreasuryError("INVALID_STATE", "Vault totals, balances, and ledger entries are inconsistent.");
     return {
       vault: structuredClone(this.#vault),
       reserves: structuredClone(this.#reserves),
@@ -297,85 +468,97 @@ export class LaunchVaultTreasury {
       incomingTranches: [...this.#incomingTranches.values()].map((tranche) => structuredClone(tranche)),
       ledger: this.#ledger.map((entry) => structuredClone(entry)),
       audit: this.#audit.map((record) => structuredClone(record)),
-      balances: {
-        confirmed: structuredClone(this.#confirmed),
-        escrowed: structuredClone(this.#escrowed),
-        available,
-        allocated,
-        unallocated,
-      },
+      balances,
     };
   }
 
   async recordEscrowedCapital(input: { amount: MoneyAmount; actor: Actor; idempotencyKey: string; eventId: string; occurredAt: string }): Promise<void> {
+    const actor = ActorSchema.parse(input.actor);
+    this.#assertAuthorizedOperator(actor);
+    const eventId = IdSchema.parse(input.eventId);
+    const occurredAt = z.string().datetime().parse(input.occurredAt);
     const escrowAmount = SettlementMoneyAmountSchema.parse(input.amount);
     if (escrowAmount.asset !== this.#vault.asset) throw new TreasuryError("ASSET_MISMATCH", "Escrow asset mismatch.");
     const fingerprint = JSON.stringify([this.#vault.id, escrowAmount.atomicUnits]);
     await this.#idempotency.execute("escrow-record", input.idempotencyKey, fingerprint, () => {
-      if (toBigInt(addSettlement(this.#escrowed, escrowAmount).atomicUnits) > toBigInt(this.#confirmed.atomicUnits)) throw new TreasuryError("UNDERFLOW", "Escrowed capital cannot exceed confirmed capital.");
-      this.#escrowed = addSettlement(this.#escrowed, escrowAmount);
-      this.#ledger.push(
-        LedgerEntrySchema.parse({
-          id: `ledger:escrow:${input.eventId}`,
-          kind: "COMMITMENT",
-          vaultId: this.#vault.id,
-          reserveId: null,
-          amount: escrowAmount,
-          idempotencyKey: input.idempotencyKey,
-          occurredAt: input.occurredAt,
-          reversesEntryId: null,
-        }),
-      );
-      this.#audit.push(
-        event({
-          id: input.eventId,
-          aggregateId: this.#vault.id,
-          actor: input.actor,
-          occurredAt: input.occurredAt,
-          idempotencyKey: input.idempotencyKey,
-          previousState: "AVAILABLE",
-          nextState: "ESCROWED",
-        }),
-      );
+      const nextEscrowed = addSettlement(this.#escrowed, escrowAmount);
+      const currentAllocated = this.#computeBalances({ reserves: this.#reserves, confirmed: this.#confirmed, escrowed: this.#escrowed }).allocated;
+      if (toBigInt(currentAllocated.atomicUnits) + toBigInt(nextEscrowed.atomicUnits) > toBigInt(this.#confirmed.atomicUnits)) {
+        throw new TreasuryError("UNDERFLOW", "Escrowed capital cannot exceed unallocated confirmed capital.");
+      }
+      this.#computeBalances({ reserves: this.#reserves, confirmed: this.#confirmed, escrowed: nextEscrowed });
+      const nextLedgerEntry = LedgerEntrySchema.parse({
+        id: `ledger:escrow:${eventId}`,
+        kind: "COMMITMENT",
+        vaultId: this.#vault.id,
+        reserveId: null,
+        amount: escrowAmount,
+        idempotencyKey: input.idempotencyKey,
+        occurredAt,
+        reversesEntryId: null,
+      });
+      const nextAuditEvent = event({
+        id: eventId,
+        aggregateId: this.#vault.id,
+        actor,
+        occurredAt,
+        idempotencyKey: input.idempotencyKey,
+        previousState: "AVAILABLE",
+        nextState: "ESCROWED",
+      });
+      this.#escrowed = nextEscrowed;
+      this.#ledger.push(nextLedgerEntry);
+      this.#audit.push(nextAuditEvent);
       return true;
     });
   }
 
-  async releaseEscrowedCapital(input: { amount: MoneyAmount; actor: Actor; idempotencyKey: string; eventId: string; occurredAt: string; reversesEntryId?: string }): Promise<void> {
+  async releaseEscrowedCapital(input: { amount: MoneyAmount; actor: Actor; idempotencyKey: string; eventId: string; occurredAt: string; reversesEntryId: string }): Promise<void> {
+    const actor = ActorSchema.parse(input.actor);
+    this.#assertAuthorizedOperator(actor);
+    const eventId = IdSchema.parse(input.eventId);
+    const occurredAt = z.string().datetime().parse(input.occurredAt);
+    const reversesEntryId = IdSchema.parse(input.reversesEntryId);
     const releaseAmount = SettlementMoneyAmountSchema.parse(input.amount);
     if (releaseAmount.asset !== this.#vault.asset) throw new TreasuryError("ASSET_MISMATCH", "Escrow release asset mismatch.");
-    const fingerprint = JSON.stringify([this.#vault.id, releaseAmount.atomicUnits, input.reversesEntryId ?? null]);
+    const fingerprint = JSON.stringify([this.#vault.id, releaseAmount.atomicUnits, reversesEntryId]);
     await this.#idempotency.execute("escrow-release", input.idempotencyKey, fingerprint, () => {
       if (toBigInt(releaseAmount.atomicUnits) > toBigInt(this.#escrowed.atomicUnits)) throw new TreasuryError("UNDERFLOW", "Escrow release exceeds escrowed capital.");
-      const matchingCommitmentId =
-        input.reversesEntryId ??
-        [...this.#ledger].reverse().find((entry) => entry.kind === "COMMITMENT" && entry.amount.atomicUnits === releaseAmount.atomicUnits)?.id ??
-        null;
-      if (matchingCommitmentId === null) throw new TreasuryError("INVALID_TRANSITION", "Escrow release must reference an existing escrow commitment.");
-      this.#escrowed = subtractSettlement(this.#escrowed, releaseAmount);
-      this.#ledger.push(
-        LedgerEntrySchema.parse({
-          id: `ledger:escrow-release:${input.eventId}`,
-          kind: "REVERSAL",
-          vaultId: this.#vault.id,
-          reserveId: null,
-          amount: releaseAmount,
-          idempotencyKey: input.idempotencyKey,
-          occurredAt: input.occurredAt,
-          reversesEntryId: matchingCommitmentId,
-        }),
-      );
-      this.#audit.push(
-        event({
-          id: input.eventId,
-          aggregateId: this.#vault.id,
-          actor: input.actor,
-          occurredAt: input.occurredAt,
-          idempotencyKey: input.idempotencyKey,
-          previousState: "ESCROWED",
-          nextState: "AVAILABLE",
-        }),
-      );
+      const target = this.#ledger.find((entry) => entry.id === reversesEntryId);
+      if (target === undefined) throw new TreasuryError("INVALID_TRANSITION", "Escrow release target does not exist.");
+      if (target.kind !== "COMMITMENT") throw new TreasuryError("INVALID_TRANSITION", "Escrow release must reverse a COMMITMENT entry.");
+      if (target.vaultId !== this.#vault.id || target.amount.asset !== this.#vault.asset) {
+        throw new TreasuryError("INVALID_TRANSITION", "Escrow release target must belong to the same vault and asset.");
+      }
+      const relatedReversals = this.#ledger.filter((entry) => entry.kind === "REVERSAL" && entry.reversesEntryId === target.id);
+      const alreadyReversed = relatedReversals.reduce((total, entry) => total + toBigInt(entry.amount.atomicUnits), 0n);
+      const targetAtomic = toBigInt(target.amount.atomicUnits);
+      const releaseAtomic = toBigInt(releaseAmount.atomicUnits);
+      if (alreadyReversed + releaseAtomic > targetAtomic) throw new TreasuryError("UNDERFLOW", "Escrow release exceeds the remaining commitment amount.");
+      const reversalEntry = LedgerEntrySchema.parse({
+        id: `ledger:escrow-release:${eventId}`,
+        kind: "REVERSAL",
+        vaultId: this.#vault.id,
+        reserveId: null,
+        amount: releaseAmount,
+        idempotencyKey: input.idempotencyKey,
+        occurredAt,
+        reversesEntryId,
+      });
+      const nextEscrowed = subtractSettlement(this.#escrowed, releaseAmount);
+      this.#computeBalances({ reserves: this.#reserves, confirmed: this.#confirmed, escrowed: nextEscrowed });
+      const nextAuditEvent = event({
+        id: eventId,
+        aggregateId: this.#vault.id,
+        actor,
+        occurredAt,
+        idempotencyKey: input.idempotencyKey,
+        previousState: "ESCROWED",
+        nextState: "AVAILABLE",
+      });
+      this.#escrowed = nextEscrowed;
+      this.#ledger.push(reversalEntry);
+      this.#audit.push(nextAuditEvent);
       return true;
     });
   }
@@ -389,11 +572,36 @@ export class LaunchVaultTreasury {
     sourceJobRef?: z.infer<typeof AgenticJobRefSchema> | null;
     settlementTransactionRef?: ArcTransactionRef | null;
   }): AllocationProposal {
+    const actor = ActorSchema.parse(input.actor);
+    const eventId = IdSchema.parse(input.eventId);
+    const occurredAt = z.string().datetime().parse(input.occurredAt);
     if (this.#proposals.has(input.proposalId)) throw new TreasuryError("INVALID_STATE", `Proposal ${input.proposalId} already exists.`);
     const sourceJobRef = input.sourceJobRef === undefined ? null : AgenticJobRefSchema.parse(input.sourceJobRef);
     const settlementTransactionRef = input.settlementTransactionRef === undefined ? null : ArcTransactionRefSchema.parse(input.settlementTransactionRef);
-    if (settlementTransactionRef !== null && settlementTransactionRef.status !== "CONFIRMED") throw new TreasuryError("INVALID_TRANSITION", "Allocation proposals may reference only confirmed settlement transactions.");
+    if (settlementTransactionRef !== null && (settlementTransactionRef.status !== "CONFIRMED" || settlementTransactionRef.operationType !== "SETTLEMENT")) {
+      throw new TreasuryError("INVALID_TRANSITION", "Allocation proposals may reference only confirmed SETTLEMENT transactions.");
+    }
     if (sourceJobRef !== null && settlementTransactionRef === null) throw new TreasuryError("INVALID_TRANSITION", "Job-linked allocation proposals require a confirmed settlement transaction.");
+    if (settlementTransactionRef !== null && settlementTransactionRef.isMock !== (this.#vault.mode === "MOCK")) {
+      throw new TreasuryError("INVALID_STATE", "Settlement transaction mock/live mode is incompatible with the treasury vault mode.");
+    }
+    const linkedTranche = settlementTransactionRef === null
+      ? null
+      : [...this.#incomingTranches.values()].find((tranche) => (
+        tranche.vaultId === this.#vault.id &&
+        tranche.projectId === this.#vault.projectId &&
+        tranche.state === "RECONCILED" &&
+        tranche.transactionRef.transactionHash !== null &&
+        tranche.transactionRef.transactionHash === settlementTransactionRef.transactionHash
+      )) ?? null;
+    if (settlementTransactionRef !== null && linkedTranche === null) {
+      throw new TreasuryError("INVALID_STATE", "Allocation proposal settlement source must reference a persisted reconciled incoming tranche.");
+    }
+    if (sourceJobRef !== null) {
+      if (sourceJobRef.isMock !== (this.#vault.mode === "MOCK")) throw new TreasuryError("INVALID_STATE", "Source job mock/live mode is incompatible with the treasury vault mode.");
+      if (linkedTranche?.sourceJobRef === null) throw new TreasuryError("INVALID_STATE", "Job-linked allocation proposal requires matching tranche job evidence.");
+      if (linkedTranche?.sourceJobRef?.jobId !== sourceJobRef.jobId) throw new TreasuryError("INVALID_STATE", "Job-linked allocation proposal source does not match the reconciled tranche.");
+    }
 
     const unallocated = this.getSnapshot().balances.unallocated;
     const resolved = resolveAllocations({
@@ -411,25 +619,26 @@ export class LaunchVaultTreasury {
       resolvedAllocations: resolved,
       sourceJobRef,
       settlementTransactionRef,
+      sourceTrancheId: linkedTranche?.id ?? null,
       approvalId: null,
       approvedIntentHash: null,
-      createdAt: input.occurredAt,
+      approvalRecord: null,
+      createdAt: occurredAt,
       approvedAt: null,
       appliedAt: null,
     });
+    const auditRecord = event({
+      id: eventId,
+      aggregateId: proposal.id,
+      actor,
+      occurredAt,
+      idempotencyKey: null,
+      previousState: "NONE",
+      nextState: proposal.status,
+      relatedProposalId: proposal.id,
+    });
     this.#proposals.set(proposal.id, proposal);
-    this.#audit.push(
-      event({
-        id: input.eventId,
-        aggregateId: proposal.id,
-        actor: input.actor,
-        occurredAt: input.occurredAt,
-        idempotencyKey: null,
-        previousState: "NONE",
-        nextState: proposal.status,
-        relatedProposalId: proposal.id,
-      }),
-    );
+    this.#audit.push(auditRecord);
     return structuredClone(proposal);
   }
 
@@ -440,6 +649,9 @@ export class LaunchVaultTreasury {
     eventId: string;
     occurredAt: string;
   }): Promise<AllocationProposal> {
+    const actor = ActorSchema.parse(input.actor);
+    const eventId = IdSchema.parse(input.eventId);
+    const occurredAt = z.string().datetime().parse(input.occurredAt);
     const proposal = this.#proposals.get(input.proposalId);
     if (proposal === undefined) throw new TreasuryError("INVALID_STATE", `Proposal ${input.proposalId} does not exist.`);
     const approval = ApprovalRecordSchema.parse(input.approval);
@@ -452,16 +664,21 @@ export class LaunchVaultTreasury {
         approval.aggregateId !== current.id ||
         approval.actionKind !== "RELEASE_APPROVAL" ||
         approval.authorizedActorType !== "FOUNDER" ||
-        approval.authorizedActorId !== input.actor.actorId ||
+        actor.actorType !== "FOUNDER" ||
+        approval.authorizedActorId !== actor.actorId ||
         approval.decision !== "APPROVED" ||
         approval.approver?.actorType !== "FOUNDER" ||
-        approval.approver.actorId !== input.actor.actorId
+        approval.approver.actorId !== actor.actorId ||
+        approval.decidedAt === null
       ) {
         throw new TreasuryError("APPROVAL_MISMATCH", "Allocation approval must be an exact founder-approved RELEASE_APPROVAL for this proposal.");
       }
       const expiresAt = Date.parse(approval.expiresAt);
-      const occurredAt = Date.parse(input.occurredAt);
-      if (!Number.isFinite(expiresAt) || !Number.isFinite(occurredAt) || expiresAt <= occurredAt) throw new TreasuryError("INVALID_STATE", "Allocation approval is expired.");
+      const appliedAt = Date.parse(occurredAt);
+      const decidedAt = Date.parse(approval.decidedAt);
+      if (!Number.isFinite(expiresAt) || !Number.isFinite(appliedAt) || !Number.isFinite(decidedAt) || decidedAt > appliedAt || appliedAt >= expiresAt) {
+        throw new TreasuryError("INVALID_STATE", "Allocation approval chronology is invalid or expired.");
+      }
       const expectedHash = await hashAllocationProposalIntent(current);
       if (approval.exactIntentHash !== expectedHash) throw new TreasuryError("APPROVAL_MISMATCH", "Approval hash does not match the exact allocation proposal.");
       const approved = AllocationProposalSchema.parse({
@@ -469,21 +686,21 @@ export class LaunchVaultTreasury {
         status: "APPROVED",
         approvalId: approval.id,
         approvedIntentHash: expectedHash,
-        approvedAt: input.occurredAt,
+        approvalRecord: approval,
+        approvedAt: occurredAt,
+      });
+      const auditRecord = event({
+        id: eventId,
+        aggregateId: approved.id,
+        actor,
+        occurredAt,
+        idempotencyKey: approval.idempotencyKey,
+        previousState: current.status,
+        nextState: approved.status,
+        relatedProposalId: approved.id,
       });
       this.#proposals.set(approved.id, approved);
-      this.#audit.push(
-        event({
-          id: input.eventId,
-          aggregateId: approved.id,
-          actor: input.actor,
-          occurredAt: input.occurredAt,
-          idempotencyKey: approval.idempotencyKey,
-          previousState: current.status,
-          nextState: approved.status,
-          relatedProposalId: approved.id,
-        }),
-      );
+      this.#audit.push(auditRecord);
       return structuredClone(approved);
     });
   }
@@ -495,6 +712,10 @@ export class LaunchVaultTreasury {
     eventId: string;
     occurredAt: string;
   }): Promise<AllocationProposal> {
+    const actor = ActorSchema.parse(input.actor);
+    this.#assertAuthorizedOperator(actor);
+    const eventId = IdSchema.parse(input.eventId);
+    const occurredAt = z.string().datetime().parse(input.occurredAt);
     const proposal = this.#proposals.get(input.proposalId);
     if (proposal === undefined) throw new TreasuryError("INVALID_STATE", `Proposal ${input.proposalId} does not exist.`);
     const fingerprint = JSON.stringify([
@@ -508,27 +729,51 @@ export class LaunchVaultTreasury {
       const current = this.#proposals.get(input.proposalId);
       if (current === undefined) throw new TreasuryError("INVALID_STATE", `Proposal ${input.proposalId} does not exist.`);
       if (current.status !== "APPROVED") throw new TreasuryError("INVALID_STATE", `Only APPROVED allocations may be applied; current state is ${current.status}.`);
-      if (current.approvalId === null || current.approvedIntentHash === null) throw new TreasuryError("INVALID_STATE", "Approved proposal is missing approval evidence.");
+      if (current.approvalId === null || current.approvedIntentHash === null || current.approvalRecord === null) {
+        throw new TreasuryError("INVALID_STATE", "Approved proposal is missing approval evidence.");
+      }
+      const approval = ApprovalRecordSchema.parse(current.approvalRecord);
+      if (
+        approval.aggregateId !== current.id ||
+        approval.actionKind !== "RELEASE_APPROVAL" ||
+        approval.authorizedActorType !== "FOUNDER" ||
+        approval.decision !== "APPROVED" ||
+        approval.approver?.actorType !== "FOUNDER" ||
+        approval.approver.actorId !== approval.authorizedActorId ||
+        approval.decidedAt === null
+      ) {
+        throw new TreasuryError("APPROVAL_MISMATCH", "Approved proposal no longer has valid founder approval evidence.");
+      }
+      const decidedAt = Date.parse(approval.decidedAt);
+      const expiresAt = Date.parse(approval.expiresAt);
+      const appliedAt = Date.parse(occurredAt);
+      if (!Number.isFinite(decidedAt) || !Number.isFinite(expiresAt) || !Number.isFinite(appliedAt) || decidedAt > appliedAt || appliedAt >= expiresAt) {
+        throw new TreasuryError("INVALID_STATE", "Allocation approval is no longer valid at apply time.");
+      }
       const expectedHash = await hashAllocationProposalIntent(current);
-      if (current.approvedIntentHash !== expectedHash) throw new TreasuryError("PROPOSAL_ALTERED", "Approved allocation proposal no longer matches its approved intent.");
+      if (current.approvedIntentHash !== expectedHash || approval.exactIntentHash !== expectedHash) {
+        throw new TreasuryError("PROPOSAL_ALTERED", "Approved allocation proposal no longer matches its approved intent.");
+      }
 
       const total = current.resolvedAllocations.reduce<SettlementAmount>((sum, entry) => addSettlement(sum, entry.amount), amount(this.#vault.asset, "0"));
-      const balances = this.getSnapshot().balances;
+      const balances = this.#computeBalances({ reserves: this.#reserves, confirmed: this.#confirmed, escrowed: this.#escrowed });
       if (total.asset !== this.#vault.asset) throw new TreasuryError("ASSET_MISMATCH", "Allocation asset mismatch.");
       if (toBigInt(total.atomicUnits) > toBigInt(balances.unallocated.atomicUnits)) {
         throw new TreasuryError("INSUFFICIENT_AVAILABLE", "Allocation exceeds unallocated confirmed funds.");
       }
 
+      const nextReserves = this.#reserves.map((reserve) => ReserveSchema.parse(reserve));
+      const nextLedgerEntries: LedgerEntry[] = [];
       for (const entry of current.resolvedAllocations) {
-        const reserveIndex = this.#reserves.findIndex((reserve) => reserve.id === entry.reserveId);
+        const reserveIndex = nextReserves.findIndex((reserve) => reserve.id === entry.reserveId);
         if (reserveIndex < 0) throw new TreasuryError("INVALID_STATE", `Reserve ${entry.reserveId} does not exist.`);
-        const reserve = this.#reserves[reserveIndex]!;
-        this.#reserves[reserveIndex] = ReserveSchema.parse({
+        const reserve = nextReserves[reserveIndex]!;
+        nextReserves[reserveIndex] = ReserveSchema.parse({
           ...reserve,
           allocated: addSettlement(reserve.allocated, entry.amount),
           status: "ACTIVE",
         });
-        this.#ledger.push(
+        nextLedgerEntries.push(
           LedgerEntrySchema.parse({
             id: `ledger:allocation:${current.id}:${entry.reserveId}`,
             kind: "ALLOCATION",
@@ -536,26 +781,28 @@ export class LaunchVaultTreasury {
             reserveId: entry.reserveId,
             amount: entry.amount,
             idempotencyKey: input.idempotencyKey,
-            occurredAt: input.occurredAt,
+            occurredAt,
             reversesEntryId: null,
           }),
         );
       }
+      this.#computeBalances({ reserves: nextReserves, confirmed: this.#confirmed, escrowed: this.#escrowed });
 
-      const applied = AllocationProposalSchema.parse({ ...current, status: "APPLIED", appliedAt: input.occurredAt });
+      const applied = AllocationProposalSchema.parse({ ...current, status: "APPLIED", appliedAt: occurredAt });
+      const auditRecord = event({
+        id: eventId,
+        aggregateId: applied.id,
+        actor,
+        occurredAt,
+        idempotencyKey: input.idempotencyKey,
+        previousState: current.status,
+        nextState: applied.status,
+        relatedProposalId: applied.id,
+      });
+      this.#reserves = nextReserves;
+      this.#ledger.push(...nextLedgerEntries);
       this.#proposals.set(applied.id, applied);
-      this.#audit.push(
-        event({
-          id: input.eventId,
-          aggregateId: applied.id,
-          actor: input.actor,
-          occurredAt: input.occurredAt,
-          idempotencyKey: input.idempotencyKey,
-          previousState: current.status,
-          nextState: applied.status,
-          relatedProposalId: applied.id,
-        }),
-      );
+      this.#audit.push(auditRecord);
       return structuredClone(applied);
     });
   }
@@ -569,14 +816,46 @@ export class LaunchVaultTreasury {
     occurredAt: string;
     sourceJobRef?: z.infer<typeof AgenticJobRefSchema> | null;
   }): IncomingTranche {
+    const actor = ActorSchema.parse(input.actor);
+    this.#assertAuthorizedOperator(actor);
+    const eventId = IdSchema.parse(input.eventId);
+    const occurredAt = z.string().datetime().parse(input.occurredAt);
     const amountValue = SettlementMoneyAmountSchema.parse(input.amount);
     if (amountValue.asset !== this.#vault.asset) throw new TreasuryError("ASSET_MISMATCH", "Incoming tranche asset mismatch.");
     const transactionRef = ArcTransactionRefSchema.parse(input.transactionRef);
+    if (transactionRef.operationType !== "SETTLEMENT") throw new TreasuryError("INVALID_TRANSITION", "Incoming tranche evidence must use SETTLEMENT transaction type.");
+    if (!["PREPARED", "SUBMITTED", "CONFIRMED"].includes(transactionRef.status)) {
+      throw new TreasuryError("INVALID_TRANSITION", "Incoming tranche lifecycle accepts PREPARED, SUBMITTED, or CONFIRMED transaction evidence.");
+    }
+    if (transactionRef.isMock !== (this.#vault.mode === "MOCK")) throw new TreasuryError("INVALID_STATE", "Incoming tranche transaction mode is incompatible with treasury mode.");
     const sourceJobRef = input.sourceJobRef === undefined ? null : AgenticJobRefSchema.parse(input.sourceJobRef);
+    if (sourceJobRef !== null) {
+      if (sourceJobRef.isMock !== transactionRef.isMock) throw new TreasuryError("INVALID_STATE", "Incoming tranche job and transaction mode must match.");
+      if (sourceJobRef.status !== "COMPLETED" || sourceJobRef.transaction === null || sourceJobRef.transaction.status !== "CONFIRMED" || sourceJobRef.transaction.operationType !== "JOB_EVALUATE") {
+        throw new TreasuryError("INVALID_STATE", "Incoming tranche job evidence must represent a completed ERC-8183 evaluation.");
+      }
+      if (sourceJobRef.transaction.network !== transactionRef.network || sourceJobRef.transaction.chainId !== transactionRef.chainId) {
+        throw new TreasuryError("INVALID_STATE", "Incoming tranche job evidence network and chain must match settlement evidence.");
+      }
+    }
     const state = transactionRef.status === "CONFIRMED" ? "CONFIRMED" : "PENDING_CONFIRMATION";
     const current = this.#incomingTranches.get(input.trancheId);
     if (current !== undefined && current.state === "RECONCILED") throw new TreasuryError("INVALID_STATE", "Reconciled tranches cannot be modified.");
-    if (current !== undefined && current.amount.atomicUnits !== amountValue.atomicUnits) throw new TreasuryError("INVALID_STATE", "Tranche amount cannot be altered.");
+    if (current !== undefined) {
+      if (current.projectId !== this.#vault.projectId || current.vaultId !== this.#vault.id) throw new TreasuryError("INVALID_STATE", "Incoming tranche target must preserve project and vault identity.");
+      if (current.amount.atomicUnits !== amountValue.atomicUnits) throw new TreasuryError("INVALID_STATE", "Tranche amount cannot be altered.");
+      if (current.amount.asset !== amountValue.asset) throw new TreasuryError("INVALID_STATE", "Tranche asset cannot be altered.");
+      if (current.transactionRef.operationType !== transactionRef.operationType) throw new TreasuryError("INVALID_STATE", "Tranche transaction type cannot be altered.");
+      if (current.transactionRef.isMock !== transactionRef.isMock) throw new TreasuryError("INVALID_STATE", "Tranche mock/live mode cannot be altered.");
+      const rank = (status: ArcTransactionRef["status"]): number => ({ NONE: 0, FAILED: 0, PREPARED: 1, SUBMITTED: 2, CONFIRMED: 3 })[status] ?? 0;
+      if (rank(transactionRef.status) < rank(current.transactionRef.status)) throw new TreasuryError("INVALID_TRANSITION", "Incoming tranche status cannot move backward.");
+      if (current.transactionRef.transactionHash !== null && transactionRef.transactionHash !== current.transactionRef.transactionHash) {
+        throw new TreasuryError("INVALID_STATE", "Incoming tranche transaction hash cannot be substituted.");
+      }
+      const currentJobId = current.sourceJobRef?.jobId ?? null;
+      const nextJobId = sourceJobRef?.jobId ?? null;
+      if (currentJobId !== nextJobId) throw new TreasuryError("INVALID_STATE", "Incoming tranche source job cannot be substituted.");
+    }
 
     const tranche = IncomingTrancheSchema.parse({
       id: input.trancheId,
@@ -587,22 +866,21 @@ export class LaunchVaultTreasury {
       sourceJobRef,
       state,
       reconciledAt: null,
-      createdAt: current?.createdAt ?? input.occurredAt,
+      createdAt: current?.createdAt ?? occurredAt,
+    });
+    const auditRecord = event({
+      id: eventId,
+      aggregateId: tranche.id,
+      actor,
+      occurredAt,
+      idempotencyKey: null,
+      previousState: current?.state ?? "NONE",
+      nextState: tranche.state,
+      relatedTrancheId: tranche.id,
+      relatedTransactionHash: tranche.transactionRef.transactionHash,
     });
     this.#incomingTranches.set(tranche.id, tranche);
-    this.#audit.push(
-      event({
-        id: input.eventId,
-        aggregateId: tranche.id,
-        actor: input.actor,
-        occurredAt: input.occurredAt,
-        idempotencyKey: null,
-        previousState: current?.state ?? "NONE",
-        nextState: tranche.state,
-        relatedTrancheId: tranche.id,
-        relatedTransactionHash: tranche.transactionRef.transactionHash,
-      }),
-    );
+    this.#audit.push(auditRecord);
     return structuredClone(tranche);
   }
 
@@ -613,6 +891,10 @@ export class LaunchVaultTreasury {
     eventId: string;
     occurredAt: string;
   }): Promise<IncomingTranche> {
+    const actor = ActorSchema.parse(input.actor);
+    this.#assertAuthorizedOperator(actor);
+    const eventId = IdSchema.parse(input.eventId);
+    const occurredAt = z.string().datetime().parse(input.occurredAt);
     const tranche = this.#incomingTranches.get(input.trancheId);
     if (tranche === undefined) throw new TreasuryError("INVALID_STATE", `Tranche ${input.trancheId} does not exist.`);
     const fingerprint = JSON.stringify([tranche.id, tranche.amount.atomicUnits, tranche.transactionRef.transactionHash]);
@@ -621,34 +903,50 @@ export class LaunchVaultTreasury {
       const current = this.#incomingTranches.get(input.trancheId);
       if (current === undefined) throw new TreasuryError("INVALID_STATE", `Tranche ${input.trancheId} does not exist.`);
       if (current.state !== "CONFIRMED") throw new TreasuryError("INVALID_TRANSITION", "Only CONFIRMED tranches can be reconciled.");
-      this.#confirmed = addSettlement(this.#confirmed, current.amount);
-      const reconciled = IncomingTrancheSchema.parse({ ...current, state: "RECONCILED", reconciledAt: input.occurredAt });
+      if (current.transactionRef.operationType !== "SETTLEMENT" || current.transactionRef.status !== "CONFIRMED") {
+        throw new TreasuryError("INVALID_TRANSITION", "Only confirmed SETTLEMENT tranche evidence may be reconciled.");
+      }
+      const nextConfirmed = addSettlement(this.#confirmed, current.amount);
+      const nextVault = LaunchVaultSchema.parse({
+        ...this.#vault,
+        totalCapital: addSettlement(this.#vault.totalCapital, current.amount),
+      });
+      this.#computeBalances({ reserves: this.#reserves, confirmed: nextConfirmed, escrowed: this.#escrowed });
+      const reconciled = IncomingTrancheSchema.parse({ ...current, state: "RECONCILED", reconciledAt: occurredAt });
+      const settlementEntry = LedgerEntrySchema.parse({
+        id: `ledger:tranche:${reconciled.id}`,
+        kind: "SETTLEMENT",
+        vaultId: this.#vault.id,
+        reserveId: null,
+        amount: reconciled.amount,
+        idempotencyKey: input.idempotencyKey,
+        occurredAt,
+        reversesEntryId: null,
+      });
+      const auditRecord = event({
+        id: eventId,
+        aggregateId: reconciled.id,
+        actor,
+        occurredAt,
+        idempotencyKey: input.idempotencyKey,
+        previousState: current.state,
+        nextState: reconciled.state,
+        relatedTrancheId: reconciled.id,
+        relatedTransactionHash: reconciled.transactionRef.transactionHash,
+      });
+      const invariant = this.#deriveLedgerReconciliationInvariant({
+        reserves: this.#reserves,
+        confirmed: nextConfirmed,
+        escrowed: this.#escrowed,
+        ledger: [...this.#ledger, settlementEntry],
+        vault: nextVault,
+      });
+      if (!invariant.isConsistent) throw new TreasuryError("INVALID_STATE", "Tranche reconciliation would create inconsistent ledger and balances.");
+      this.#confirmed = nextConfirmed;
+      this.#vault = nextVault;
       this.#incomingTranches.set(reconciled.id, reconciled);
-      this.#ledger.push(
-        LedgerEntrySchema.parse({
-          id: `ledger:tranche:${reconciled.id}`,
-          kind: "SETTLEMENT",
-          vaultId: this.#vault.id,
-          reserveId: null,
-          amount: reconciled.amount,
-          idempotencyKey: input.idempotencyKey,
-          occurredAt: input.occurredAt,
-          reversesEntryId: null,
-        }),
-      );
-      this.#audit.push(
-        event({
-          id: input.eventId,
-          aggregateId: reconciled.id,
-          actor: input.actor,
-          occurredAt: input.occurredAt,
-          idempotencyKey: input.idempotencyKey,
-          previousState: current.state,
-          nextState: reconciled.state,
-          relatedTrancheId: reconciled.id,
-          relatedTransactionHash: reconciled.transactionRef.transactionHash,
-        }),
-      );
+      this.#ledger.push(settlementEntry);
+      this.#audit.push(auditRecord);
       return structuredClone(reconciled);
     });
   }
