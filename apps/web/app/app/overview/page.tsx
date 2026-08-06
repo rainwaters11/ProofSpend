@@ -12,7 +12,6 @@ import { buildReleaseScenario } from "@/lib/release-scenario";
  */
 export default function OverviewPage() {
   const scenario = buildReleaseScenario();
-  const satisfiedRequirementIds = new Set(scenario.requirements.map((requirement) => requirement.id));
 
   return (
     <div className="flex max-w-5xl flex-col gap-6">
@@ -46,10 +45,7 @@ export default function OverviewPage() {
         </div>
       </div>
 
-      <RequirementChecklist
-        requirements={scenario.requirements}
-        satisfiedRequirementIds={satisfiedRequirementIds}
-      />
+      <RequirementChecklist requirements={scenario.requirements} />
 
       <div className="flex flex-col gap-3">
         <h2 className="text-lg font-semibold text-foreground">Current milestone</h2>

@@ -314,7 +314,10 @@ const LIFECYCLE_KEYS: ReleaseLifecycleState[] = [
 
 export function buildReleaseScenario(): ReleaseScenario {
   const seed = createPawPovAiSeed();
-  const milestone: Milestone = { ...seed.milestone, status: "APPROVED" };
+  // seed.milestone.status is INCOMPLETE — the Milestone Engine (Issue #4)
+  // that would compute a real ELIGIBLE/APPROVED/REJECTED status does not
+  // exist yet, so this demo never overrides it with a fabricated status.
+  const milestone: Milestone = seed.milestone;
   const requirements = seed.requirements;
 
   const evidence: ReleaseEvidenceRef[] = [

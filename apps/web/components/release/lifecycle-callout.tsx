@@ -14,15 +14,20 @@ interface CalloutConfig {
   description: ReactNode;
 }
 
-function calloutFor(state: ReleaseLifecycleState, reconciliation: ReconciliationRecord | null): CalloutConfig | null {
+function calloutFor(
+  state: ReleaseLifecycleState,
+  reconciliation: ReconciliationRecord | null,
+  isMock: boolean,
+): CalloutConfig | null {
   switch (state) {
     case "SUBMITTED":
       return {
         icon: Clock,
         tone: "warning",
-        title: "Pending — submitted to Arc Testnet",
-        description:
-          "The transaction has been broadcast and is waiting for block confirmation. Funds are not yet available to the recipient.",
+        title: isMock ? "Pending — synthetic submission recorded" : "Pending — submitted to Arc Testnet",
+        description: isMock
+          ? "This mock scenario has advanced to a synthetic \"submitted\" state — no transaction was broadcast to Arc Testnet. Funds are not, and were never, available to the recipient in this demonstration."
+          : "The transaction has been broadcast and is waiting for block confirmation. Funds are not yet available to the recipient.",
       };
     case "REJECTED":
       return {
@@ -36,16 +41,18 @@ function calloutFor(state: ReleaseLifecycleState, reconciliation: Reconciliation
         icon: AlertOctagon,
         tone: "destructive",
         title: "Failed",
-        description:
-          "The prepared or submitted transaction did not reach a confirmed state on Arc Testnet. No funds were transferred; a new attempt requires a fresh prepared transaction.",
+        description: isMock
+          ? "This mock scenario represents a failed outcome — no real prepared or submitted transaction ever existed on Arc Testnet. No funds were transferred in this demonstration."
+          : "The prepared or submitted transaction did not reach a confirmed state on Arc Testnet. No funds were transferred; a new attempt requires a fresh prepared transaction.",
       };
     case "RECONCILED":
       return {
         icon: Sparkles,
         tone: "success",
         title: "Reconciled",
-        description:
-          reconciliation?.result === "MATCHED"
+        description: isMock
+          ? "This mock scenario represents a matched reconciliation between a synthetic transaction and settlement record — no real Arc Testnet transaction exists."
+          : reconciliation?.result === "MATCHED"
             ? "The confirmed Arc Testnet transaction and the internal settlement record match exactly. This release is closed out."
             : "Reconciliation is recorded but did not match — this requires manual review before it can close out.",
       };
@@ -69,11 +76,17 @@ const ICON_TONE_CLASSES: Record<CalloutConfig["tone"], string> = {
 interface LifecycleCalloutProps {
   state: ReleaseLifecycleState;
   reconciliation: ReconciliationRecord | null;
+  isMock: boolean;
 }
 
-/** Makes pending and failure states impossible to miss, not just implied by a badge (AGENTS.md UI rules). */
-export function LifecycleCallout({ state, reconciliation }: LifecycleCalloutProps) {
-  const config = calloutFor(state, reconciliation);
+/**
+ * Makes pending and failure states impossible to miss, not just implied by a
+ * badge (AGENTS.md UI rules). Copy must not claim a real Arc Testnet
+ * broadcast/confirmation for mock data — the MOCK badge elsewhere on the
+ * page does not license an unconditional protocol claim in this text.
+ */
+export function LifecycleCallout({ state, reconciliation, isMock }: LifecycleCalloutProps) {
+  const config = calloutFor(state, reconciliation, isMock);
   if (!config) return null;
 
   const Icon = config.icon;

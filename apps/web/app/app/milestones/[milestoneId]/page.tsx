@@ -45,9 +45,15 @@ export default async function MilestoneDetailPage({
   searchParams: Promise<{ state?: string }>;
 }) {
   const { milestoneId: rawMilestoneId } = await params;
-  const milestoneId = decodeURIComponent(rawMilestoneId);
   const { state: requestedState } = await searchParams;
   const scenario = buildReleaseScenario();
+
+  let milestoneId: string;
+  try {
+    milestoneId = decodeURIComponent(rawMilestoneId);
+  } catch {
+    milestoneId = rawMilestoneId;
+  }
 
   if (milestoneId !== scenario.milestone.id) {
     return (
@@ -65,7 +71,6 @@ export default async function MilestoneDetailPage({
     ? requestedState
     : "APPROVAL_PENDING";
   const snapshot = scenario.snapshots[activeState];
-  const satisfiedRequirementIds = new Set(scenario.requirements.map((requirement) => requirement.id));
 
   return (
     <div className="flex max-w-5xl flex-col gap-6">
@@ -88,12 +93,13 @@ export default async function MilestoneDetailPage({
         <ReleaseLifecycleTimeline current={activeState} />
       </div>
 
-      <LifecycleCallout state={activeState} reconciliation={snapshot.reconciliation} />
-
-      <RequirementChecklist
-        requirements={scenario.requirements}
-        satisfiedRequirementIds={satisfiedRequirementIds}
+      <LifecycleCallout
+        state={activeState}
+        reconciliation={snapshot.reconciliation}
+        isMock={snapshot.transaction?.arcTransaction?.isMock ?? true}
       />
+
+      <RequirementChecklist requirements={scenario.requirements} />
 
       <ReleaseRequestCard
         release={snapshot.release}

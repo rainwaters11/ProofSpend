@@ -16,9 +16,17 @@ export function ExplorerLink({ transactionHash, explorerUrl, isMock }: ExplorerL
     return <span className="text-sm text-muted-foreground">No transaction hash yet</span>;
   }
 
-  if (isMock || explorerUrl === null) {
+  if (isMock) {
     return (
       <span className="break-all font-mono text-sm text-muted-foreground" title="Synthetic mock reference, not a live Arc Testnet transaction">
+        {transactionHash}
+      </span>
+    );
+  }
+
+  if (explorerUrl === null) {
+    return (
+      <span className="break-all font-mono text-sm text-foreground" title="Live Arc Testnet transaction hash; no explorer link is available yet">
         {transactionHash}
       </span>
     );
