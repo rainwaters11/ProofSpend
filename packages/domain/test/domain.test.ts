@@ -8,6 +8,7 @@ import {
   LedgerEntrySchema, MilestoneRequirementSchema, MilestoneSchema, type ArcTransactionRef, type LedgerEntry,
   MockAgenticJobAdapter, MockIdentityAdapter, MockWalletReferenceAdapter, money, MoneyAmountSchema, MoneyError,
   RecoveryOperationRecordSchema, ReleaseRequestSchema, ReserveSchema, SettlementMoneyAmountSchema, SettlementRecordSchema, JobRefundOperationRecordSchema, SubmissionOperationRecordSchema, subtractMoney,
+  LaunchVaultTreasury, TreasuryAllocationRoundingPolicy, TreasuryError, hashAllocationProposalIntent,
   ReconciliationRecordSchema, TransactionRecordSchema, transitionAgenticJob, transitionApplication, transitionApplicationSubmission,
   hashCanonicalExecutionIntent, hashJobParameterCommitment, serializeCanonicalExecutionIntent, validateExecutionAuthorization, validateLedgerReversal, validateReconciliation, validateReleaseConfirmation,
 } from "../src";
@@ -1222,4 +1223,1010 @@ describe("PawPOVAI seed", () => {
   });
   it("rejects a vault whose declared asset differs from its total capital", () => { const seed = createPawPovAiSeed(); expect(() => LaunchVaultSchema.parse({ ...seed.vault, asset: "EURC" })).toThrow(); });
   it.each(["EURC", "ETH", "TOKEN"])("rejects %s milestone proposal amounts", (asset: string) => { const seed = createPawPovAiSeed(); expect(() => MilestoneSchema.parse({ ...seed.milestone, proposedAmount: money(asset, "1") })).toThrow(); });
+});
+
+describe("LaunchVault treasury MVP slice", () => {
+  const founder = { actorId: "founder:fictional", actorType: "FOUNDER" as const };
+  const authorizedSystem = { actorId: "system:authorized", actorType: "SYSTEM" as const };
+  const unauthorizedSystem = { actorId: "system:other", actorType: "SYSTEM" as const };
+  const authorizedAdapter = { actorId: "adapter:authorized", actorType: "ADAPTER" as const };
+  const unauthorizedAdapter = { actorId: "adapter:other", actorType: "ADAPTER" as const };
+  const unauthorizedActors = [
+    { actorId: "ai:agent", actorType: "AI" as const },
+    { actorId: "backer:1", actorType: "BACKER" as const },
+    founder,
+    { actorId: "evaluator:1", actorType: "EVALUATOR" as const },
+    unauthorizedSystem,
+    unauthorizedAdapter,
+  ];
+  const setup = (mode: "MOCK" | "ARC_TESTNET" = "MOCK", authority: { actorType: "SYSTEM" | "ADAPTER"; actorId: string } = authorizedSystem) => {
+    const seed = createPawPovAiSeed();
+    const vault = LaunchVaultSchema.parse({ ...seed.vault, mode, totalCapital: mode === "ARC_TESTNET" ? usdc("0") : seed.vault.totalCapital });
+    const emptyReserves = seed.reserves.map((reserve) => ReserveSchema.parse({
+      id: reserve.id,
+      vaultId: reserve.vaultId,
+      name: reserve.name,
+      allocated: usdc("0"),
+      status: "PROPOSED",
+    }));
+    return {
+      seed,
+      treasury: new LaunchVaultTreasury({
+        vault,
+        reserves: emptyReserves,
+        actor: authorizedSystem,
+        executionAuthority: authority,
+        founderAuthority: founder,
+      }),
+    };
+  };
+  const buildApproval = async (proposal: ReturnType<LaunchVaultTreasury["createAllocationProposal"]>, overrides: Partial<ReturnType<typeof ApprovalRecordSchema.parse>> = {}) => ApprovalRecordSchema.parse({
+    id: `approval:${proposal.id}`,
+    aggregateId: proposal.id,
+    intentId: `intent:${proposal.id}`,
+    actionKind: "RELEASE_APPROVAL",
+    authorizedActorType: "FOUNDER",
+    authorizedActorId: founder.actorId,
+    exactIntentHash: await hashAllocationProposalIntent(proposal),
+    idempotencyKey: `approval:${proposal.id}:key`,
+    decision: "APPROVED",
+    approver: founder,
+    expiresAt: "2027-01-01T00:00:00.000Z",
+    decidedAt: context.occurredAt,
+    ...overrides,
+  });
+  const expectNoMutation = async (treasury: LaunchVaultTreasury, action: () => Promise<unknown> | unknown) => {
+    const before = treasury.getSnapshot();
+    let threw = false;
+    try {
+      await action();
+    } catch {
+      threw = true;
+    }
+    expect(threw).toBe(true);
+    expect(treasury.getSnapshot()).toEqual(before);
+  };
+
+  it("keeps the seeded vault at exactly 1,000 test USDC atomic units and five reserve categories", () => {
+    const { seed, treasury } = setup();
+    expect(seed.vault.totalCapital.atomicUnits).toBe("1000000000");
+    const names = treasury.getSnapshot().reserves.map((reserve) => reserve.name).sort();
+    expect(names).toEqual(["Contingency", "InvestFest travel", "Marketing", "Operations", "Product and platform"]);
+  });
+
+  it("initializes only from empty PROPOSED reserve definitions without changing the canonical seed", () => {
+    const seed = createPawPovAiSeed();
+    const emptyReserves = seed.reserves.map((reserve) => ReserveSchema.parse({
+      id: reserve.id,
+      vaultId: reserve.vaultId,
+      name: reserve.name,
+      allocated: usdc("0"),
+      status: "PROPOSED",
+    }));
+    const treasury = new LaunchVaultTreasury({
+      vault: seed.vault,
+      reserves: emptyReserves,
+      actor: authorizedSystem,
+      founderAuthority: founder,
+    });
+    expect(treasury.getSnapshot().reserves).toEqual(emptyReserves);
+    expect(seed.reserves.map((reserve) => reserve.allocated.atomicUnits)).toEqual([
+      "350000000", "250000000", "200000000", "100000000", "100000000",
+    ]);
+
+    for (const invalidReserve of [
+      { ...emptyReserves[0]!, allocated: usdc("1") },
+      { ...emptyReserves[0]!, status: "ACTIVE" as const },
+      { ...emptyReserves[0]!, status: "CLOSED" as const },
+    ]) {
+      expect(() => new LaunchVaultTreasury({
+        vault: seed.vault,
+        reserves: [invalidReserve, ...emptyReserves.slice(1)],
+        actor: authorizedSystem,
+        founderAuthority: founder,
+      })).toThrow(TreasuryError);
+      expect(invalidReserve).not.toEqual(emptyReserves[0]);
+    }
+    expect(() => new LaunchVaultTreasury({
+      vault: seed.vault,
+      reserves: [emptyReserves[0]!, emptyReserves[0]!, ...emptyReserves.slice(2)],
+      actor: authorizedSystem,
+      founderAuthority: founder,
+    })).toThrow(/defined more than once/);
+  });
+
+  it("requires explicit adapter authority for Arc Testnet while preserving mock system accounting", () => {
+    const seed = createPawPovAiSeed();
+    const reserves = seed.reserves.map((reserve) => ReserveSchema.parse({ ...reserve, allocated: usdc("0"), status: "PROPOSED" }));
+    expect(() => new LaunchVaultTreasury({ vault: seed.vault, reserves, actor: authorizedSystem, founderAuthority: founder })).not.toThrow();
+    const liveVaultWithSeedCapital = LaunchVaultSchema.parse({ ...seed.vault, mode: "ARC_TESTNET" });
+    expect(() => new LaunchVaultTreasury({ vault: liveVaultWithSeedCapital, reserves, actor: authorizedSystem, executionAuthority: authorizedAdapter, founderAuthority: founder })).toThrow(/must start at zero confirmed capital/);
+    const liveVault = LaunchVaultSchema.parse({ ...seed.vault, mode: "ARC_TESTNET", totalCapital: usdc("0") });
+    expect(() => new LaunchVaultTreasury({ vault: liveVault, reserves, actor: authorizedSystem, founderAuthority: founder })).toThrow(/explicitly configured/);
+    expect(() => new LaunchVaultTreasury({ vault: liveVault, reserves, actor: authorizedSystem, executionAuthority: authorizedSystem, founderAuthority: founder })).toThrow(/explicit ADAPTER/);
+    const treasury = new LaunchVaultTreasury({ vault: liveVault, reserves, actor: authorizedSystem, executionAuthority: authorizedAdapter, founderAuthority: founder });
+    expect(() => treasury.recordIncomingTranche({ trancheId: "tranche:wrong-adapter", amount: usdc("1"), transactionRef: liveTransaction, actor: unauthorizedAdapter, eventId: "audit:wrong-adapter", occurredAt: context.occurredAt })).toThrow(/exact authorized ADAPTER/);
+  });
+
+  it("normalizes null and undefined allocation source references as absent", () => {
+    const { treasury } = setup();
+    const create = (proposalId: string, sourceJobRef: null | undefined, settlementTransactionRef: null | undefined) => treasury.createAllocationProposal({
+      proposalId,
+      instructions: [{ reserveId: "reserve:marketing", kind: "FIXED", atomicUnits: "1" }],
+      actor: founder,
+      eventId: `audit:${proposalId}`,
+      occurredAt: context.occurredAt,
+      sourceJobRef,
+      settlementTransactionRef,
+    });
+    expect(create("proposal:null-sources", null, null)).toMatchObject({ sourceJobRef: null, settlementTransactionRef: null });
+    expect(create("proposal:undefined-sources", undefined, undefined)).toMatchObject({ sourceJobRef: null, settlementTransactionRef: null });
+  });
+
+  it("keeps unapproved proposals from mutating active reserves and supports deterministic percentage rounding", () => {
+    const { treasury } = setup();
+    expect(TreasuryAllocationRoundingPolicy).toContain("largest remainder");
+    const proposal = treasury.createAllocationProposal({
+      proposalId: "proposal:percent",
+      instructions: [
+        { reserveId: "reserve:product", kind: "FIXED", atomicUnits: "1" },
+        { reserveId: "reserve:marketing", kind: "PERCENTAGE", basisPoints: 3333 },
+        { reserveId: "reserve:travel", kind: "PERCENTAGE", basisPoints: 3333 },
+        { reserveId: "reserve:operations", kind: "PERCENTAGE", basisPoints: 3334 },
+      ],
+      actor: founder,
+      eventId: "audit:proposal:percent",
+      occurredAt: context.occurredAt,
+    });
+    expect(proposal.status).toBe("PROPOSED");
+    expect(proposal.resolvedAllocations.map((entry) => [entry.reserveId, entry.amount.atomicUnits])).toEqual([
+      ["reserve:marketing", "333300000"],
+      ["reserve:operations", "333399999"],
+      ["reserve:product", "1"],
+      ["reserve:travel", "333300000"],
+    ]);
+    expect(treasury.getSnapshot().reserves.every((reserve) => reserve.allocated.atomicUnits === "0")).toBe(true);
+  });
+
+  it("accepts zero fixed and zero-percentage instructions while rejecting percentage totals above 100%", () => {
+    const { treasury } = setup();
+    const proposal = treasury.createAllocationProposal({
+      proposalId: "proposal:zero",
+      instructions: [
+        { reserveId: "reserve:product", kind: "FIXED", atomicUnits: "0" },
+        { reserveId: "reserve:marketing", kind: "PERCENTAGE", basisPoints: 0 },
+      ],
+      actor: founder,
+      eventId: "audit:proposal:zero",
+      occurredAt: context.occurredAt,
+    });
+    expect(proposal.resolvedAllocations.map((entry) => entry.amount.atomicUnits)).toEqual(["0", "0"]);
+    expect(() => treasury.createAllocationProposal({
+      proposalId: "proposal:too-much-percent",
+      instructions: [
+        { reserveId: "reserve:marketing", kind: "PERCENTAGE", basisPoints: 5001 },
+        { reserveId: "reserve:operations", kind: "PERCENTAGE", basisPoints: 5000 },
+      ],
+      actor: founder,
+      eventId: "audit:proposal:too-much-percent",
+      occurredAt: context.occurredAt,
+    })).toThrow(/Percentage allocation cannot exceed 100%/);
+  });
+
+  it("keeps mutations atomic when malformed event metadata or actor payload is provided", async () => {
+    const { treasury } = setup();
+    await expectNoMutation(treasury, () => treasury.recordEscrowedCapital({
+      amount: usdc("1"),
+      actor: authorizedSystem,
+      idempotencyKey: "escrow:malformed-time",
+      eventId: "audit:escrow:malformed-time",
+      occurredAt: "not-a-timestamp",
+    }));
+    await expectNoMutation(treasury, () => treasury.recordEscrowedCapital({
+      amount: usdc("1"),
+      actor: { actorId: "system:authorized", actorType: "INVALID" } as never,
+      idempotencyKey: "escrow:malformed-actor",
+      eventId: "audit:escrow:malformed-actor",
+      occurredAt: context.occurredAt,
+    }));
+    await expectNoMutation(treasury, () => treasury.createAllocationProposal({
+      proposalId: "proposal:bad-event",
+      instructions: [{ reserveId: "reserve:marketing", kind: "FIXED", atomicUnits: "1" }],
+      actor: founder,
+      eventId: "",
+      occurredAt: context.occurredAt,
+    }));
+  });
+
+  it("rejects duplicate escrow audit and ledger identities before financial mutation", async () => {
+    const { treasury } = setup();
+    await treasury.recordEscrowedCapital({
+      amount: usdc("10"),
+      actor: authorizedSystem,
+      idempotencyKey: "escrow:duplicate:first",
+      eventId: "audit:escrow:duplicate",
+      occurredAt: context.occurredAt,
+    });
+    await expectNoMutation(treasury, () => treasury.recordEscrowedCapital({
+      amount: usdc("5"),
+      actor: authorizedSystem,
+      idempotencyKey: "escrow:duplicate:second",
+      eventId: "audit:escrow:duplicate",
+      occurredAt: context.occurredAt,
+    }));
+    expect(treasury.getSnapshot().balances.escrowed.atomicUnits).toBe("10");
+  });
+
+  it("enforces exact operator authority for apply, escrow, tranche recording, and reconciliation", async () => {
+    const { treasury } = setup("MOCK", authorizedSystem);
+    const proposal = treasury.createAllocationProposal({
+      proposalId: "proposal:authority",
+      instructions: [{ reserveId: "reserve:marketing", kind: "FIXED", atomicUnits: "1" }],
+      actor: founder,
+      eventId: "audit:proposal:authority",
+      occurredAt: context.occurredAt,
+    });
+
+    await treasury.approveAllocationProposal({
+      proposalId: proposal.id,
+      approval: await buildApproval(proposal),
+      actor: founder,
+      eventId: "audit:approval:authority",
+      occurredAt: context.occurredAt,
+    });
+    treasury.recordIncomingTranche({
+      trancheId: "tranche:authority",
+      amount: usdc("1"),
+      transactionRef: mockTransaction("PREPARED", "SETTLEMENT"),
+      actor: authorizedSystem,
+      eventId: "audit:tranche:authority",
+      occurredAt: context.occurredAt,
+    });
+    for (const actor of unauthorizedActors) {
+      await expect(treasury.recordEscrowedCapital({ amount: usdc("1"), actor, idempotencyKey: `escrow:authority:${actor.actorType}`, eventId: `audit:escrow:authority:${actor.actorType}`, occurredAt: context.occurredAt })).rejects.toThrow(/exact authorized/);
+      await expect(treasury.applyApprovedProposal({ proposalId: proposal.id, actor, idempotencyKey: `apply:authority:${actor.actorType}`, eventId: `audit:apply:authority:${actor.actorType}`, occurredAt: context.occurredAt })).rejects.toThrow(/exact authorized/);
+      expect(() => treasury.recordIncomingTranche({ trancheId: `tranche:unauthorized:${actor.actorType}`, amount: usdc("1"), transactionRef: mockTransaction("PREPARED", "SETTLEMENT"), actor, eventId: `audit:tranche:unauthorized:${actor.actorType}`, occurredAt: context.occurredAt })).toThrow(/exact authorized/);
+      await expect(treasury.reconcileConfirmedTranche({ trancheId: "tranche:authority", actor, idempotencyKey: `reconcile:authority:${actor.actorType}`, eventId: `audit:reconcile:authority:${actor.actorType}`, occurredAt: context.occurredAt })).rejects.toThrow(/exact authorized/);
+    }
+  });
+
+  it("binds allocation approval authority to the configured founder ID", async () => {
+    const { treasury } = setup();
+    const proposal = treasury.createAllocationProposal({
+      proposalId: "proposal:founder-authority",
+      instructions: [{ reserveId: "reserve:marketing", kind: "FIXED", atomicUnits: "1" }],
+      actor: founder,
+      eventId: "audit:proposal:founder-authority",
+      occurredAt: context.occurredAt,
+    });
+    const unrelatedFounder = { actorId: "founder:other", actorType: "FOUNDER" as const };
+    await expect(treasury.approveAllocationProposal({
+      proposalId: proposal.id,
+      approval: await buildApproval(proposal, {
+        authorizedActorId: unrelatedFounder.actorId,
+        approver: unrelatedFounder,
+      }),
+      actor: unrelatedFounder,
+      eventId: "audit:approval:founder-authority:unrelated",
+      occurredAt: context.occurredAt,
+    })).rejects.toThrow(/exact authorized FOUNDER actor/);
+  });
+
+  it("allows exactly one concurrent approval for a proposal", async () => {
+    const { treasury } = setup();
+    const proposal = treasury.createAllocationProposal({
+      proposalId: "proposal:concurrent-approval",
+      instructions: [{ reserveId: "reserve:marketing", kind: "FIXED", atomicUnits: "10" }],
+      actor: founder,
+      eventId: "audit:proposal:concurrent-approval",
+      occurredAt: context.occurredAt,
+    });
+    const firstApproval = await buildApproval(proposal, { id: "approval:concurrent:first", idempotencyKey: "approval:concurrent:first:key" });
+    const secondApproval = await buildApproval(proposal, { id: "approval:concurrent:second", idempotencyKey: "approval:concurrent:second:key" });
+    const settled = await Promise.allSettled([
+      treasury.approveAllocationProposal({ proposalId: proposal.id, approval: firstApproval, actor: founder, eventId: "audit:approval:concurrent:first", occurredAt: context.occurredAt }),
+      treasury.approveAllocationProposal({ proposalId: proposal.id, approval: secondApproval, actor: founder, eventId: "audit:approval:concurrent:second", occurredAt: context.occurredAt }),
+    ]);
+    expect(settled.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    expect(settled.filter((result) => result.status === "rejected")).toHaveLength(1);
+    expect(treasury.getSnapshot().audit.filter((entry) => entry.details.nextState === "APPROVED")).toHaveLength(1);
+  });
+
+  it("rejects founder approvals decided before their proposal existed", async () => {
+    const { treasury } = setup();
+    const proposal = treasury.createAllocationProposal({
+      proposalId: "proposal:predated-approval",
+      instructions: [{ reserveId: "reserve:marketing", kind: "FIXED", atomicUnits: "10" }],
+      actor: founder,
+      eventId: "audit:proposal:predated-approval",
+      occurredAt: "2026-01-02T00:00:00.000Z",
+    });
+    await expect(treasury.approveAllocationProposal({
+      proposalId: proposal.id,
+      approval: await buildApproval(proposal, { decidedAt: "2026-01-01T00:00:00.000Z" }),
+      actor: founder,
+      eventId: "audit:approval:predated-approval",
+      occurredAt: "2026-01-02T00:00:00.000Z",
+    })).rejects.toThrow(/chronology is invalid/);
+    expect(treasury.getSnapshot().proposals.find((entry) => entry.id === proposal.id)?.status).toBe("PROPOSED");
+  });
+
+  it("allows exactly one concurrent application and applies balances and ledger entries once", async () => {
+    const { treasury } = setup();
+    const proposal = treasury.createAllocationProposal({
+      proposalId: "proposal:concurrent-application",
+      instructions: [{ reserveId: "reserve:marketing", kind: "FIXED", atomicUnits: "10" }],
+      actor: founder,
+      eventId: "audit:proposal:concurrent-application",
+      occurredAt: context.occurredAt,
+    });
+    await treasury.approveAllocationProposal({
+      proposalId: proposal.id,
+      approval: await buildApproval(proposal),
+      actor: founder,
+      eventId: "audit:approval:concurrent-application",
+      occurredAt: context.occurredAt,
+    });
+    const settled = await Promise.allSettled([
+      treasury.applyApprovedProposal({ proposalId: proposal.id, actor: authorizedSystem, idempotencyKey: "apply:concurrent:first", eventId: "audit:apply:concurrent:first", occurredAt: context.occurredAt }),
+      treasury.applyApprovedProposal({ proposalId: proposal.id, actor: authorizedSystem, idempotencyKey: "apply:concurrent:second", eventId: "audit:apply:concurrent:second", occurredAt: context.occurredAt }),
+    ]);
+    expect(settled.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    expect(settled.filter((result) => result.status === "rejected")).toHaveLength(1);
+    const snapshot = treasury.getSnapshot();
+    expect(snapshot.reserves.find((reserve) => reserve.id === "reserve:marketing")?.allocated.atomicUnits).toBe("10");
+    expect(snapshot.ledger.filter((entry) => entry.kind === "ALLOCATION" && entry.reserveId === "reserve:marketing")).toHaveLength(1);
+  });
+
+  it("prevents allocated-plus-escrow overcommit against confirmed capital", async () => {
+    const { treasury } = setup();
+    const proposal = treasury.createAllocationProposal({
+      proposalId: "proposal:allocated",
+      instructions: [{ reserveId: "reserve:marketing", kind: "FIXED", atomicUnits: "900000000" }],
+      actor: founder,
+      eventId: "audit:proposal:allocated",
+      occurredAt: context.occurredAt,
+    });
+    await treasury.approveAllocationProposal({ proposalId: proposal.id, approval: await buildApproval(proposal), actor: founder, eventId: "audit:approval:allocated", occurredAt: context.occurredAt });
+    await treasury.applyApprovedProposal({ proposalId: proposal.id, actor: authorizedSystem, idempotencyKey: "apply:allocated", eventId: "audit:apply:allocated", occurredAt: context.occurredAt });
+    await expect(treasury.recordEscrowedCapital({ amount: usdc("100000001"), actor: authorizedSystem, idempotencyKey: "escrow:overcommit", eventId: "audit:escrow:overcommit", occurredAt: context.occurredAt })).rejects.toThrow(/cannot exceed unallocated confirmed capital/);
+  });
+
+  it("requires explicit, valid escrow reversal targets and preserves append-only history", async () => {
+    const { treasury: treasuryA } = setup();
+    const { treasury: treasuryB } = setup();
+    await treasuryA.recordEscrowedCapital({ amount: usdc("10"), actor: authorizedSystem, idempotencyKey: "escrow:record:a", eventId: "audit:escrow:record:a", occurredAt: context.occurredAt });
+    await treasuryA.recordEscrowedCapital({ amount: usdc("5"), actor: authorizedSystem, idempotencyKey: "escrow:record:b", eventId: "audit:escrow:record:b", occurredAt: context.occurredAt });
+    await treasuryA.recordEscrowedCapital({ amount: usdc("10"), actor: authorizedSystem, idempotencyKey: "escrow:record:c", eventId: "audit:escrow:record:c", occurredAt: context.occurredAt });
+    await treasuryB.recordEscrowedCapital({ amount: usdc("1"), actor: authorizedSystem, idempotencyKey: "escrow:record:other", eventId: "audit:escrow:record:other", occurredAt: context.occurredAt });
+    const commitmentA = treasuryA.getSnapshot().ledger.find((entry) => entry.id === "ledger:escrow:audit:escrow:record:a");
+    const commitmentB = treasuryA.getSnapshot().ledger.find((entry) => entry.id === "ledger:escrow:audit:escrow:record:b");
+    if (commitmentA === undefined || commitmentB === undefined) throw new Error("Missing staged commitments.");
+    await expect(treasuryA.releaseEscrowedCapital({ amount: usdc("1"), actor: authorizedSystem, idempotencyKey: "escrow:release:missing", eventId: "audit:escrow:release:missing", occurredAt: context.occurredAt, reversesEntryId: "ledger:missing" })).rejects.toThrow(/target does not exist/);
+    await expect(treasuryA.releaseEscrowedCapital({ amount: money("EURC", "1"), actor: authorizedSystem, idempotencyKey: "escrow:release:wrong-asset", eventId: "audit:escrow:release:wrong-asset", occurredAt: context.occurredAt, reversesEntryId: commitmentA.id })).rejects.toThrow();
+    await expect(treasuryA.releaseEscrowedCapital({ amount: usdc("1"), actor: authorizedSystem, idempotencyKey: "escrow:release:wrong-target", eventId: "audit:escrow:release:wrong-target", occurredAt: context.occurredAt, reversesEntryId: "ledger:seed-capital" })).rejects.toThrow(/must reverse a COMMITMENT/);
+    await expect(treasuryB.releaseEscrowedCapital({ amount: usdc("1"), actor: authorizedSystem, idempotencyKey: "escrow:release:wrong-vault", eventId: "audit:escrow:release:wrong-vault", occurredAt: context.occurredAt, reversesEntryId: commitmentA.id })).rejects.toThrow(/target does not exist/);
+    await treasuryA.releaseEscrowedCapital({ amount: usdc("4"), actor: authorizedSystem, idempotencyKey: "escrow:release:partial", eventId: "audit:escrow:release:partial", occurredAt: context.occurredAt, reversesEntryId: commitmentA.id });
+    await expectNoMutation(treasuryA, () => treasuryA.releaseEscrowedCapital({ amount: usdc("1"), actor: authorizedSystem, idempotencyKey: "escrow:release:duplicate-event", eventId: "audit:escrow:release:partial", occurredAt: context.occurredAt, reversesEntryId: commitmentA.id }));
+    await treasuryA.releaseEscrowedCapital({ amount: usdc("6"), actor: authorizedSystem, idempotencyKey: "escrow:release:full", eventId: "audit:escrow:release:full", occurredAt: context.occurredAt, reversesEntryId: commitmentA.id });
+    await expect(treasuryA.releaseEscrowedCapital({ amount: usdc("1"), actor: authorizedSystem, idempotencyKey: "escrow:release:double", eventId: "audit:escrow:release:double", occurredAt: context.occurredAt, reversesEntryId: commitmentA.id })).rejects.toThrow(/remaining commitment amount/);
+    await expect(treasuryA.releaseEscrowedCapital({ amount: usdc("6"), actor: authorizedSystem, idempotencyKey: "escrow:release:over", eventId: "audit:escrow:release:over", occurredAt: context.occurredAt, reversesEntryId: commitmentB.id })).rejects.toThrow(/remaining commitment amount/);
+    const reversals = treasuryA.getSnapshot().ledger.filter((entry) => entry.kind === "REVERSAL");
+    expect(reversals).toHaveLength(2);
+    expect(reversals.every((entry) => entry.reversesEntryId === commitmentA.id)).toBe(true);
+  });
+
+  it("requires reconciled settlement evidence for proposal sources and preserves source job/transaction references", async () => {
+    const { treasury } = setup();
+    expect(() => treasury.createAllocationProposal({
+      proposalId: "proposal:raw-settlement",
+      instructions: [{ reserveId: "reserve:marketing", kind: "FIXED", atomicUnits: "1" }],
+      actor: founder,
+      eventId: "audit:proposal:raw-settlement",
+      occurredAt: context.occurredAt,
+      settlementTransactionRef: mockTransaction("CONFIRMED", "SETTLEMENT"),
+    })).toThrow(/explicit reconciled tranche ID|persisted reconciled incoming tranche/);
+    const job = AgenticJobRefSchema.parse({ ...mockJob("COMPLETED", mockTransaction("CONFIRMED", "JOB_EVALUATE")), budget: usdc("250000000") });
+    treasury.recordIncomingTranche({
+      trancheId: "tranche:settlement-source",
+      amount: usdc("250000000"),
+      transactionRef: mockTransaction("PREPARED", "SETTLEMENT"),
+      sourceJobRef: job,
+      actor: authorizedSystem,
+      eventId: "audit:tranche:settlement-source:prepared",
+      occurredAt: context.occurredAt,
+    });
+    treasury.recordIncomingTranche({
+      trancheId: "tranche:settlement-source",
+      amount: usdc("250000000"),
+      transactionRef: { ...mockTransaction("SUBMITTED", "SETTLEMENT"), transactionHash: "mock:transaction:settlement-source" },
+      sourceJobRef: job,
+      actor: authorizedSystem,
+      eventId: "audit:tranche:settlement-source:submitted",
+      occurredAt: context.occurredAt,
+    });
+    treasury.recordIncomingTranche({
+      trancheId: "tranche:settlement-source",
+      amount: usdc("250000000"),
+      transactionRef: { ...mockTransaction("CONFIRMED", "SETTLEMENT"), transactionHash: "mock:transaction:settlement-source" },
+      sourceJobRef: job,
+      actor: authorizedSystem,
+      eventId: "audit:tranche:settlement-source:confirmed",
+      occurredAt: context.occurredAt,
+    });
+    await treasury.reconcileConfirmedTranche({ trancheId: "tranche:settlement-source", actor: authorizedSystem, idempotencyKey: "reconcile:settlement-source", eventId: "audit:reconcile:settlement-source", occurredAt: context.occurredAt });
+    const proposal = treasury.createAllocationProposal({
+      proposalId: "proposal:settlement-source",
+      instructions: [{ reserveId: "reserve:marketing", kind: "FIXED", atomicUnits: "1" }],
+      actor: founder,
+      eventId: "audit:proposal:settlement-source",
+      occurredAt: context.occurredAt,
+      sourceTrancheId: "tranche:settlement-source",
+      settlementTransactionRef: { ...mockTransaction("CONFIRMED", "SETTLEMENT"), transactionHash: "mock:transaction:settlement-source" },
+      sourceJobRef: job,
+    });
+    expect(proposal.sourceTrancheId).toBe("tranche:settlement-source");
+    expect(proposal.sourceJobRef?.jobId).toBe(job.jobId);
+    expect(() => treasury.createAllocationProposal({
+      proposalId: "proposal:wrong-job",
+      instructions: [{ reserveId: "reserve:marketing", kind: "FIXED", atomicUnits: "1" }],
+      actor: founder,
+      eventId: "audit:proposal:wrong-job",
+      occurredAt: context.occurredAt,
+      sourceTrancheId: "tranche:settlement-source",
+      settlementTransactionRef: { ...mockTransaction("CONFIRMED", "SETTLEMENT"), transactionHash: "mock:transaction:settlement-source" },
+      sourceJobRef: AgenticJobRefSchema.parse({ ...job, jobId: "mock:job:other" }),
+    })).toThrow(/does not match the reconciled tranche/);
+  });
+
+  it("bounds allocation provenance to one reconciled source tranche without changing unsourced budgets", async () => {
+    const { treasury } = setup();
+    const settlement = { ...mockTransaction("CONFIRMED", "SETTLEMENT"), transactionHash: "mock:transaction:provenance" };
+    treasury.recordIncomingTranche({
+      trancheId: "tranche:provenance",
+      amount: usdc("100"),
+      transactionRef: mockTransaction("PREPARED", "SETTLEMENT"),
+      actor: authorizedSystem,
+      eventId: "audit:tranche:provenance:prepared",
+      occurredAt: context.occurredAt,
+    });
+    treasury.recordIncomingTranche({
+      trancheId: "tranche:provenance",
+      amount: usdc("100"),
+      transactionRef: { ...mockTransaction("SUBMITTED", "SETTLEMENT"), transactionHash: settlement.transactionHash },
+      actor: authorizedSystem,
+      eventId: "audit:tranche:provenance:submitted",
+      occurredAt: context.occurredAt,
+    });
+    treasury.recordIncomingTranche({
+      trancheId: "tranche:provenance",
+      amount: usdc("100"),
+      transactionRef: settlement,
+      actor: authorizedSystem,
+      eventId: "audit:tranche:provenance:confirmed",
+      occurredAt: context.occurredAt,
+    });
+    await treasury.reconcileConfirmedTranche({ trancheId: "tranche:provenance", actor: authorizedSystem, idempotencyKey: "reconcile:provenance", eventId: "audit:reconcile:provenance", occurredAt: context.occurredAt });
+
+    expect(() => treasury.createAllocationProposal({
+      proposalId: "proposal:provenance:over",
+      instructions: [{ reserveId: "reserve:marketing", kind: "FIXED", atomicUnits: "600" }],
+      actor: founder,
+      eventId: "audit:proposal:provenance:over",
+      occurredAt: context.occurredAt,
+      sourceTrancheId: "tranche:provenance",
+      settlementTransactionRef: settlement,
+    })).toThrow(/exceed/);
+    const sourced = treasury.createAllocationProposal({
+      proposalId: "proposal:provenance:bounded",
+      instructions: [{ reserveId: "reserve:marketing", kind: "FIXED", atomicUnits: "100" }],
+      actor: founder,
+      eventId: "audit:proposal:provenance:bounded",
+      occurredAt: context.occurredAt,
+      sourceTrancheId: "tranche:provenance",
+      settlementTransactionRef: settlement,
+    });
+    expect(sourced.resolvedAllocations[0]?.amount.atomicUnits).toBe("100");
+    expect(() => treasury.createAllocationProposal({
+      proposalId: "proposal:provenance:reuse",
+      instructions: [{ reserveId: "reserve:travel", kind: "FIXED", atomicUnits: "1" }],
+      actor: founder,
+      eventId: "audit:proposal:provenance:reuse",
+      occurredAt: context.occurredAt,
+      sourceTrancheId: "tranche:provenance",
+      settlementTransactionRef: settlement,
+    })).toThrow(/already bound/);
+
+    const unsourced = treasury.createAllocationProposal({
+      proposalId: "proposal:unsourced:normal-budget",
+      instructions: [{ reserveId: "reserve:operations", kind: "FIXED", atomicUnits: "600" }],
+      actor: founder,
+      eventId: "audit:proposal:unsourced:normal-budget",
+      occurredAt: context.occurredAt,
+    });
+    expect(unsourced.resolvedAllocations[0]?.amount.atomicUnits).toBe("600");
+  });
+
+  it("rejects non-SETTLEMENT tranche transactions and rejects downgrade/hash/source substitution", async () => {
+    const { treasury } = setup();
+    expect(() => treasury.recordIncomingTranche({
+      trancheId: "tranche:refund",
+      amount: usdc("1"),
+      transactionRef: mockTransaction("CONFIRMED", "REFUND"),
+      actor: authorizedSystem,
+      eventId: "audit:tranche:refund",
+      occurredAt: context.occurredAt,
+    })).toThrow(/SETTLEMENT transaction type/);
+    expect(() => treasury.recordIncomingTranche({
+      trancheId: "tranche:fresh-submitted",
+      amount: usdc("1"),
+      transactionRef: { ...mockTransaction("SUBMITTED", "SETTLEMENT"), transactionHash: "mock:transaction:fresh-submitted" },
+      actor: authorizedSystem,
+      eventId: "audit:tranche:fresh-submitted",
+      occurredAt: context.occurredAt,
+    })).toThrow(/must start in PREPARED state/);
+    expect(() => treasury.recordIncomingTranche({
+      trancheId: "tranche:fresh-confirmed",
+      amount: usdc("1"),
+      transactionRef: { ...mockTransaction("CONFIRMED", "SETTLEMENT"), transactionHash: "mock:transaction:fresh-confirmed" },
+      actor: authorizedSystem,
+      eventId: "audit:tranche:fresh-confirmed",
+      occurredAt: context.occurredAt,
+    })).toThrow(/must start in PREPARED state/);
+    const prepared = treasury.recordIncomingTranche({
+      trancheId: "tranche:progression",
+      amount: usdc("10"),
+      transactionRef: mockTransaction("PREPARED", "SETTLEMENT"),
+      actor: authorizedSystem,
+      eventId: "audit:tranche:prepared",
+      occurredAt: context.occurredAt,
+    });
+    expect(prepared.state).toBe("PREPARED");
+    expect(prepared.state).not.toBe("SUBMITTED");
+    const submitted = treasury.recordIncomingTranche({
+      trancheId: "tranche:progression",
+      amount: usdc("10"),
+      transactionRef: {
+  ...mockTransaction("SUBMITTED", "SETTLEMENT"),
+  transactionHash: "mock:transaction:progression",
+},
+      actor: authorizedSystem,
+      eventId: "audit:tranche:submitted",
+      occurredAt: context.occurredAt,
+    });
+    expect(submitted.state).toBe("SUBMITTED");
+    expect(treasury.getSnapshot().audit).toContainEqual(expect.objectContaining({
+      details: expect.objectContaining({ previousState: "PREPARED", nextState: "SUBMITTED" }),
+    }));
+    expect(() => treasury.recordIncomingTranche({
+      trancheId: "tranche:progression",
+      amount: usdc("10"),
+      transactionRef: mockTransaction("PREPARED", "SETTLEMENT"),
+      actor: authorizedSystem,
+      eventId: "audit:tranche:downgrade",
+      occurredAt: context.occurredAt,
+    })).toThrow(/cannot move backward/);
+    await expectNoMutation(treasury, () => treasury.recordIncomingTranche({
+      trancheId: "tranche:progression",
+      amount: usdc("10"),
+      transactionRef: { ...mockTransaction("SUBMITTED", "SETTLEMENT"), chainId: "mock:other-chain", transactionHash: "mock:transaction:progression" },
+      actor: authorizedSystem,
+      eventId: "audit:tranche:cross-chain",
+      occurredAt: context.occurredAt,
+    }));
+    expect(() => treasury.recordIncomingTranche({
+      trancheId: "tranche:progression",
+      amount: usdc("10"),
+      transactionRef: { ...mockTransaction("CONFIRMED", "SETTLEMENT"), transactionHash: "mock:other-hash" },
+      actor: authorizedSystem,
+      eventId: "audit:tranche:hash-substitution",
+      occurredAt: context.occurredAt,
+    })).toThrow(/cannot be substituted/);
+    const confirmed = treasury.recordIncomingTranche({
+      trancheId: "tranche:progression",
+      amount: usdc("10"),
+      transactionRef: { ...mockTransaction("CONFIRMED", "SETTLEMENT"), transactionHash: "mock:transaction:progression" },
+      actor: authorizedSystem,
+      eventId: "audit:tranche:confirmed",
+      occurredAt: context.occurredAt,
+    });
+    expect(confirmed.state).toBe("CONFIRMED");
+    treasury.recordIncomingTranche({
+      trancheId: "tranche:confirmed-freeze",
+      amount: usdc("7"),
+      transactionRef: mockTransaction("PREPARED", "SETTLEMENT"),
+      actor: authorizedSystem,
+      eventId: "audit:tranche:confirmed-freeze:prepared",
+      occurredAt: context.occurredAt,
+    });
+    treasury.recordIncomingTranche({
+      trancheId: "tranche:confirmed-freeze",
+      amount: usdc("7"),
+      transactionRef: {
+        ...mockTransaction("SUBMITTED", "SETTLEMENT"),
+        transactionHash: "mock:transaction:confirmed-freeze",
+      },
+      actor: authorizedSystem,
+      eventId: "audit:tranche:confirmed-freeze:submitted",
+      occurredAt: context.occurredAt,
+    });
+    treasury.recordIncomingTranche({
+      trancheId: "tranche:confirmed-freeze",
+      amount: usdc("7"),
+      transactionRef: {
+        ...mockTransaction("CONFIRMED", "SETTLEMENT"),
+        transactionHash: "mock:transaction:confirmed-freeze",
+      },
+      actor: authorizedSystem,
+      eventId: "audit:tranche:confirmed-freeze:confirmed",
+      occurredAt: context.occurredAt,
+    });
+    expect(() => treasury.recordIncomingTranche({
+      trancheId: "tranche:confirmed-freeze",
+      amount: usdc("7"),
+      transactionRef: {
+  ...mockTransaction("CONFIRMED", "SETTLEMENT"),
+  transactionHash: "mock:transaction:confirmed-freeze",
+  blockNumber: "2",
+},
+      actor: authorizedSystem,
+      eventId: "audit:tranche:confirmed-freeze:altered",
+      occurredAt: context.occurredAt,
+    })).toThrow(/cannot be altered/);
+    const sourceJob = AgenticJobRefSchema.parse({ ...mockJob("COMPLETED", mockTransaction("CONFIRMED", "JOB_EVALUATE")), budget: usdc("10") });
+    treasury.recordIncomingTranche({
+      trancheId: "tranche:job-source",
+      amount: usdc("10"),
+      transactionRef: mockTransaction("PREPARED", "SETTLEMENT"),
+      sourceJobRef: sourceJob,
+      actor: authorizedSystem,
+      eventId: "audit:tranche:job-source",
+      occurredAt: context.occurredAt,
+    });
+    expect(() => treasury.recordIncomingTranche({
+      trancheId: "tranche:job-source",
+      amount: usdc("10"),
+     transactionRef: {
+  ...mockTransaction("SUBMITTED", "SETTLEMENT"),
+  transactionHash: "mock:transaction:job-source",
+},
+      sourceJobRef: AgenticJobRefSchema.parse({ ...sourceJob, jobId: "mock:job:changed" }),
+      actor: authorizedSystem,
+      eventId: "audit:tranche:job-substitution",
+      occurredAt: context.occurredAt,
+    })).toThrow(/source job evidence cannot be substituted/);
+    expect(() => treasury.recordIncomingTranche({
+      trancheId: "tranche:job-source",
+      amount: usdc("10"),
+      transactionRef: {
+  ...mockTransaction("SUBMITTED", "SETTLEMENT"),
+  transactionHash: "mock:transaction:job-source",
+},
+      sourceJobRef: AgenticJobRefSchema.parse({ ...sourceJob, budget: usdc("9") }),
+      actor: authorizedSystem,
+      eventId: "audit:tranche:job-substitution:budget",
+      occurredAt: context.occurredAt,
+    })).toThrow(/must exactly match source job budget/);
+    expect(() => treasury.recordIncomingTranche({
+      trancheId: "tranche:job-amount-mismatch",
+      amount: usdc("11"),
+      transactionRef: mockTransaction("PREPARED", "SETTLEMENT"),
+      sourceJobRef: sourceJob,
+      actor: authorizedSystem,
+      eventId: "audit:tranche:job-amount-mismatch",
+      occurredAt: context.occurredAt,
+    })).toThrow(/must exactly match source job budget/);
+  });
+
+  it("rejects duplicate settlement transaction hashes across tranche IDs", async () => {
+    const { treasury } = setup();
+    treasury.recordIncomingTranche({
+      trancheId: "tranche:hash-a",
+      amount: usdc("5"),
+      transactionRef: mockTransaction("PREPARED", "SETTLEMENT"),
+      actor: authorizedSystem,
+      eventId: "audit:tranche:hash-a:prepared",
+      occurredAt: context.occurredAt,
+    });
+    treasury.recordIncomingTranche({
+      trancheId: "tranche:hash-a",
+      amount: usdc("5"),
+      transactionRef: { ...mockTransaction("SUBMITTED", "SETTLEMENT"), transactionHash: "mock:transaction:hash-a" },
+      actor: authorizedSystem,
+      eventId: "audit:tranche:hash-a:submitted",
+      occurredAt: context.occurredAt,
+    });
+    treasury.recordIncomingTranche({
+      trancheId: "tranche:hash-a",
+      amount: usdc("5"),
+      transactionRef: { ...mockTransaction("CONFIRMED", "SETTLEMENT"), transactionHash: "mock:transaction:hash-a" },
+      actor: authorizedSystem,
+      eventId: "audit:tranche:hash-a:confirmed",
+      occurredAt: context.occurredAt,
+    });
+    await treasury.reconcileConfirmedTranche({
+      trancheId: "tranche:hash-a",
+      actor: authorizedSystem,
+      idempotencyKey: "reconcile:hash-a",
+      eventId: "audit:reconcile:hash-a",
+      occurredAt: context.occurredAt,
+    });
+    expect(() => treasury.recordIncomingTranche({
+      trancheId: "tranche:hash-b",
+      amount: usdc("5"),
+      transactionRef: mockTransaction("PREPARED", "SETTLEMENT"),
+      actor: authorizedSystem,
+      eventId: "audit:tranche:hash-b:prepared",
+      occurredAt: context.occurredAt,
+    })).not.toThrow();
+    expect(() => treasury.recordIncomingTranche({
+      trancheId: "tranche:hash-b",
+      amount: usdc("5"),
+      transactionRef: { ...mockTransaction("SUBMITTED", "SETTLEMENT"), transactionHash: "mock:transaction:hash-a" },
+      actor: authorizedSystem,
+      eventId: "audit:tranche:hash-b",
+      occurredAt: context.occurredAt,
+    })).toThrow(/already bound to another tranche/);
+  });
+
+  it("deduplicates settlement transaction hashes using canonical casing", () => {
+    const { treasury } = setup();
+    const lowercaseHash = `mock:transaction:0x${"ab".repeat(32)}`;
+    const uppercaseHash = `mock:transaction:0x${"AB".repeat(32)}`;
+    treasury.recordIncomingTranche({
+      trancheId: "tranche:canonical-hash-a",
+      amount: usdc("5"),
+      transactionRef: mockTransaction("PREPARED", "SETTLEMENT"),
+      actor: authorizedSystem,
+      eventId: "audit:tranche:canonical-hash-a:prepared",
+      occurredAt: context.occurredAt,
+    });
+    treasury.recordIncomingTranche({
+      trancheId: "tranche:canonical-hash-a",
+      amount: usdc("5"),
+      transactionRef: {
+        ...mockTransaction("SUBMITTED", "SETTLEMENT"),
+        transactionHash: lowercaseHash,
+      },
+      actor: authorizedSystem,
+      eventId: "audit:tranche:canonical-hash-a",
+      occurredAt: context.occurredAt,
+    });
+    expect(() => treasury.recordIncomingTranche({
+      trancheId: "tranche:canonical-hash-b",
+      amount: usdc("5"),
+      transactionRef: mockTransaction("PREPARED", "SETTLEMENT"),
+      actor: authorizedSystem,
+      eventId: "audit:tranche:canonical-hash-b:prepared",
+      occurredAt: context.occurredAt,
+    })).not.toThrow();
+    expect(() => treasury.recordIncomingTranche({
+      trancheId: "tranche:canonical-hash-b",
+      amount: usdc("5"),
+      transactionRef: {
+        ...mockTransaction("SUBMITTED", "SETTLEMENT"),
+        transactionHash: uppercaseHash,
+      },
+      actor: authorizedSystem,
+      eventId: "audit:tranche:canonical-hash-b",
+      occurredAt: context.occurredAt,
+    })).toThrow(/already bound to another tranche/);
+  });
+
+  it("persists failed incoming tranche evidence without allowing reconciliation", async () => {
+    const { treasury } = setup();
+    treasury.recordIncomingTranche({
+      trancheId: "tranche:failed",
+      amount: usdc("5"),
+      transactionRef: mockTransaction("PREPARED", "SETTLEMENT"),
+      actor: authorizedSystem,
+      eventId: "audit:tranche:failed:prepared",
+      occurredAt: context.occurredAt,
+    });
+    treasury.recordIncomingTranche({
+      trancheId: "tranche:failed",
+      amount: usdc("5"),
+      transactionRef: { ...mockTransaction("SUBMITTED", "SETTLEMENT"), transactionHash: "mock:transaction:failed" },
+      actor: authorizedSystem,
+      eventId: "audit:tranche:failed:submitted",
+      occurredAt: context.occurredAt,
+    });
+    const failed = treasury.recordIncomingTranche({
+      trancheId: "tranche:failed",
+      amount: usdc("5"),
+      transactionRef: { ...mockTransaction("FAILED", "SETTLEMENT"), transactionHash: "mock:transaction:failed" },
+      actor: authorizedSystem,
+      eventId: "audit:tranche:failed",
+      occurredAt: context.occurredAt,
+    });
+    expect(failed.state).toBe("FAILED");
+    expect(treasury.getSnapshot().incomingTranches).toContainEqual(failed);
+    expect(() => treasury.recordIncomingTranche({
+      trancheId: failed.id,
+      amount: failed.amount,
+      transactionRef: { ...mockTransaction("CONFIRMED", "SETTLEMENT"), transactionHash: "mock:transaction:failed" },
+      actor: authorizedSystem,
+      eventId: "audit:tranche:failed:terminal",
+      occurredAt: context.occurredAt,
+    })).toThrow(/Failed tranches cannot be modified/);
+    await expect(treasury.reconcileConfirmedTranche({
+      trancheId: failed.id,
+      actor: authorizedSystem,
+      idempotencyKey: "reconcile:failed",
+      eventId: "audit:reconcile:failed",
+      occurredAt: context.occurredAt,
+    })).rejects.toThrow(/Only CONFIRMED tranches/);
+  });
+
+  it("revalidates approval chronology and exact intent at apply time", async () => {
+    const { treasury } = setup();
+    const proposal = treasury.createAllocationProposal({
+      proposalId: "proposal:expired-approval",
+      instructions: [{ reserveId: "reserve:marketing", kind: "FIXED", atomicUnits: "10" }],
+      actor: founder,
+      eventId: "audit:proposal:expired-approval",
+      occurredAt: "2025-12-30T00:00:00.000Z",
+    });
+    await treasury.approveAllocationProposal({
+      proposalId: proposal.id,
+      approval: await buildApproval(proposal, { expiresAt: "2026-01-01T00:00:00.000Z", decidedAt: "2025-12-31T00:00:00.000Z" }),
+      actor: founder,
+      eventId: "audit:approval:expired-approval",
+      occurredAt: "2025-12-31T00:00:00.000Z",
+    });
+    await expect(treasury.applyApprovedProposal({
+      proposalId: proposal.id,
+      actor: authorizedSystem,
+      idempotencyKey: "apply:expired-approval",
+      eventId: "audit:apply:expired-approval",
+      occurredAt: "2026-01-01T00:00:00.000Z",
+    })).rejects.toThrow(/no longer valid at apply time/);
+  });
+
+  it("applies all five PawPOVAI reserve allocations exactly once with idempotent duplicate protection", async () => {
+    const { treasury } = setup();
+    const proposal = treasury.createAllocationProposal({
+      proposalId: "proposal:five-reserves",
+      instructions: [
+        { reserveId: "reserve:product", kind: "FIXED", atomicUnits: "300000000" },
+        { reserveId: "reserve:marketing", kind: "FIXED", atomicUnits: "200000000" },
+        { reserveId: "reserve:travel", kind: "FIXED", atomicUnits: "100000000" },
+        { reserveId: "reserve:operations", kind: "FIXED", atomicUnits: "250000000" },
+        { reserveId: "reserve:contingency", kind: "FIXED", atomicUnits: "150000000" },
+      ],
+      actor: founder,
+      eventId: "audit:proposal:five-reserves",
+      occurredAt: context.occurredAt,
+    });
+    await treasury.approveAllocationProposal({ proposalId: proposal.id, approval: await buildApproval(proposal), actor: founder, eventId: "audit:approval:five-reserves", occurredAt: context.occurredAt });
+    const first = await treasury.applyApprovedProposal({ proposalId: proposal.id, actor: authorizedSystem, idempotencyKey: "apply:five-reserves", eventId: "audit:apply:five-reserves", occurredAt: context.occurredAt });
+    const duplicate = await treasury.applyApprovedProposal({ proposalId: proposal.id, actor: authorizedSystem, idempotencyKey: "apply:five-reserves", eventId: "audit:apply:five-reserves:duplicate", occurredAt: context.occurredAt });
+    expect(first).toEqual(duplicate);
+    await expect(treasury.applyApprovedProposal({ proposalId: proposal.id, actor: authorizedSystem, idempotencyKey: "apply:five-reserves:other", eventId: "audit:apply:five-reserves:other", occurredAt: context.occurredAt })).rejects.toThrow();
+    expect(treasury.getSnapshot().reserves.map((reserve) => reserve.allocated.atomicUnits)).toEqual(["300000000", "200000000", "100000000", "250000000", "150000000"]);
+  });
+
+  it("keeps tranche reconciliation idempotent and keeps vault totals aligned with ledger-derived balances", async () => {
+    const { treasury } = setup();
+    treasury.recordIncomingTranche({
+      trancheId: "tranche:reconcile",
+      amount: usdc("250000000"),
+      transactionRef: mockTransaction("PREPARED", "SETTLEMENT"),
+      actor: authorizedSystem,
+      eventId: "audit:tranche:reconcile:prepared",
+      occurredAt: context.occurredAt,
+    });
+    treasury.recordIncomingTranche({
+      trancheId: "tranche:reconcile",
+      amount: usdc("250000000"),
+      transactionRef: { ...mockTransaction("SUBMITTED", "SETTLEMENT"), transactionHash: "mock:transaction:reconcile" },
+      actor: authorizedSystem,
+      eventId: "audit:tranche:reconcile:submitted",
+      occurredAt: context.occurredAt,
+    });
+    treasury.recordIncomingTranche({
+      trancheId: "tranche:reconcile",
+      amount: usdc("250000000"),
+      transactionRef: { ...mockTransaction("CONFIRMED", "SETTLEMENT"), transactionHash: "mock:transaction:reconcile" },
+      actor: authorizedSystem,
+      eventId: "audit:tranche:reconcile:confirmed",
+      occurredAt: context.occurredAt,
+    });
+    const reconciled = await treasury.reconcileConfirmedTranche({ trancheId: "tranche:reconcile", actor: authorizedSystem, idempotencyKey: "reconcile:key", eventId: "audit:reconcile:key", occurredAt: context.occurredAt });
+    const duplicate = await treasury.reconcileConfirmedTranche({ trancheId: "tranche:reconcile", actor: authorizedSystem, idempotencyKey: "reconcile:key", eventId: "audit:reconcile:key:duplicate", occurredAt: context.occurredAt });
+    expect(reconciled).toEqual(duplicate);
+    expect(() => treasury.recordIncomingTranche({
+      trancheId: reconciled.id,
+      amount: reconciled.amount,
+      transactionRef: reconciled.transactionRef,
+      actor: authorizedSystem,
+      eventId: "audit:tranche:reconciled:terminal",
+      occurredAt: context.occurredAt,
+    })).toThrow(/Reconciled tranches cannot be modified/);
+    const snapshot = treasury.getSnapshot();
+    expect(snapshot.vault.totalCapital.atomicUnits).toBe("1250000000");
+    expect(snapshot.balances.confirmed.atomicUnits).toBe("1250000000");
+    const invariant = treasury.getReconciliationInvariant();
+    expect(invariant.isConsistent).toBe(true);
+    expect(invariant.dashboard.totalCapital.atomicUnits).toBe(invariant.ledger.totalCapital.atomicUnits);
+    expect(invariant.dashboard.available.atomicUnits).toBe(invariant.ledger.available.atomicUnits);
+    expect(invariant.dashboard.unallocated.atomicUnits).toBe(invariant.ledger.unallocated.atomicUnits);
+  });
+
+  it("rejects live Arc incoming settlement evidence before any treasury mutation", () => {
+    const { treasury } = setup("ARC_TESTNET", authorizedAdapter);
+    const liveByStatus = (status: "PREPARED" | "SUBMITTED" | "CONFIRMED" | "FAILED") => ArcTransactionRefSchema.parse({
+      ...liveTransaction,
+      status,
+      transactionHash: status === "PREPARED" ? null : liveHash,
+      blockNumber: status === "CONFIRMED" ? "1" : null,
+      blockHash: status === "CONFIRMED" ? liveBlockHash : null,
+      explorerUrl: status === "PREPARED" ? null : arcTestnetExplorerTransactionUrl(liveHash),
+    });
+
+    (["PREPARED", "SUBMITTED", "CONFIRMED", "FAILED"] as const).forEach((status) => {
+      const before = treasury.getSnapshot();
+      expect(() => treasury.recordIncomingTranche({
+        trancheId: `tranche:live-${status.toLowerCase()}`,
+        amount: usdc("1"),
+        transactionRef: liveByStatus(status),
+        actor: authorizedAdapter,
+        eventId: `audit:tranche:live-${status.toLowerCase()}`,
+        occurredAt: context.occurredAt,
+      })).toThrow(/Live Arc settlement credit is deferred to the Circle\/Arc integration layer/);
+      expect(treasury.getSnapshot()).toEqual(before);
+    });
+  });
+
+  it("records append-only audit history with actor, state transition, timestamp, and related IDs", async () => {
+    const { treasury } = setup();
+    const proposal = treasury.createAllocationProposal({
+      proposalId: "proposal:audit",
+      instructions: [{ reserveId: "reserve:contingency", kind: "FIXED", atomicUnits: "100000000" }],
+      actor: founder,
+      eventId: "audit:proposal:audit",
+      occurredAt: context.occurredAt,
+    });
+    const approval = await buildApproval(proposal);
+    await treasury.approveAllocationProposal({ proposalId: proposal.id, approval, actor: founder, eventId: "audit:approval:audit", occurredAt: context.occurredAt });
+    await treasury.applyApprovedProposal({ proposalId: proposal.id, actor: authorizedSystem, idempotencyKey: "apply:audit:key", eventId: "audit:apply:audit", occurredAt: context.occurredAt });
+    treasury.recordIncomingTranche({
+      trancheId: "tranche:audit",
+      amount: usdc("1"),
+      transactionRef: mockTransaction("PREPARED", "SETTLEMENT"),
+      actor: authorizedSystem,
+      eventId: "audit:tranche:audit:prepared",
+      occurredAt: context.occurredAt,
+    });
+    treasury.recordIncomingTranche({
+      trancheId: "tranche:audit",
+      amount: usdc("1"),
+      transactionRef: { ...mockTransaction("SUBMITTED", "SETTLEMENT"), transactionHash: "mock:transaction:audit" },
+      actor: authorizedSystem,
+      eventId: "audit:tranche:audit:submitted",
+      occurredAt: context.occurredAt,
+    });
+    treasury.recordIncomingTranche({
+      trancheId: "tranche:audit",
+      amount: usdc("1"),
+      transactionRef: { ...mockTransaction("CONFIRMED", "SETTLEMENT"), transactionHash: "mock:transaction:audit" },
+      actor: authorizedSystem,
+      eventId: "audit:tranche:audit:confirmed",
+      occurredAt: context.occurredAt,
+    });
+    await treasury.reconcileConfirmedTranche({ trancheId: "tranche:audit", actor: authorizedSystem, idempotencyKey: "reconcile:audit:key", eventId: "audit:reconcile:audit", occurredAt: context.occurredAt });
+    const audit = treasury.getSnapshot().audit;
+    const transitions = audit.filter((entry) => typeof entry.details.nextState === "string" && ["PROPOSED", "APPROVED", "APPLIED", "CONFIRMED", "RECONCILED"].includes(entry.details.nextState));
+    expect(transitions.length).toBeGreaterThanOrEqual(5);
+    transitions.forEach((entry) => {
+      expect(entry.actor.actorId.length).toBeGreaterThan(0);
+      expect(entry.details.previousState).toBeTruthy();
+      expect(entry.details.nextState).toBeTruthy();
+      expect(entry.occurredAt).toBe(context.occurredAt);
+      expect(typeof entry.details.proposalId === "string" || entry.details.proposalId === null).toBe(true);
+      expect(typeof entry.details.trancheId === "string" || entry.details.trancheId === null).toBe(true);
+    });
+    expect("update" in audit).toBe(false);
+    expect("delete" in audit).toBe(false);
+  });
 });
