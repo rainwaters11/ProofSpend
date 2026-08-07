@@ -1003,6 +1003,12 @@ export class LaunchVaultTreasury {
       default:
         throw new TreasuryError("INVALID_TRANSITION", "Incoming tranche lifecycle accepts PREPARED, SUBMITTED, CONFIRMED, or FAILED transaction evidence.");
     }
+    if (this.#vault.mode === "ARC_TESTNET") {
+      throw new TreasuryError(
+        "INVALID_STATE",
+        "Incoming tranche credit is not supported for ARC_TESTNET vaults in Issue #3; live settlement credit is deferred to the Circle/Arc integration layer.",
+      );
+    }
     if (!transactionRef.isMock) {
       throw new TreasuryError(
         "INVALID_STATE",

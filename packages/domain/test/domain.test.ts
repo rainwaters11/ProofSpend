@@ -2270,8 +2270,30 @@ describe("LaunchVault treasury MVP slice", () => {
         idempotencyKey: `tranche:live-${status.toLowerCase()}`,
         eventId: `audit:tranche:live-${status.toLowerCase()}`,
         occurredAt: context.occurredAt,
-      })).rejects.toThrow(/Live Arc settlement credit is deferred to the Circle\/Arc integration layer/);
+      })).rejects.toThrow(/Incoming tranche credit is not supported for ARC_TESTNET vaults/);
       expect(treasury.getSnapshot()).toEqual(before);
+    }
+  });
+
+  it("rejects mock incoming settlement evidence for ARC_TESTNET vault before any treasury mutation", async () => {
+    const { treasury } = setup("ARC_TESTNET", authorizedAdapter);
+    for (const status of ["PREPARED", "SUBMITTED", "CONFIRMED"] as const) {
+      const before = treasury.getSnapshot();
+      await expect(treasury.recordIncomingTranche({
+        trancheId: `tranche:arc-mock-${status.toLowerCase()}`,
+        amount: usdc("1"),
+        transactionRef: mockTransaction(status, "SETTLEMENT"),
+        actor: authorizedAdapter,
+        idempotencyKey: `tranche:arc-mock-${status.toLowerCase()}`,
+        eventId: `audit:tranche:arc-mock-${status.toLowerCase()}`,
+        occurredAt: context.occurredAt,
+      })).rejects.toThrow(/Incoming tranche credit is not supported for ARC_TESTNET vaults/);
+      const after = treasury.getSnapshot();
+      expect(after.incomingTranches).toEqual(before.incomingTranches);
+      expect(after.balances.confirmed.atomicUnits).toBe(before.balances.confirmed.atomicUnits);
+      expect(after.vault.totalCapital.atomicUnits).toBe(before.vault.totalCapital.atomicUnits);
+      expect(after.ledger).toEqual(before.ledger);
+      expect(after.audit).toEqual(before.audit);
     }
   });
 
