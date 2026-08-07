@@ -1254,7 +1254,7 @@ describe("LaunchVault treasury MVP slice", () => {
       treasury: new LaunchVaultTreasury({
         vault,
         reserves: emptyReserves,
-        actor: authorizedSystem,
+        actor: authority,
         executionAuthority: authority,
         founderAuthority: founder,
       }),
@@ -1344,7 +1344,7 @@ describe("LaunchVault treasury MVP slice", () => {
     const liveVault = LaunchVaultSchema.parse({ ...seed.vault, mode: "ARC_TESTNET", totalCapital: usdc("0") });
     expect(() => new LaunchVaultTreasury({ vault: liveVault, reserves, actor: authorizedSystem, founderAuthority: founder })).toThrow(/explicitly configured/);
     expect(() => new LaunchVaultTreasury({ vault: liveVault, reserves, actor: authorizedSystem, executionAuthority: authorizedSystem, founderAuthority: founder })).toThrow(/explicit ADAPTER/);
-    const treasury = new LaunchVaultTreasury({ vault: liveVault, reserves, actor: authorizedSystem, executionAuthority: authorizedAdapter, founderAuthority: founder });
+    const treasury = new LaunchVaultTreasury({ vault: liveVault, reserves, actor: authorizedAdapter, executionAuthority: authorizedAdapter, founderAuthority: founder });
     await expect(treasury.recordIncomingTranche({ trancheId: "tranche:wrong-adapter", amount: usdc("1"), transactionRef: liveTransaction, actor: unauthorizedAdapter, idempotencyKey: "wrong-adapter", eventId: "audit:wrong-adapter", occurredAt: context.occurredAt })).rejects.toThrow(/exact authorized ADAPTER/);
   });
 
@@ -2658,5 +2658,90 @@ describe("LaunchVault treasury MVP slice", () => {
     expect(snapshotFinal.vault.totalCapital.atomicUnits).toBe(snapshotAfterReconcile.vault.totalCapital.atomicUnits);
     expect(snapshotFinal.ledger).toHaveLength(snapshotAfterReconcile.ledger.length);
     expect(snapshotFinal.audit).toHaveLength(snapshotAfterReconcile.audit.length);
+  });
+
+  it("rejects initialization when initializingActor does not match either configured authority", async () => {
+    const seed = createPawPovAiSeed();
+    const reserves = seed.reserves.map((reserve) => ReserveSchema.parse({ ...reserve, allocated: usdc("0"), status: "PROPOSED" }));
+    const executionAuthority = authorizedSystem;
+    const founderAuthority = founder;
+
+    // AI actor with explicit valid authorities must be rejected
+    expect(() => new LaunchVaultTreasury({
+      vault: seed.vault, reserves,
+      actor: { actorId: "ai:agent", actorType: "AI" },
+      executionAuthority,
+      founderAuthority,
+    })).toThrow(TreasuryError);
+
+    // BACKER actor must be rejected
+    expect(() => new LaunchVaultTreasury({
+      vault: seed.vault, reserves,
+      actor: { actorId: "backer:1", actorType: "BACKER" },
+      executionAuthority,
+      founderAuthority,
+    })).toThrow(TreasuryError);
+
+    // Unrelated FOUNDER actor (not the configured founderAuthority) must be rejected
+    expect(() => new LaunchVaultTreasury({
+      vault: seed.vault, reserves,
+      actor: { actorId: "founder:unrelated", actorType: "FOUNDER" },
+      executionAuthority,
+      founderAuthority,
+    })).toThrow(TreasuryError);
+
+    // Unrelated SYSTEM actor (not the configured executionAuthority) must be rejected
+    expect(() => new LaunchVaultTreasury({
+      vault: seed.vault, reserves,
+      actor: unauthorizedSystem,
+      executionAuthority,
+      founderAuthority,
+    })).toThrow(TreasuryError);
+
+    // Exact configured execution authority (SYSTEM) must succeed
+    expect(() => new LaunchVaultTreasury({
+      vault: seed.vault, reserves,
+      actor: executionAuthority,
+      executionAuthority,
+      founderAuthority,
+    })).not.toThrow();
+
+    // Exact configured founder authority must succeed when execution authority is separately supplied
+    expect(() => new LaunchVaultTreasury({
+      vault: seed.vault, reserves,
+      actor: founder,
+      executionAuthority,
+      founderAuthority,
+    })).not.toThrow();
+  });
+
+  it("preserves Arc Testnet zero-capital adapter initialization and rejects unauthorized actors", async () => {
+    const seed = createPawPovAiSeed();
+    const reserves = seed.reserves.map((reserve) => ReserveSchema.parse({ ...reserve, allocated: usdc("0"), status: "PROPOSED" }));
+    const liveVault = LaunchVaultSchema.parse({ ...seed.vault, mode: "ARC_TESTNET", totalCapital: usdc("0") });
+
+    // Exact authorized adapter must succeed for ARC_TESTNET
+    expect(() => new LaunchVaultTreasury({
+      vault: liveVault, reserves,
+      actor: authorizedAdapter,
+      executionAuthority: authorizedAdapter,
+      founderAuthority: founder,
+    })).not.toThrow();
+
+    // AI actor with valid explicit ADAPTER authority must be rejected
+    expect(() => new LaunchVaultTreasury({
+      vault: liveVault, reserves,
+      actor: { actorId: "ai:agent", actorType: "AI" },
+      executionAuthority: authorizedAdapter,
+      founderAuthority: founder,
+    })).toThrow(TreasuryError);
+
+    // Unrelated ADAPTER actor must be rejected
+    expect(() => new LaunchVaultTreasury({
+      vault: liveVault, reserves,
+      actor: unauthorizedAdapter,
+      executionAuthority: authorizedAdapter,
+      founderAuthority: founder,
+    })).toThrow(TreasuryError);
   });
 });

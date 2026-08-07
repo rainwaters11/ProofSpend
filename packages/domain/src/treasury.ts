@@ -40,7 +40,8 @@ export class TreasuryError extends Error {
       | "APPROVAL_MISMATCH"
       | "UNSUPPORTED_ASSET"
       | "UNDERFLOW"
-      | "INVALID_TRANSITION",
+      | "INVALID_TRANSITION"
+      | "UNAUTHORIZED",
     message: string,
   ) {
     super(message);
@@ -360,6 +361,15 @@ export class LaunchVaultTreasury {
     });
     if (this.#vault.mode === "ARC_TESTNET" && this.#vault.totalCapital.atomicUnits !== "0") {
       throw new TreasuryError("INVALID_STATE", "Arc Testnet treasury must start at zero confirmed capital; live settlement credit is deferred to the Circle/Arc integration layer.");
+    }
+    const isAuthorizedInitializer =
+      (initializingActor.actorType === this.#executionAuthority.actorType && initializingActor.actorId === this.#executionAuthority.actorId) ||
+      (initializingActor.actorType === this.#founderAuthority.actorType && initializingActor.actorId === this.#founderAuthority.actorId);
+    if (!isAuthorizedInitializer) {
+      throw new TreasuryError(
+        "UNAUTHORIZED",
+        `Treasury initialization requires the exact configured execution authority (${this.#executionAuthority.actorType} ${this.#executionAuthority.actorId}) or founder authority (${this.#founderAuthority.actorType} ${this.#founderAuthority.actorId}); received ${initializingActor.actorType} ${initializingActor.actorId}.`,
+      );
     }
     const initialConfirmedAtomicUnits = this.#vault.mode === "ARC_TESTNET" ? "0" : this.#vault.totalCapital.atomicUnits;
     this.#confirmed = amount(this.#vault.asset, initialConfirmedAtomicUnits);
