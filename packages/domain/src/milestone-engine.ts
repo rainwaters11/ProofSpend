@@ -122,6 +122,8 @@ type RequirementProvenance = {
 };
 type ProvenanceIndex = {
   byRequirementId: Map<string, RequirementProvenance>;
+  evidenceById: Map<string, EvidenceItem>;
+  evidenceIdsBySourceHash: Map<string, Set<string>>;
 };
 
 const SHA_256_K = [
@@ -182,26 +184,30 @@ const sha256 = (value: string): string => {
   }
   return `sha256:${h.map((part) => part.toString(16).padStart(8, "0")).join("")}`;
 };
-const countDistinctEvidenceReferences = (
+const normalizeDistinctEvidenceReferences = (
   observation: RequirementObservation,
   legacyCount: number | undefined,
   legacyCountLabel: "deliverableCount" | "receiptCount",
-): number => {
+): readonly string[] => {
   const evidenceReferences = observation.evidenceReferences ?? [];
   const distinctReferenceCount = new Set(evidenceReferences).size;
   if (distinctReferenceCount !== evidenceReferences.length) throw new Error("Count-based evidence references must be unique.");
   if (legacyCount !== undefined && legacyCount !== distinctReferenceCount) {
     throw new Error(`${legacyCountLabel} must match the count of distinct evidence references.`);
   }
-  return distinctReferenceCount;
+  return evidenceReferences;
 };
 const createProvenanceIndex = (input: Pick<MilestoneEvaluationInput, "milestone" | "requirements" | "evidenceItems" | "evidenceMatches">): ProvenanceIndex => {
   const requirementIds = new Set(input.requirements.map((requirement) => requirement.id));
   const evidenceById = new Map<string, EvidenceItem>();
+  const evidenceIdsBySourceHash = new Map<string, Set<string>>();
   for (const evidence of input.evidenceItems ?? []) {
     if (evidence.projectId !== input.milestone.projectId) continue;
     if (evidenceById.has(evidence.id)) throw new Error("Evidence item IDs must be unique within a milestone evaluation.");
     evidenceById.set(evidence.id, evidence);
+    const ids = evidenceIdsBySourceHash.get(evidence.sourceHash) ?? new Set<string>();
+    ids.add(evidence.id);
+    evidenceIdsBySourceHash.set(evidence.sourceHash, ids);
   }
   const byRequirementId = new Map<string, RequirementProvenance>();
   const ensureRequirement = (requirementId: string): RequirementProvenance => {
@@ -225,7 +231,7 @@ const createProvenanceIndex = (input: Pick<MilestoneEvaluationInput, "milestone"
     acceptedEvidence.add(evidence.id);
     requirement.acceptedEvidenceByKind[evidence.kind] = acceptedEvidence;
   }
-  return { byRequirementId };
+  return { byRequirementId, evidenceById, evidenceIdsBySourceHash };
 };
 const acceptedEvidenceCountByKind = (
   provenance: ProvenanceIndex,
@@ -276,10 +282,32 @@ const countValidatedEvidenceReferences = (
   evidenceKind: "DELIVERABLE" | "RECEIPT",
   provenance: ProvenanceIndex,
 ): number => {
-  const referenceCount = countDistinctEvidenceReferences(observation, legacyCount, legacyCountLabel);
-  const validatedCount = acceptedEvidenceCountByKind(provenance, requirement.id, evidenceKind);
-  if (referenceCount !== validatedCount) throw new Error("Count-based evidence references must exactly match the distinct validated evidence set.");
-  return validatedCount;
+  const evidenceReferences = normalizeDistinctEvidenceReferences(observation, legacyCount, legacyCountLabel);
+  const acceptedEvidence = provenance.byRequirementId.get(requirement.id)?.acceptedEvidenceByKind[evidenceKind] ?? new Set<string>();
+  const resolvedEvidenceIds = new Set<string>();
+  for (const reference of evidenceReferences) {
+    let resolvedEvidenceId: string | null = null;
+    if (HashReferenceSchema.safeParse(reference).success) {
+      const matchingEvidenceIds = [...(provenance.evidenceIdsBySourceHash.get(reference) ?? new Set<string>())]
+        .filter((evidenceId) => acceptedEvidence.has(evidenceId));
+      if (matchingEvidenceIds.length === 0) throw new Error("Count-based evidence references must resolve to accepted evidence records.");
+      if (matchingEvidenceIds.length > 1) throw new Error("Count-based evidence references cannot ambiguously resolve to multiple accepted evidence records.");
+      [resolvedEvidenceId] = matchingEvidenceIds;
+    } else {
+      const evidence = provenance.evidenceById.get(reference);
+      if (evidence === undefined || !acceptedEvidence.has(evidence.id)) throw new Error("Count-based evidence references must resolve to accepted evidence records.");
+      resolvedEvidenceId = evidence.id;
+    }
+    if (resolvedEvidenceIds.has(resolvedEvidenceId)) {
+      throw new Error("Count-based evidence references cannot alias the same accepted evidence record.");
+    }
+    resolvedEvidenceIds.add(resolvedEvidenceId);
+  }
+  if (resolvedEvidenceIds.size !== acceptedEvidence.size) throw new Error("Count-based evidence references must exactly match the distinct validated evidence set.");
+  for (const acceptedEvidenceId of acceptedEvidence) {
+    if (!resolvedEvidenceIds.has(acceptedEvidenceId)) throw new Error("Count-based evidence references must exactly match the distinct validated evidence set.");
+  }
+  return acceptedEvidence.size;
 };
 const evaluateByKind = (
   requirement: MilestoneRequirement,
@@ -356,7 +384,8 @@ const validateRequirementSet = (milestoneId: string, milestoneRequirementIds: re
 };
 type CanonicalMilestoneEvaluationApprovalSubjectInput = Pick<
   MilestoneEvaluationInput,
-  "milestone" | "requirements" | "observations" | "verifiedSpend" | "policyVersion" | "evidenceItems" | "evidenceMatches"
+  "milestone" | "requirements" | "observations" | "verifiedSpend" | "policyVersion" | "evidenceItems" | "evidenceMatches" |
+  "evaluatedAt" | "expectedApprovalIntentId" | "expectedAuthorizedEvaluatorId" | "expectedAuthorizedFounderId"
 >;
 const serializeCanonicalMilestoneEvaluationApprovalSubject = (input: CanonicalMilestoneEvaluationApprovalSubjectInput): string => {
   const normalizedRequirements = [...input.requirements]
@@ -400,6 +429,10 @@ const serializeCanonicalMilestoneEvaluationApprovalSubject = (input: CanonicalMi
     1,
     "MILESTONE_EVALUATION",
     input.policyVersion,
+    input.evaluatedAt,
+    input.expectedApprovalIntentId ?? null,
+    input.expectedAuthorizedEvaluatorId ?? null,
+    input.expectedAuthorizedFounderId ?? null,
     input.milestone.id,
     input.milestone.projectId,
     input.milestone.title,
@@ -423,7 +456,7 @@ const classifyMilestoneApproval = (
   input: Pick<
     MilestoneEvaluationInput,
     "milestone" | "requirements" | "observations" | "verifiedSpend" | "policyVersion" | "evidenceItems" | "evidenceMatches" |
-    "evaluatedAt" | "expectedApprovalIntentId" | "expectedAuthorizedEvaluatorId"
+    "evaluatedAt" | "expectedApprovalIntentId" | "expectedAuthorizedEvaluatorId" | "expectedAuthorizedFounderId"
   >,
 ): MilestoneApprovalClassification => {
   if (
@@ -459,7 +492,7 @@ const isExactCurrentMilestoneApproval = (
   input: Pick<
     MilestoneEvaluationInput,
     "milestone" | "requirements" | "observations" | "verifiedSpend" | "policyVersion" | "evidenceItems" | "evidenceMatches" |
-    "evaluatedAt" | "expectedApprovalIntentId" | "expectedAuthorizedEvaluatorId"
+    "evaluatedAt" | "expectedApprovalIntentId" | "expectedAuthorizedEvaluatorId" | "expectedAuthorizedFounderId"
   >,
 ): boolean => {
   return classifyMilestoneApproval(approval, input) === "CONFIRMED";

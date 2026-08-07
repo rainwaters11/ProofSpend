@@ -96,6 +96,10 @@ const approvalHashFor = (input: MilestoneEvaluationInput): string => hashCanonic
   evidenceMatches: input.evidenceMatches,
   verifiedSpend: input.verifiedSpend,
   policyVersion: input.policyVersion,
+  evaluatedAt: input.evaluatedAt,
+  expectedApprovalIntentId: input.expectedApprovalIntentId,
+  expectedAuthorizedEvaluatorId: input.expectedAuthorizedEvaluatorId,
+  expectedAuthorizedFounderId: input.expectedAuthorizedFounderId,
 });
 const exactApprovalFor = (input: MilestoneEvaluationInput) => ApprovalRecordSchema.parse({
   id: "approval:exact",
@@ -277,7 +281,7 @@ describe("milestone engine", () => {
     expect(approvalEvaluation(wrongHash)?.reasonCodes).toEqual(["HUMAN_APPROVAL_PENDING"]);
   });
 
-  it("binds milestone approval to canonical policy-driving payload", () => {
+  it("binds milestone approval to canonical policy-driving payload and authority subject", () => {
     const base = approvalInput();
     const approved = exactApprovalFor(base);
     expect(evaluateMilestone({ ...base, approvalRecord: approved }).humanApprovalRequired).toBe(false);
@@ -316,6 +320,34 @@ describe("milestone engine", () => {
       approvalRecord: approved,
     });
     expect(approvalEvaluation(changedMilestone)?.reasonCodes).toEqual(["HUMAN_APPROVAL_PENDING"]);
+
+    const changedEvaluatedAt = evaluateMilestone({
+      ...base,
+      evaluatedAt: "2026-01-21T00:00:00.000Z",
+      approvalRecord: approved,
+    });
+    expect(approvalEvaluation(changedEvaluatedAt)?.reasonCodes).toEqual(["HUMAN_APPROVAL_PENDING"]);
+
+    const changedFounderAuthority = evaluateMilestone({
+      ...base,
+      expectedAuthorizedFounderId: "founder:other",
+      approvalRecord: approved,
+    });
+    expect(approvalEvaluation(changedFounderAuthority)?.reasonCodes).toEqual(["HUMAN_APPROVAL_PENDING"]);
+
+    const changedEvaluatorAuthority = evaluateMilestone({
+      ...base,
+      expectedAuthorizedEvaluatorId: "evaluator:other",
+      approvalRecord: approved,
+    });
+    expect(approvalEvaluation(changedEvaluatorAuthority)?.reasonCodes).toEqual(["HUMAN_APPROVAL_PENDING"]);
+
+    const changedApprovalIntent = evaluateMilestone({
+      ...base,
+      expectedApprovalIntentId: "intent:other",
+      approvalRecord: approved,
+    });
+    expect(approvalEvaluation(changedApprovalIntent)?.reasonCodes).toEqual(["HUMAN_APPROVAL_PENDING"]);
   });
 
   it("blocks rejected or expired approvals and permits only valid exact current approval", () => {
@@ -413,7 +445,7 @@ describe("milestone engine", () => {
     expect(noAuthorizedConfirmationResult.requirementEvaluations.find((item) => item.requirementId === "req:confirmation")?.outcome).not.toBe("PASS");
   });
 
-  it("fails closed for count-based requirements without distinct evidence-reference consistency", () => {
+  it("fails closed for count-based requirements unless references exactly bind accepted evidence", () => {
     expect(() => evaluateMilestone(approvalInput({
       observations: {
         ...baseObservations(),
@@ -438,16 +470,40 @@ describe("milestone engine", () => {
       approvalRecord: exactApproval,
     }))).toThrow(/deliverableCount must match/i);
 
+    expect(() => evaluateMilestone(approvalInput({
+      observations: {
+        ...baseObservations(),
+        "req:expenses": { evidenceReferences: ["evidence:invented:1", "evidence:invented:2"], receiptCount: 2 },
+      },
+      approvalRecord: exactApproval,
+    }))).toThrow(/resolve to accepted evidence records/i);
+
+    expect(() => evaluateMilestone(approvalInput({
+      observations: {
+        ...baseObservations(),
+        "req:expenses": { evidenceReferences: ["evidence:receipt:1", "evidence:tx:match"], receiptCount: 2 },
+      },
+      approvalRecord: exactApproval,
+    }))).toThrow(/resolve to accepted evidence records/i);
+
     const wrongKind = approvalInput({
       evidenceItems: baseEvidenceItems().map((item) => item.id === "evidence:receipt:2" ? EvidenceItemSchema.parse({ ...item, kind: "INVOICE" }) : item),
     });
-    expect(() => evaluateMilestone({ ...wrongKind, approvalRecord: null })).toThrow(/validated evidence set/i);
+    expect(() => evaluateMilestone({ ...wrongKind, approvalRecord: null })).toThrow(/resolve to accepted evidence records/i);
+
+    expect(() => evaluateMilestone(approvalInput({
+      observations: {
+        ...baseObservations(),
+        "req:expenses": { evidenceReferences: ["evidence:receipt:1", `sha256:${"2".repeat(64)}`], receiptCount: 2 },
+      },
+      approvalRecord: exactApproval,
+    }))).toThrow(/cannot alias the same accepted evidence record/i);
 
     const resultInput = approvalInput({
       observations: {
         ...baseObservations(),
-        "req:expenses": { evidenceReferences: ["evidence:receipt:1", "evidence:receipt:2"], receiptCount: 2 },
-        "req:deliverable": { evidenceReferences: ["evidence:deliverable"], deliverableCount: 1 },
+        "req:expenses": { evidenceReferences: ["evidence:receipt:1", `sha256:${"3".repeat(64)}`], receiptCount: 2 },
+        "req:deliverable": { evidenceReferences: [`sha256:${"1".repeat(64)}`], deliverableCount: 1 },
       },
     });
     const result = evaluateMilestone({ ...resultInput, approvalRecord: exactApprovalFor(resultInput) });
