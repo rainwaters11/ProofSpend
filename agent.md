@@ -60,6 +60,6 @@ The minimum submission-ready orchestration should:
 - identify one highest-priority Proof Recovery question;
 - prepare an exact action proposal;
 - pause for authorized human approval;
-- call the Circle/Arc submission tool only after exact approval;
+- hand the persisted approval to deterministic server-side execution for revalidation and submission, outside the agent tool loop;
 - record the resulting transaction lifecycle truthfully;
 - never silently fall back from Arc Testnet to mock mode.
