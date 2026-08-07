@@ -1605,6 +1605,7 @@ describe("LaunchVault treasury MVP slice", () => {
     await expect(treasuryA.releaseEscrowedCapital({ amount: usdc("1"), actor: authorizedSystem, idempotencyKey: "escrow:release:wrong-target", eventId: "audit:escrow:release:wrong-target", occurredAt: context.occurredAt, reversesEntryId: "ledger:seed-capital" })).rejects.toThrow(/must reverse a COMMITMENT/);
     await expect(treasuryB.releaseEscrowedCapital({ amount: usdc("1"), actor: authorizedSystem, idempotencyKey: "escrow:release:wrong-vault", eventId: "audit:escrow:release:wrong-vault", occurredAt: context.occurredAt, reversesEntryId: commitmentA.id })).rejects.toThrow(/target does not exist/);
     await treasuryA.releaseEscrowedCapital({ amount: usdc("4"), actor: authorizedSystem, idempotencyKey: "escrow:release:partial", eventId: "audit:escrow:release:partial", occurredAt: context.occurredAt, reversesEntryId: commitmentA.id });
+    await expectNoMutation(treasuryA, () => treasuryA.releaseEscrowedCapital({ amount: usdc("1"), actor: authorizedSystem, idempotencyKey: "escrow:release:duplicate-event", eventId: "audit:escrow:release:partial", occurredAt: context.occurredAt, reversesEntryId: commitmentA.id }));
     await treasuryA.releaseEscrowedCapital({ amount: usdc("6"), actor: authorizedSystem, idempotencyKey: "escrow:release:full", eventId: "audit:escrow:release:full", occurredAt: context.occurredAt, reversesEntryId: commitmentA.id });
     await expect(treasuryA.releaseEscrowedCapital({ amount: usdc("1"), actor: authorizedSystem, idempotencyKey: "escrow:release:double", eventId: "audit:escrow:release:double", occurredAt: context.occurredAt, reversesEntryId: commitmentA.id })).rejects.toThrow(/remaining commitment amount/);
     await expect(treasuryA.releaseEscrowedCapital({ amount: usdc("6"), actor: authorizedSystem, idempotencyKey: "escrow:release:over", eventId: "audit:escrow:release:over", occurredAt: context.occurredAt, reversesEntryId: commitmentB.id })).rejects.toThrow(/remaining commitment amount/);
@@ -1658,6 +1659,58 @@ describe("LaunchVault treasury MVP slice", () => {
     })).toThrow(/does not match the reconciled tranche/);
   });
 
+  it("bounds allocation provenance to one reconciled source tranche without changing unsourced budgets", async () => {
+    const { treasury } = setup();
+    const settlement = { ...mockTransaction("CONFIRMED", "SETTLEMENT"), transactionHash: "mock:transaction:provenance" };
+    treasury.recordIncomingTranche({
+      trancheId: "tranche:provenance",
+      amount: usdc("100"),
+      transactionRef: settlement,
+      actor: authorizedSystem,
+      eventId: "audit:tranche:provenance",
+      occurredAt: context.occurredAt,
+    });
+    await treasury.reconcileConfirmedTranche({ trancheId: "tranche:provenance", actor: authorizedSystem, idempotencyKey: "reconcile:provenance", eventId: "audit:reconcile:provenance", occurredAt: context.occurredAt });
+
+    expect(() => treasury.createAllocationProposal({
+      proposalId: "proposal:provenance:over",
+      instructions: [{ reserveId: "reserve:marketing", kind: "FIXED", atomicUnits: "600" }],
+      actor: founder,
+      eventId: "audit:proposal:provenance:over",
+      occurredAt: context.occurredAt,
+      sourceTrancheId: "tranche:provenance",
+      settlementTransactionRef: settlement,
+    })).toThrow(/exceed/);
+    const sourced = treasury.createAllocationProposal({
+      proposalId: "proposal:provenance:bounded",
+      instructions: [{ reserveId: "reserve:marketing", kind: "FIXED", atomicUnits: "100" }],
+      actor: founder,
+      eventId: "audit:proposal:provenance:bounded",
+      occurredAt: context.occurredAt,
+      sourceTrancheId: "tranche:provenance",
+      settlementTransactionRef: settlement,
+    });
+    expect(sourced.resolvedAllocations[0]?.amount.atomicUnits).toBe("100");
+    expect(() => treasury.createAllocationProposal({
+      proposalId: "proposal:provenance:reuse",
+      instructions: [{ reserveId: "reserve:travel", kind: "FIXED", atomicUnits: "1" }],
+      actor: founder,
+      eventId: "audit:proposal:provenance:reuse",
+      occurredAt: context.occurredAt,
+      sourceTrancheId: "tranche:provenance",
+      settlementTransactionRef: settlement,
+    })).toThrow(/already bound/);
+
+    const unsourced = treasury.createAllocationProposal({
+      proposalId: "proposal:unsourced:normal-budget",
+      instructions: [{ reserveId: "reserve:operations", kind: "FIXED", atomicUnits: "600" }],
+      actor: founder,
+      eventId: "audit:proposal:unsourced:normal-budget",
+      occurredAt: context.occurredAt,
+    });
+    expect(unsourced.resolvedAllocations[0]?.amount.atomicUnits).toBe("600");
+  });
+
   it("rejects non-SETTLEMENT tranche transactions and rejects downgrade/hash/source substitution", async () => {
     const { treasury } = setup();
     expect(() => treasury.recordIncomingTranche({
@@ -1701,6 +1754,14 @@ describe("LaunchVault treasury MVP slice", () => {
       eventId: "audit:tranche:downgrade",
       occurredAt: context.occurredAt,
     })).toThrow(/cannot move backward/);
+    await expectNoMutation(treasury, () => treasury.recordIncomingTranche({
+      trancheId: "tranche:progression",
+      amount: usdc("10"),
+      transactionRef: { ...mockTransaction("SUBMITTED", "SETTLEMENT"), chainId: "mock:other-chain", transactionHash: "mock:transaction:progression" },
+      actor: authorizedSystem,
+      eventId: "audit:tranche:cross-chain",
+      occurredAt: context.occurredAt,
+    }));
     expect(() => treasury.recordIncomingTranche({
       trancheId: "tranche:progression",
       amount: usdc("10"),

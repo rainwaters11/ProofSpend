@@ -628,6 +628,9 @@ export class LaunchVaultTreasury {
     if (releaseAmount.asset !== this.#vault.asset) throw new TreasuryError("ASSET_MISMATCH", "Escrow release asset mismatch.");
     const fingerprint = JSON.stringify([this.#vault.id, releaseAmount.atomicUnits, reversesEntryId]);
     await this.#idempotency.execute("escrow-release", input.idempotencyKey, fingerprint, () => {
+      const ledgerId = `ledger:escrow-release:${eventId}`;
+      if (this.#audit.some((record) => record.id === eventId)) throw new TreasuryError("INVALID_STATE", `Audit event ${eventId} already exists.`);
+      if (this.#ledger.some((entry) => entry.id === ledgerId)) throw new TreasuryError("INVALID_STATE", `Ledger entry ${ledgerId} already exists.`);
       if (toBigInt(releaseAmount.atomicUnits) > toBigInt(this.#escrowed.atomicUnits)) throw new TreasuryError("UNDERFLOW", "Escrow release exceeds escrowed capital.");
       const target = this.#ledger.find((entry) => entry.id === reversesEntryId);
       if (target === undefined) throw new TreasuryError("INVALID_TRANSITION", "Escrow release target does not exist.");
@@ -641,7 +644,7 @@ export class LaunchVaultTreasury {
       const releaseAtomic = toBigInt(releaseAmount.atomicUnits);
       if (alreadyReversed + releaseAtomic > targetAtomic) throw new TreasuryError("UNDERFLOW", "Escrow release exceeds the remaining commitment amount.");
       const reversalEntry = LedgerEntrySchema.parse({
-        id: `ledger:escrow-release:${eventId}`,
+        id: ledgerId,
         kind: "REVERSAL",
         vaultId: this.#vault.id,
         reserveId: null,
@@ -719,20 +722,39 @@ export class LaunchVaultTreasury {
     if (canonicalJobRef !== null && sourceJobRef === null) {
       throw new TreasuryError("INVALID_STATE", "Allocation proposal must preserve reconciled tranche job evidence.");
     }
+    if (linkedTranche !== null && [...this.#proposals.values()].some((proposal) => proposal.sourceTrancheId === linkedTranche.id)) {
+      throw new TreasuryError("INVALID_STATE", `Source tranche ${linkedTranche.id} is already bound to another allocation proposal.`);
+    }
 
     const unallocated = this.getSnapshot().balances.unallocated;
+    const instructions = input.instructions.map((instruction) => AllocationInstructionSchema.parse(instruction));
+    const sourceBudgetAtomic = linkedTranche === null ? null : toBigInt(linkedTranche.amount.atomicUnits);
+    const requestedFixedAtomic = instructions.reduce(
+      (total, instruction) => total + (instruction.kind === "FIXED" ? toBigInt(instruction.atomicUnits) : 0n),
+      0n,
+    );
+    if (sourceBudgetAtomic !== null && requestedFixedAtomic > sourceBudgetAtomic) {
+      throw new TreasuryError("INSUFFICIENT_AVAILABLE", "Allocation proposal exceeds its source tranche provenance budget.");
+    }
     const resolved = resolveAllocations({
-      budgetAtomicUnits: unallocated.atomicUnits,
-      instructions: input.instructions,
+      budgetAtomicUnits: linkedTranche?.amount.atomicUnits ?? unallocated.atomicUnits,
+      instructions,
       reserveIds: new Set(this.#reserves.map((reserve) => reserve.id)),
     });
+    const resolvedTotal = resolved.reduce((total, allocation) => total + toBigInt(allocation.amount.atomicUnits), 0n);
+    if (sourceBudgetAtomic !== null && resolvedTotal > sourceBudgetAtomic) {
+      throw new TreasuryError("INSUFFICIENT_AVAILABLE", "Allocation proposal exceeds its source tranche provenance budget.");
+    }
+    if (resolvedTotal > toBigInt(unallocated.atomicUnits)) {
+      throw new TreasuryError("INSUFFICIENT_AVAILABLE", "Allocation proposal exceeds available confirmed funds.");
+    }
     const proposal = AllocationProposalSchema.parse({
       id: input.proposalId,
       projectId: this.#vault.projectId,
       vaultId: this.#vault.id,
       asset: this.#vault.asset,
       status: "PROPOSED",
-      instructions: input.instructions,
+      instructions,
       resolvedAllocations: resolved,
       sourceJobRef: canonicalJobRef,
       settlementTransactionRef: linkedTranche?.transactionRef ?? null,
@@ -995,6 +1017,9 @@ export class LaunchVaultTreasury {
       if (current.amount.asset !== amountValue.asset) throw new TreasuryError("INVALID_STATE", "Tranche asset cannot be altered.");
       if (current.transactionRef.operationType !== transactionRef.operationType) throw new TreasuryError("INVALID_STATE", "Tranche transaction type cannot be altered.");
       if (current.transactionRef.isMock !== transactionRef.isMock) throw new TreasuryError("INVALID_STATE", "Tranche mock/live mode cannot be altered.");
+      if (current.transactionRef.network !== transactionRef.network || current.transactionRef.chainId !== transactionRef.chainId) {
+        throw new TreasuryError("INVALID_STATE", "Incoming tranche transaction network and chain cannot be altered.");
+      }
       const allowedTransitions: Record<Exclude<IncomingTranche["state"], "RECONCILED">, ReadonlySet<IncomingTranche["state"]>> = {
         PREPARED: new Set(["PREPARED", "SUBMITTED", "CONFIRMED", "FAILED"]),
         SUBMITTED: new Set(["SUBMITTED", "CONFIRMED", "FAILED"]),
