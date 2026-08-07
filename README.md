@@ -183,8 +183,10 @@ The active implementation order is maintained in [`docs/roadmap.md`](docs/roadma
 6. Circle wallet architecture and integration
 7. ERC-8004 verification-agent registration
 8. ERC-8183 milestone escrow and Arc Testnet settlement
-9. Controlled Verification Agent orchestration and guided founder/backer demo
+9. Guided founder and backer demo
 10. Security, accessibility, deployment, and submission review
+
+**Separate backlog item:** Complete Verification Agent orchestration requires its own future issue and dependency review unless the live backlog explicitly assigns it elsewhere. It is not part of Issue #9.
 
 ---
 
