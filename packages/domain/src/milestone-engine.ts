@@ -98,6 +98,19 @@ export type MilestoneEvaluationResult = z.infer<typeof MilestoneEvaluationResult
 
 type RequirementEvaluationComputation = { outcome: RequirementOutcome; reasonCode: MilestoneReasonCode };
 type MilestoneApprovalClassification = "PENDING" | "REJECTED" | "CONFIRMED";
+const countDistinctEvidenceReferences = (
+  observation: RequirementObservation,
+  legacyCount: number | undefined,
+  legacyCountLabel: "deliverableCount" | "receiptCount",
+): number => {
+  const evidenceReferences = observation.evidenceReferences ?? [];
+  const distinctReferenceCount = new Set(evidenceReferences).size;
+  if (distinctReferenceCount !== evidenceReferences.length) throw new Error("Count-based evidence references must be unique.");
+  if (legacyCount !== undefined && legacyCount !== distinctReferenceCount) {
+    throw new Error(`${legacyCountLabel} must match the count of distinct evidence references.`);
+  }
+  return distinctReferenceCount;
+};
 const evaluateByKind = (
   requirement: MilestoneRequirement,
   observation: RequirementObservation,
@@ -106,11 +119,11 @@ const evaluateByKind = (
   if (requirement.kind !== "HUMAN_APPROVAL" && observation.hasConflictingEvidence === true) return { outcome: "REVIEW", reasonCode: "EVIDENCE_CONFLICT" };
   switch (requirement.kind) {
     case "DELIVERABLE": {
-      const deliverableCount = observation.deliverableCount ?? observation.evidenceReferences?.length ?? 0;
+      const deliverableCount = countDistinctEvidenceReferences(observation, observation.deliverableCount, "deliverableCount");
       return deliverableCount > 0 ? { outcome: "PASS", reasonCode: "DELIVERABLE_COUNT_MET" } : { outcome: "FAIL", reasonCode: "DELIVERABLE_COUNT_SHORT" };
     }
     case "EXPENSE_RECORDS": {
-      const receiptCount = observation.receiptCount ?? observation.evidenceReferences?.length ?? 0;
+      const receiptCount = countDistinctEvidenceReferences(observation, observation.receiptCount, "receiptCount");
       return receiptCount >= requirement.requiredCount ? { outcome: "PASS", reasonCode: "RECEIPT_COUNT_MET" } : { outcome: "FAIL", reasonCode: "RECEIPT_COUNT_SHORT" };
     }
     case "SPEND_LIMIT": {
@@ -249,7 +262,7 @@ export function evaluateMilestone(input: MilestoneEvaluationInput): MilestoneEva
   }
   const globalApprovalSatisfied = isExactCurrentMilestoneApproval(parsed.approvalRecord ?? null, parsed);
   const humanApprovalRequired = !globalApprovalSatisfied;
-  const erc8183ActionPermitted = status === "ELIGIBLE" && !humanApprovalRequired;
+  const erc8183ActionPermitted = false;
   return MilestoneEvaluationResultSchema.parse({
     status,
     requirementEvaluations,

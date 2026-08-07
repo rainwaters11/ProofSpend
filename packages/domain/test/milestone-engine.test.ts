@@ -87,7 +87,8 @@ describe("milestone engine", () => {
     expect(first.requirementEvaluations.map((item) => item.requirementId)).toEqual([...requirementIds].sort((left, right) => (left < right ? -1 : left > right ? 1 : 0)));
     expect(first.status).toBe("ELIGIBLE");
     expect(first.humanApprovalRequired).toBe(false);
-    expect(first.erc8183ActionPermitted).toBe(true);
+    expect(first.erc8183ActionPermitted).toBe(false);
+    expect(first.recommendedNextAction).toBe("PREPARE_JOB_DRAFT");
   });
 
   it("is deterministic with non-ASCII and tie-style IDs using locale-independent ordering", () => {
@@ -308,9 +309,29 @@ describe("milestone engine", () => {
       expectedAuthorizedEvaluatorId: authorizedEvaluatorId,
     });
     expect(validApproval.status).toBe("ELIGIBLE");
-    expect(validApproval.erc8183ActionPermitted).toBe(true);
+    expect(validApproval.erc8183ActionPermitted).toBe(false);
+    expect(validApproval.recommendedNextAction).toBe("PREPARE_JOB_DRAFT");
     expect(approvalEvaluation(validApproval)?.outcome).toBe("PASS");
     expect(approvalEvaluation(validApproval)?.reasonCodes).toEqual(["HUMAN_APPROVAL_CONFIRMED"]);
+  });
+
+  it("keeps ERC-8183 write permission false even when exact milestone approval is confirmed", () => {
+    const result = evaluateMilestone({
+      milestone,
+      requirements: baseRequirements,
+      observations: baseObservations(),
+      verifiedSpend: usdc("150000000"),
+      evaluatedAt,
+      policyVersion,
+      approvalRecord: exactApproval,
+      expectedApprovalIntentId: approvalIntentId,
+      expectedApprovalExactIntentHash: approvalIntentHash,
+      expectedAuthorizedEvaluatorId: authorizedEvaluatorId,
+    });
+    expect(result.status).toBe("ELIGIBLE");
+    expect(result.humanApprovalRequired).toBe(false);
+    expect(result.recommendedNextAction).toBe("PREPARE_JOB_DRAFT");
+    expect(result.erc8183ActionPermitted).toBe(false);
   });
 
   it("handles missing/conflicting evidence and keeps optional failures from blocking eligibility", () => {
@@ -350,7 +371,76 @@ describe("milestone engine", () => {
       expectedAuthorizedEvaluatorId: authorizedEvaluatorId,
     });
     expect(withInjectedField.status).toBe("ELIGIBLE");
-    expect(withInjectedField.erc8183ActionPermitted).toBe(true);
+    expect(withInjectedField.erc8183ActionPermitted).toBe(false);
+  });
+
+  it("fails closed for count-based requirements without distinct evidence-reference consistency", () => {
+    expect(() => evaluateMilestone({
+      milestone,
+      requirements: baseRequirements,
+      observations: {
+        ...baseObservations(),
+        "req:expenses": { evidenceReferences: [], receiptCount: 1 },
+      },
+      verifiedSpend: usdc("150000000"),
+      evaluatedAt,
+      policyVersion,
+      approvalRecord: exactApproval,
+      expectedApprovalIntentId: approvalIntentId,
+      expectedApprovalExactIntentHash: approvalIntentHash,
+      expectedAuthorizedEvaluatorId: authorizedEvaluatorId,
+    })).toThrow(/receiptCount must match/i);
+
+    expect(() => evaluateMilestone({
+      milestone,
+      requirements: baseRequirements,
+      observations: {
+        ...baseObservations(),
+        "req:expenses": { evidenceReferences: ["evidence:receipt:1", "evidence:receipt:1"], receiptCount: 2 },
+      },
+      verifiedSpend: usdc("150000000"),
+      evaluatedAt,
+      policyVersion,
+      approvalRecord: exactApproval,
+      expectedApprovalIntentId: approvalIntentId,
+      expectedApprovalExactIntentHash: approvalIntentHash,
+      expectedAuthorizedEvaluatorId: authorizedEvaluatorId,
+    })).toThrow(/must be unique/i);
+
+    expect(() => evaluateMilestone({
+      milestone,
+      requirements: baseRequirements,
+      observations: {
+        ...baseObservations(),
+        "req:deliverable": { evidenceReferences: ["evidence:deliverable"], deliverableCount: 2 },
+      },
+      verifiedSpend: usdc("150000000"),
+      evaluatedAt,
+      policyVersion,
+      approvalRecord: exactApproval,
+      expectedApprovalIntentId: approvalIntentId,
+      expectedApprovalExactIntentHash: approvalIntentHash,
+      expectedAuthorizedEvaluatorId: authorizedEvaluatorId,
+    })).toThrow(/deliverableCount must match/i);
+
+    const result = evaluateMilestone({
+      milestone,
+      requirements: baseRequirements,
+      observations: {
+        ...baseObservations(),
+        "req:expenses": { evidenceReferences: ["evidence:receipt:1", "evidence:receipt:2"], receiptCount: 2 },
+        "req:deliverable": { evidenceReferences: ["evidence:deliverable"], deliverableCount: 1 },
+      },
+      verifiedSpend: usdc("150000000"),
+      evaluatedAt,
+      policyVersion,
+      approvalRecord: exactApproval,
+      expectedApprovalIntentId: approvalIntentId,
+      expectedApprovalExactIntentHash: approvalIntentHash,
+      expectedAuthorizedEvaluatorId: authorizedEvaluatorId,
+    });
+    expect(result.requirementEvaluations.find((item) => item.requirementId === "req:expenses")?.reasonCodes).toEqual(["RECEIPT_COUNT_MET"]);
+    expect(result.requirementEvaluations.find((item) => item.requirementId === "req:deliverable")?.reasonCodes).toEqual(["DELIVERABLE_COUNT_MET"]);
   });
 
   it("enforces agentic job draft budget and expiry boundaries", () => {
