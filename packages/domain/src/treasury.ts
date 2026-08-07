@@ -1082,6 +1082,16 @@ export class LaunchVaultTreasury {
         );
         if (conflicting !== undefined) throw new TreasuryError("INVALID_STATE", "Incoming tranche transaction hash is already bound to another tranche.");
       }
+      // Re-read the current persisted tranche inside the callback to avoid acting on stale outer state.
+      // If the tranche has transitioned to a terminal state (RECONCILED or FAILED) since the outer
+      // read, reject without any mutation so that a concurrent reconciliation cannot be overwritten.
+      const callbackCurrent = this.#incomingTranches.get(input.trancheId);
+      if (callbackCurrent !== undefined && callbackCurrent.state === "RECONCILED") {
+        throw new TreasuryError("INVALID_STATE", "Tranche has already been reconciled and cannot be modified.");
+      }
+      if (callbackCurrent !== undefined && callbackCurrent.state === "FAILED") {
+        throw new TreasuryError("INVALID_STATE", "Failed tranches cannot be modified.");
+      }
       const tranche = IncomingTrancheSchema.parse({
         id: input.trancheId,
         projectId: this.#vault.projectId,
@@ -1091,7 +1101,7 @@ export class LaunchVaultTreasury {
         sourceJobRef,
         state,
         reconciledAt: null,
-        createdAt: current?.createdAt ?? occurredAt,
+        createdAt: callbackCurrent?.createdAt ?? occurredAt,
       });
       const auditRecord = event({
         id: eventId,
@@ -1099,7 +1109,7 @@ export class LaunchVaultTreasury {
         actor,
         occurredAt,
         idempotencyKey: input.idempotencyKey,
-        previousState: current?.state ?? "NONE",
+        previousState: callbackCurrent?.state ?? "NONE",
         nextState: tranche.state,
         relatedTrancheId: tranche.id,
         relatedTransactionHash: tranche.transactionRef.transactionHash,

@@ -2516,4 +2516,147 @@ describe("LaunchVault treasury MVP slice", () => {
     expect("update" in audit).toBe(false);
     expect("delete" in audit).toBe(false);
   });
+
+  it("rejects a concurrent recordIncomingTranche for a CONFIRMED tranche that has been RECONCILED in the same tick", async () => {
+    // Scenario: one CONFIRMED tranche; reconciliation and a same-state CONFIRMED record run concurrently.
+    // Only the reconciliation should succeed. The record attempt must be rejected without mutating state.
+    const { treasury } = setup();
+    const sharedHash = "mock:transaction:reconcile-record-race";
+    const trancheId = "tranche:reconcile-record-race";
+
+    // Seed a CONFIRMED tranche
+    await treasury.recordIncomingTranche({
+      trancheId,
+      amount: usdc("1"),
+      transactionRef: mockTransaction("PREPARED", "SETTLEMENT"),
+      actor: authorizedSystem,
+      idempotencyKey: `${trancheId}:prepared`,
+      eventId: `audit:${trancheId}:prepared`,
+      occurredAt: context.occurredAt,
+    });
+    await treasury.recordIncomingTranche({
+      trancheId,
+      amount: usdc("1"),
+      transactionRef: { ...mockTransaction("SUBMITTED", "SETTLEMENT"), transactionHash: sharedHash },
+      actor: authorizedSystem,
+      idempotencyKey: `${trancheId}:submitted`,
+      eventId: `audit:${trancheId}:submitted`,
+      occurredAt: context.occurredAt,
+    });
+    await treasury.recordIncomingTranche({
+      trancheId,
+      amount: usdc("1"),
+      transactionRef: { ...mockTransaction("CONFIRMED", "SETTLEMENT"), transactionHash: sharedHash },
+      actor: authorizedSystem,
+      idempotencyKey: `${trancheId}:confirmed`,
+      eventId: `audit:${trancheId}:confirmed`,
+      occurredAt: context.occurredAt,
+    });
+
+    const snapshotBefore = treasury.getSnapshot();
+
+    // Launch reconciliation and a duplicate CONFIRMED record concurrently with different idempotency keys
+    const [reconcileResult, recordResult] = await Promise.allSettled([
+      treasury.reconcileConfirmedTranche({
+        trancheId,
+        actor: authorizedSystem,
+        idempotencyKey: `reconcile:${trancheId}`,
+        eventId: `audit:reconcile:${trancheId}`,
+        occurredAt: context.occurredAt,
+      }),
+      treasury.recordIncomingTranche({
+        trancheId,
+        amount: usdc("1"),
+        transactionRef: { ...mockTransaction("CONFIRMED", "SETTLEMENT"), transactionHash: sharedHash },
+        actor: authorizedSystem,
+        idempotencyKey: `${trancheId}:confirmed-retry`,
+        eventId: `audit:${trancheId}:confirmed-retry`,
+        occurredAt: context.occurredAt,
+      }),
+    ]);
+
+    const snapshotAfter = treasury.getSnapshot();
+    const reconciledTranche = snapshotAfter.incomingTranches.find((t) => t.id === trancheId);
+
+    // Reconcile must have succeeded (it is scheduled first and wins the microtask race).
+    // The record attempt must have been rejected by the callback-local RECONCILED guard.
+    expect(reconcileResult.status).toBe("fulfilled");
+    expect(recordResult.status).toBe("rejected");
+
+    // The tranche must end up in RECONCILED state
+    expect(reconciledTranche?.state).toBe("RECONCILED");
+
+    // Confirmed balance must be credited exactly once
+    const confirmedAfter = BigInt(snapshotAfter.balances.confirmed.atomicUnits);
+    const confirmedBefore = BigInt(snapshotBefore.balances.confirmed.atomicUnits);
+    const trancheAmount = BigInt(usdc("1").atomicUnits);
+    expect(confirmedAfter - confirmedBefore).toBe(trancheAmount);
+
+    // A second reconcile attempt must fail (no duplicate credit)
+    await expect(treasury.reconcileConfirmedTranche({
+      trancheId,
+      actor: authorizedSystem,
+      idempotencyKey: `reconcile:${trancheId}:second`,
+      eventId: `audit:reconcile:${trancheId}:second`,
+      occurredAt: context.occurredAt,
+    })).rejects.toThrow();
+
+    const snapshotFinal = treasury.getSnapshot();
+    expect(snapshotFinal.balances.confirmed.atomicUnits).toBe(snapshotAfter.balances.confirmed.atomicUnits);
+  });
+
+  it("preserves all invariants when a recordIncomingTranche is rejected due to stale RECONCILED state", async () => {
+    // Scenario: reconcile a tranche fully, then attempt to record it again with a new key.
+    // The callback re-read must detect RECONCILED state and reject without side effects.
+    const { treasury } = setup();
+    const trancheId = "tranche:stale-reconciled";
+    const txHash = "mock:transaction:stale-reconciled";
+
+    await treasury.recordIncomingTranche({
+      trancheId,
+      amount: usdc("2"),
+      transactionRef: mockTransaction("PREPARED", "SETTLEMENT"),
+      actor: authorizedSystem,
+      idempotencyKey: `${trancheId}:prepared`,
+      eventId: `audit:${trancheId}:prepared`,
+      occurredAt: context.occurredAt,
+    });
+    await treasury.recordIncomingTranche({
+      trancheId,
+      amount: usdc("2"),
+      transactionRef: { ...mockTransaction("CONFIRMED", "SETTLEMENT"), transactionHash: txHash },
+      actor: authorizedSystem,
+      idempotencyKey: `${trancheId}:confirmed`,
+      eventId: `audit:${trancheId}:confirmed`,
+      occurredAt: context.occurredAt,
+    });
+    await treasury.reconcileConfirmedTranche({
+      trancheId,
+      actor: authorizedSystem,
+      idempotencyKey: `reconcile:${trancheId}`,
+      eventId: `audit:reconcile:${trancheId}`,
+      occurredAt: context.occurredAt,
+    });
+
+    const snapshotAfterReconcile = treasury.getSnapshot();
+
+    // Attempt a new record with a fresh idempotency key against the now-RECONCILED tranche
+    await expect(treasury.recordIncomingTranche({
+      trancheId,
+      amount: usdc("2"),
+      transactionRef: { ...mockTransaction("CONFIRMED", "SETTLEMENT"), transactionHash: txHash },
+      actor: authorizedSystem,
+      idempotencyKey: `${trancheId}:confirmed-late`,
+      eventId: `audit:${trancheId}:confirmed-late`,
+      occurredAt: context.occurredAt,
+    })).rejects.toThrow();
+
+    const snapshotFinal = treasury.getSnapshot();
+    // State, balances, vault, ledger, and audit log must all be unchanged
+    expect(snapshotFinal.incomingTranches.find((t) => t.id === trancheId)?.state).toBe("RECONCILED");
+    expect(snapshotFinal.balances.confirmed.atomicUnits).toBe(snapshotAfterReconcile.balances.confirmed.atomicUnits);
+    expect(snapshotFinal.vault.totalCapital.atomicUnits).toBe(snapshotAfterReconcile.vault.totalCapital.atomicUnits);
+    expect(snapshotFinal.ledger).toHaveLength(snapshotAfterReconcile.ledger.length);
+    expect(snapshotFinal.audit).toHaveLength(snapshotAfterReconcile.audit.length);
+  });
 });
