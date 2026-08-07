@@ -1008,9 +1008,7 @@ export class LaunchVaultTreasury {
         "Live Arc settlement credit is deferred to the Circle/Arc integration layer.",
       );
     }
-    if (transactionRef.isMock !== (this.#vault.mode === "MOCK")) throw new TreasuryError("INVALID_STATE", "Incoming tranche transaction mode is incompatible with treasury mode.");
-    const sourceJobRef = input.sourceJobRef === undefined ? null : AgenticJobRefSchema.parse(input.sourceJobRef);
-    if (sourceJobRef !== null) {
+    const sourceJobRef = input.sourceJobRef == null ? null : AgenticJobRefSchema.parse(input.sourceJobRef);
       if (sourceJobRef.isMock !== transactionRef.isMock) throw new TreasuryError("INVALID_STATE", "Incoming tranche job and transaction mode must match.");
       if (sourceJobRef.status !== "COMPLETED" || sourceJobRef.transaction === null || sourceJobRef.transaction.status !== "CONFIRMED" || sourceJobRef.transaction.operationType !== "JOB_EVALUATE") {
         throw new TreasuryError("INVALID_STATE", "Incoming tranche job evidence must represent a completed ERC-8183 evaluation.");
