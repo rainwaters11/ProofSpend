@@ -44,7 +44,7 @@ After Issue #16, create a dedicated implementation issue unless the live backlog
 
 ### D-011 — Circle execution architecture selected (ADR-001)
 
-ADR-001 (`docs/architecture/adr-001-circle-execution-architecture.md`) selects **Circle Developer-Controlled Wallets** as the single primary custody and contract-execution path for Arc Testnet. The Agent Stack CLI and user-controlled wallets are rejected alternatives. The typed adapter boundary must be extended or replaced to add contract-call representation and separate submission, confirmation, and reconciliation operations; adapter implementation still waits for Issues #3, and #4.
+ADR-001 (`docs/architecture/adr-001-circle-execution-architecture.md`) selects **Circle Developer-Controlled Wallets** as the single primary custody and contract-execution path for Arc Testnet. The Agent Stack CLI and user-controlled wallets are rejected alternatives. The typed adapter boundary must be extended or replaced to add contract-call representation and separate submission, confirmation, and reconciliation operations; adapter implementation still waits for Issues #2, #3, and #4, with #3/#4 being the remaining prerequisites after Issue #2's domain foundation and mock-data dependency are complete.
 
 ## Unresolved decisions
 
