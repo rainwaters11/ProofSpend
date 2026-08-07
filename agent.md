@@ -32,7 +32,7 @@ Issue #13 does not implement the complete agent runtime or ERC-8183 settlement.
 
 ## ERC-8183 roles
 
-Issue #8 implements the milestone-job lifecycle after its dependencies are complete. The provider may submit an approved Proof-of-Progress deliverable hash. An explicitly authorized evaluator completes or rejects the job. Settlement or refund follows the ERC-8183 lifecycle. The AI cannot fund a job, approve a proposal, submit a transaction, act as an evaluator on its own authority, or conflate internal `ELIGIBLE` with ERC-8183 `COMPLETED`.
+Issue #8 implements the milestone-job lifecycle after its dependencies are complete. The provider may submit an approved Proof-of-Progress deliverable hash. An explicitly authorized evaluator approves completion or rejection; the deterministic server-side adapter executes the approved evaluator action. Settlement or refund follows the ERC-8183 lifecycle. The AI never funds a job, approves a proposal, submits a transaction, completes or rejects a job, or conflates internal `ELIGIBLE` with ERC-8183 `COMPLETED`.
 
 ## Handoff contract
 

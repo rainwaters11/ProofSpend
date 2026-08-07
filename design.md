@@ -24,7 +24,7 @@ The system has four separate layers:
 3. **Explicit authority:** an authorized human or evaluator approves an exact action.
 4. **Arc execution:** a typed server-side Circle adapter separately prepares, submits, confirms, and reconciles the transaction.
 
-The LLM and Verification Agent never calculate final balances, produce the authoritative policy result, finalize milestone state, approve or alter an exact intent, submit a value-moving action, complete/reject a job on their own authority, or write reputation. After exact persisted approval, deterministic server-side execution revalidates and submits the action outside the agent tool loop.
+The LLM and Verification Agent never calculate final balances, produce the authoritative policy result, finalize milestone state, approve or alter an exact intent, submit a value-moving action, complete or reject a job, or write reputation. After exact persisted approval, deterministic server-side execution revalidates and submits the action outside the agent tool loop.
 
 ## Canonical Arc flow
 
