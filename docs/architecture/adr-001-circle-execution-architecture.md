@@ -43,7 +43,7 @@ Assessment:
 Verified facts (2026-08-06, official Circle docs and npm):
 
 - Node.js v22.6 or later is required.
-- Setup uses a Circle Console API key plus a registered entity secret; the SDK provides `generateEntitySecret` and `registerEntitySecretCiphertext` helpers and returns a recovery file that must be stored server-side.
+- Setup uses a Circle Console API key plus a registered entity secret; the SDK provides `generateEntitySecret` and `registerEntitySecretCiphertext` helpers and returns a recovery file. The recovery file must be stored in a secure location separate from the entity secret, such as an encrypted vault or password manager; ordinary server-side storage is not sufficient for it.
 - The client is initialized with `initiateDeveloperControlledWalletsClient({ apiKey, entitySecret })`.
 - Wallets are organized into wallet sets; one wallet set groups wallets under a single entity secret.
 - `createWallets({ walletSetId, blockchains: ["ARC-TESTNET"], count, accountType: "EOA" | "SCA" })` creates wallets on demand. Circle supports scalable wallet creation: up to 200 wallets per request, up to 10 million wallets per wallet set, and up to 1,000 wallet sets per account; other account/API limits may apply. This supports one wallet per client and per role at MVP scale.
@@ -53,7 +53,7 @@ Verified facts (2026-08-06, official Circle docs and npm):
 Assessment:
 
 - Directly aligns with the ERC-8004/ERC-8183 implementation issues.
-- Persistent server-side credentials are simpler to reproduce in CI than expiring CLI sessions.
+- Persistent server-side credentials support controlled deployment and manual smoke-test environments without expiring CLI sessions; CI remains credential-free and mock-only.
 - Scalable wallet creation (up to 200 wallets per request, 10 million per wallet set, 1,000 wallet sets per account) cleanly models backer/client, founder/provider, evaluator, and validator roles.
 - Contract execution and transaction polling are supported through the SDK and Arc App Kit.
 - Costs: Node 22.6+ upgrade, entity-secret lifecycle management, and API-key scoping are required.
@@ -75,14 +75,14 @@ Option A remains documented as a rejected alternative and may be revisited only 
 Positive:
 
 - ERC-8004 (Issue #13) and ERC-8183 (Issue #8) can consume the same adapter without a second custody stack.
-- Wallet-per-client and wallet-per-role mapping supports the required authority model; a shared entity secret signs only the authorized wallet's action, never mixing balances.
+- Wallet-per-client and wallet-per-role mapping isolates addresses and balances and supports the required authority model. It does not provide independent signing authority: the Circle entity secret is account-scoped, so it can sign for any wallet under the entity. ProofSpend application authorization must therefore enforce the founder, client, provider, evaluator, owner, and validator roles itself, and the shared-secret blast radius (one compromised entity secret affects every wallet under the entity) must be reflected in secret handling, rotation, and access control.
 - CI stays credential-free and uses the mock adapter only. Live `CIRCLE_API_KEY`/`CIRCLE_ENTITY_SECRET` values exist only in an approved server-side deployment or a secured, human-in-the-loop manual smoke-test environment; they are never committed, logged, or exposed in the browser.
 - The typed application-owned adapter boundary remains the controlling application architecture, but `WalletProvider` must be extended (or, where the mismatch is structural, replaced) before adapter implementation. The extended interface must add typed contract-call representation and distinct submission, confirmation, and reconciliation operations so it can carry ERC-8004 (Issue #13) and ERC-8183 (Issue #8) calls. `MockWalletProvider` and the Circle adapter implement the same extended interface, so mock and Arc paths never diverge silently.
 
 Risks and required follow-ups:
 
 - Upgrade application and CI runtime to Node.js 22.6+ and pin the SDK version.
-- Manage `CIRCLE_API_KEY` and `CIRCLE_ENTITY_SECRET` strictly server-side; never expose them in browser storage, logs, or screenshots; store the recovery file securely.
+- Manage `CIRCLE_API_KEY` and `CIRCLE_ENTITY_SECRET` strictly server-side; never expose them in browser storage, logs, or screenshots. Store the recovery file in a secure location separate from the entity secret, such as an encrypted vault or password manager; ordinary server-side storage is not sufficient for it.
 - Idempotency must be enforced at the application level (the domain layer already models idempotency keys and authorization bindings), because per-wallet operations require caller-provided idempotency keys.
 - Transaction preparation and submission must remain separate persisted operations with immediate pre-submit revalidation, per AGENTS.md.
 - Extend `WalletProvider` before adapter implementation: add typed contract-call representation plus separate submission, confirmation, and reconciliation operations; never present `preparePayment`/`executePayment` as covering confirmation or reconciliation.

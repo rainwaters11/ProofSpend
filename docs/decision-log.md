@@ -44,8 +44,8 @@ After Issue #16, create a dedicated implementation issue unless the live backlog
 
 ### D-011 — Circle execution architecture selected (ADR-001)
 
-ADR-001 (`docs/architecture/adr-001-circle-execution-architecture.md`) selects **Circle Developer-Controlled Wallets** as the single primary custody and contract-execution path for Arc Testnet. The Agent Stack CLI and user-controlled wallets are rejected alternatives. The typed adapter boundary must be extended or replaced to add contract-call representation and separate submission, confirmation, and reconciliation operations; adapter implementation still waits for Issues #2, #3, and #4, with #3/#4 being the remaining prerequisites after Issue #2's domain foundation and mock-data dependency are complete.
+ADR-001 (`docs/architecture/adr-001-circle-execution-architecture.md`) selects **Circle Developer-Controlled Wallets** as the single primary custody and contract-execution path for Arc Testnet. The Agent Stack CLI and user-controlled wallets are rejected alternatives. The typed adapter boundary must be extended or replaced to add contract-call representation and separate submission, confirmation, and reconciliation operations. Issues #2 and #3 are complete; Issue #4 is the only remaining dependency before ADR-001 can be accepted and adapter implementation can begin.
 
 ## Unresolved decisions
 
-Circle adapter implementation remains open until Issues #2, #3, and #4 complete. Implementation work must define ERC-8004 controller/recovery details, independent reputation writer, ERC-8183 role addresses, deliverable commitment encoding, exact intent schema, confirmation/reconciliation policy, and deterministic rejection/refund recovery without inventing protocol deployment details here.
+Circle adapter implementation remains open until Issue #4 completes. Implementation work must define ERC-8004 controller/recovery details, independent reputation writer, ERC-8183 role addresses, deliverable commitment encoding, exact intent schema, confirmation/reconciliation policy, and deterministic rejection/refund recovery without inventing protocol deployment details here.
