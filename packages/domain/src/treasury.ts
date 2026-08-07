@@ -974,15 +974,16 @@ export class LaunchVaultTreasury {
     });
   }
 
-  recordIncomingTranche(input: {
+  async recordIncomingTranche(input: {
     trancheId: string;
     amount: MoneyAmount;
     transactionRef: ArcTransactionRef;
     actor: Actor;
+    idempotencyKey: string;
     eventId: string;
     occurredAt: string;
     sourceJobRef?: z.infer<typeof AgenticJobRefSchema> | null;
-  }): IncomingTranche {
+  }): Promise<IncomingTranche> {
     const actor = ActorSchema.parse(input.actor);
     this.#assertAuthorizedOperator(actor);
     const eventId = IdSchema.parse(input.eventId);
@@ -1062,31 +1063,44 @@ export class LaunchVaultTreasury {
       }
     }
 
-    const tranche = IncomingTrancheSchema.parse({
-      id: input.trancheId,
-      projectId: this.#vault.projectId,
-      vaultId: this.#vault.id,
-      amount: amountValue,
-      transactionRef,
-      sourceJobRef,
+    const fingerprint = JSON.stringify([
+      input.trancheId,
+      amountValue.atomicUnits,
+      amountValue.asset,
+      this.#transactionFingerprint(transactionRef),
+      this.#jobRefFingerprint(sourceJobRef),
+      actor.actorType,
+      actor.actorId,
       state,
-      reconciledAt: null,
-      createdAt: current?.createdAt ?? occurredAt,
+    ]);
+
+    return this.#idempotency.execute("tranche-record", input.idempotencyKey, fingerprint, () => {
+      const tranche = IncomingTrancheSchema.parse({
+        id: input.trancheId,
+        projectId: this.#vault.projectId,
+        vaultId: this.#vault.id,
+        amount: amountValue,
+        transactionRef,
+        sourceJobRef,
+        state,
+        reconciledAt: null,
+        createdAt: current?.createdAt ?? occurredAt,
+      });
+      const auditRecord = event({
+        id: eventId,
+        aggregateId: tranche.id,
+        actor,
+        occurredAt,
+        idempotencyKey: input.idempotencyKey,
+        previousState: current?.state ?? "NONE",
+        nextState: tranche.state,
+        relatedTrancheId: tranche.id,
+        relatedTransactionHash: tranche.transactionRef.transactionHash,
+      });
+      this.#incomingTranches.set(tranche.id, tranche);
+      this.#audit.push(auditRecord);
+      return structuredClone(tranche);
     });
-    const auditRecord = event({
-      id: eventId,
-      aggregateId: tranche.id,
-      actor,
-      occurredAt,
-      idempotencyKey: null,
-      previousState: current?.state ?? "NONE",
-      nextState: tranche.state,
-      relatedTrancheId: tranche.id,
-      relatedTransactionHash: tranche.transactionRef.transactionHash,
-    });
-    this.#incomingTranches.set(tranche.id, tranche);
-    this.#audit.push(auditRecord);
-    return structuredClone(tranche);
   }
 
   async reconcileConfirmedTranche(input: {
