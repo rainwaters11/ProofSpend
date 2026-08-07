@@ -193,8 +193,9 @@ const classifyMilestoneApproval = (
   const evaluatedAt = finiteTime(input.evaluatedAt);
   const expiresAt = finiteTime(approval.expiresAt);
   const decidedAt = finiteTime(approval.decidedAt);
-  if (evaluatedAt === null || expiresAt === null || decidedAt === null || decidedAt > evaluatedAt || evaluatedAt >= expiresAt) return "PENDING";
+  if (evaluatedAt === null || decidedAt === null || decidedAt > evaluatedAt) return "PENDING";
   if (approval.decision === "REJECTED") return "REJECTED";
+  if (expiresAt === null || evaluatedAt >= expiresAt) return "PENDING";
   if (approval.decision === "APPROVED") return "CONFIRMED";
   return "PENDING";
 };
