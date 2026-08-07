@@ -79,7 +79,7 @@ ProofSpend separates automation into four decision layers:
 3. **Authorized human approval** confirms the exact value-moving intent, including action, amount, asset, destination, role, and expiry.
 4. **Server-side execution** prepares, submits, confirms, and reconciles the Arc Testnet transaction through a typed Circle adapter.
 
-The Verification Agent may autonomously inspect evidence, call approved analysis tools, explain policy output, and prepare a proposal. It must never independently produce the authoritative financial decision, approve its own proposal, alter an approved intent, or submit a value-moving action without exact persisted approval.
+The Verification Agent may autonomously inspect evidence, call approved analysis tools, explain policy output, and prepare a proposal. It must never independently produce the authoritative financial decision, approve its own proposal, alter an approved intent, or submit a value-moving action. After exact persisted approval, deterministic server-side execution revalidates and submits the action outside the agent tool loop.
 
 ## What is working now
 
