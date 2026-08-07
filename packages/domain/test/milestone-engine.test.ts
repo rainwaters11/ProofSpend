@@ -2,13 +2,17 @@ import { describe, expect, it } from "vitest";
 import {
   AgenticJobStatusSchema,
   ApprovalRecordSchema,
+  EvidenceItemSchema,
+  EvidenceMatchSchema,
   ReleaseRequestSchema,
   SettlementMoneyAmountSchema,
   assertErc8183Transition,
   createAgenticJobDraft,
   evaluateMilestone,
+  hashCanonicalMilestoneEvaluationApprovalSubject,
   isAllowedErc8183Transition,
   type AgenticJobStatus,
+  type MilestoneEvaluationInput,
   type MilestoneRequirement,
 } from "../src";
 
@@ -36,8 +40,25 @@ const baseRequirements: MilestoneRequirement[] = [
 const evaluatedAt = "2026-01-20T00:00:00.000Z";
 const policyVersion = "policy:v1";
 const approvalIntentId = "intent:exact";
-const approvalIntentHash = `sha256:${"a".repeat(64)}`;
 const authorizedEvaluatorId = "evaluator:1";
+const authorizedFounderId = "founder:1";
+const baseEvidenceItems = () => ([
+  EvidenceItemSchema.parse({ id: "evidence:deliverable", projectId: milestone.projectId, kind: "DELIVERABLE", sourceHash: `sha256:${"1".repeat(64)}`, storageRef: "private://deliverable", visibility: "FOUNDER_PRIVATE", submittedAt: evaluatedAt }),
+  EvidenceItemSchema.parse({ id: "evidence:receipt:1", projectId: milestone.projectId, kind: "RECEIPT", sourceHash: `sha256:${"2".repeat(64)}`, storageRef: "private://receipt:1", visibility: "FOUNDER_PRIVATE", submittedAt: evaluatedAt }),
+  EvidenceItemSchema.parse({ id: "evidence:receipt:2", projectId: milestone.projectId, kind: "RECEIPT", sourceHash: `sha256:${"3".repeat(64)}`, storageRef: "private://receipt:2", visibility: "FOUNDER_PRIVATE", submittedAt: evaluatedAt }),
+  EvidenceItemSchema.parse({ id: "evidence:confirmation", projectId: milestone.projectId, kind: "CONFIRMATION", sourceHash: `sha256:${"4".repeat(64)}`, storageRef: "private://confirmation", visibility: "FOUNDER_PRIVATE", submittedAt: evaluatedAt }),
+  EvidenceItemSchema.parse({ id: "evidence:tx:match", projectId: milestone.projectId, kind: "STATEMENT", sourceHash: `sha256:${"5".repeat(64)}`, storageRef: "private://tx-match", visibility: "FOUNDER_PRIVATE", submittedAt: evaluatedAt }),
+  EvidenceItemSchema.parse({ id: "evidence:purpose", projectId: milestone.projectId, kind: "SCREENSHOT", sourceHash: `sha256:${"6".repeat(64)}`, storageRef: "private://purpose", visibility: "FOUNDER_PRIVATE", submittedAt: evaluatedAt }),
+  EvidenceItemSchema.parse({ id: "evidence:due", projectId: milestone.projectId, kind: "INVOICE", sourceHash: `sha256:${"7".repeat(64)}`, storageRef: "private://due", visibility: "FOUNDER_PRIVATE", submittedAt: evaluatedAt }),
+]);
+const baseEvidenceMatches = () => ([
+  EvidenceMatchSchema.parse({ id: "match:deliverable", source: "HUMAN_DECISION", evidenceId: "evidence:deliverable", requirementId: "req:deliverable", confidenceBasisPoints: null, explanation: "accepted deliverable", acceptedBy: { actorType: "EVALUATOR", actorId: authorizedEvaluatorId } }),
+  EvidenceMatchSchema.parse({ id: "match:receipt:1", source: "HUMAN_DECISION", evidenceId: "evidence:receipt:1", requirementId: "req:expenses", confidenceBasisPoints: null, explanation: "accepted receipt", acceptedBy: { actorType: "EVALUATOR", actorId: authorizedEvaluatorId } }),
+  EvidenceMatchSchema.parse({ id: "match:receipt:2", source: "HUMAN_DECISION", evidenceId: "evidence:receipt:2", requirementId: "req:expenses", confidenceBasisPoints: null, explanation: "accepted receipt", acceptedBy: { actorType: "EVALUATOR", actorId: authorizedEvaluatorId } }),
+  EvidenceMatchSchema.parse({ id: "match:confirmation", source: "HUMAN_DECISION", evidenceId: "evidence:confirmation", requirementId: "req:confirmation", confidenceBasisPoints: null, explanation: "accepted confirmation", acceptedBy: { actorType: "FOUNDER", actorId: authorizedFounderId } }),
+  EvidenceMatchSchema.parse({ id: "match:tx", source: "HUMAN_DECISION", evidenceId: "evidence:tx:match", requirementId: "req:tx", confidenceBasisPoints: null, explanation: "accepted tx match", acceptedBy: { actorType: "EVALUATOR", actorId: authorizedEvaluatorId } }),
+  EvidenceMatchSchema.parse({ id: "match:purpose", source: "HUMAN_DECISION", evidenceId: "evidence:purpose", requirementId: "req:purpose", confidenceBasisPoints: null, explanation: "accepted purpose", acceptedBy: { actorType: "EVALUATOR", actorId: authorizedEvaluatorId } }),
+]);
 
 function baseObservations() {
   return {
@@ -51,36 +72,55 @@ function baseObservations() {
   };
 }
 
-const exactApproval = ApprovalRecordSchema.parse({
+const approvalInput = (overrides: Partial<MilestoneEvaluationInput> = {}): MilestoneEvaluationInput => ({
+  milestone: overrides.milestone ?? milestone,
+  requirements: overrides.requirements ?? baseRequirements,
+  observations: overrides.observations ?? baseObservations(),
+  evidenceItems: overrides.evidenceItems ?? baseEvidenceItems(),
+  evidenceMatches: overrides.evidenceMatches ?? baseEvidenceMatches(),
+  verifiedSpend: overrides.verifiedSpend ?? usdc("150000000"),
+  evaluatedAt: overrides.evaluatedAt ?? evaluatedAt,
+  policyVersion: overrides.policyVersion ?? policyVersion,
+  approvalRecord: overrides.approvalRecord,
+  expectedApprovalIntentId: overrides.expectedApprovalIntentId ?? approvalIntentId,
+  expectedAuthorizedEvaluatorId: overrides.expectedAuthorizedEvaluatorId ?? authorizedEvaluatorId,
+  expectedAuthorizedFounderId: overrides.expectedAuthorizedFounderId ?? authorizedFounderId,
+  reviewerNotesByRequirementId: overrides.reviewerNotesByRequirementId,
+  expectedApprovalExactIntentHash: overrides.expectedApprovalExactIntentHash,
+});
+const approvalHashFor = (input: MilestoneEvaluationInput): string => hashCanonicalMilestoneEvaluationApprovalSubject({
+  milestone: input.milestone,
+  requirements: input.requirements,
+  observations: input.observations,
+  evidenceItems: input.evidenceItems,
+  evidenceMatches: input.evidenceMatches,
+  verifiedSpend: input.verifiedSpend,
+  policyVersion: input.policyVersion,
+});
+const exactApprovalFor = (input: MilestoneEvaluationInput) => ApprovalRecordSchema.parse({
   id: "approval:exact",
-  aggregateId: milestone.id,
+  aggregateId: input.milestone.id,
   intentId: approvalIntentId,
   actionKind: "MILESTONE_EVALUATION",
   authorizedActorType: "EVALUATOR",
   authorizedActorId: authorizedEvaluatorId,
-  exactIntentHash: approvalIntentHash,
+  exactIntentHash: approvalHashFor(input),
   idempotencyKey: "approval:key:exact",
   decision: "APPROVED",
   approver: { actorId: authorizedEvaluatorId, actorType: "EVALUATOR" },
   expiresAt: "2026-01-30T00:00:00.000Z",
   decidedAt: "2026-01-19T00:00:00.000Z",
 });
+const baselineApprovalInput = approvalInput();
+const exactApproval = exactApprovalFor(baselineApprovalInput);
 const approvalEvaluation = (result: ReturnType<typeof evaluateMilestone>) => result.requirementEvaluations.find((item) => item.requirementId === "req:approval");
 
 describe("milestone engine", () => {
   it("returns deterministic, stable requirement ordering and structured outcomes", () => {
-    const input = {
-      milestone,
+    const input = approvalInput({
       requirements: [...baseRequirements].reverse(),
-      observations: baseObservations(),
-      verifiedSpend: usdc("150000000"),
-      evaluatedAt,
-      policyVersion,
-      approvalRecord: exactApproval,
-      expectedApprovalIntentId: approvalIntentId,
-      expectedApprovalExactIntentHash: approvalIntentHash,
-      expectedAuthorizedEvaluatorId: authorizedEvaluatorId,
-    };
+    });
+    input.approvalRecord = exactApprovalFor(input);
     const first = evaluateMilestone(input);
     const second = evaluateMilestone(input);
     expect(first).toEqual(second);
@@ -101,7 +141,7 @@ describe("milestone engine", () => {
       { id: "req:a-1", milestoneId: customMilestone.id, kind: "HUMAN_APPROVAL", description: "approval" },
       { id: "req:a", milestoneId: customMilestone.id, kind: "DELIVERABLE", description: "deliverable" },
     ];
-    const result = evaluateMilestone({
+    const input = approvalInput({
       milestone: customMilestone,
       requirements: customRequirements,
       observations: {
@@ -109,14 +149,18 @@ describe("milestone engine", () => {
         "req:a-1": { evidenceReferences: ["approval:record"] },
         "req:a": { evidenceReferences: ["evidence:deliverable"], deliverableCount: 1 },
       },
+      evidenceItems: [
+        EvidenceItemSchema.parse({ id: "evidence:tx", projectId: milestone.projectId, kind: "STATEMENT", sourceHash: `sha256:${"8".repeat(64)}`, storageRef: "private://tx", visibility: "FOUNDER_PRIVATE", submittedAt: evaluatedAt }),
+        EvidenceItemSchema.parse({ id: "evidence:deliverable", projectId: milestone.projectId, kind: "DELIVERABLE", sourceHash: `sha256:${"9".repeat(64)}`, storageRef: "private://deliverable-a", visibility: "FOUNDER_PRIVATE", submittedAt: evaluatedAt }),
+      ],
+      evidenceMatches: [
+        EvidenceMatchSchema.parse({ id: "match:tx:ä", source: "HUMAN_DECISION", evidenceId: "evidence:tx", requirementId: "req:ä", confidenceBasisPoints: null, explanation: "accepted", acceptedBy: { actorType: "EVALUATOR", actorId: authorizedEvaluatorId } }),
+        EvidenceMatchSchema.parse({ id: "match:deliverable:a", source: "HUMAN_DECISION", evidenceId: "evidence:deliverable", requirementId: "req:a", confidenceBasisPoints: null, explanation: "accepted", acceptedBy: { actorType: "EVALUATOR", actorId: authorizedEvaluatorId } }),
+      ],
       verifiedSpend: usdc("1"),
-      evaluatedAt,
-      policyVersion,
-      approvalRecord: exactApproval,
-      expectedApprovalIntentId: approvalIntentId,
-      expectedApprovalExactIntentHash: approvalIntentHash,
-      expectedAuthorizedEvaluatorId: authorizedEvaluatorId,
     });
+    input.approvalRecord = exactApprovalFor(input);
+    const result = evaluateMilestone(input);
     expect(result.requirementEvaluations.map((item) => item.requirementId)).toEqual(["req:a", "req:a-1", "req:ä"]);
   });
 
@@ -163,23 +207,18 @@ describe("milestone engine", () => {
   });
 
   it("keeps ELIGIBLE while approval is pending and blocks later ERC action", () => {
-    const result = evaluateMilestone({
-      milestone,
-      requirements: baseRequirements,
-      observations: baseObservations(),
+    const input = approvalInput({
       verifiedSpend: usdc("149999999"),
-      evaluatedAt,
-      policyVersion,
+    });
+    const result = evaluateMilestone({
+      ...input,
       approvalRecord: ApprovalRecordSchema.parse({
-        ...exactApproval,
+        ...exactApprovalFor(input),
         id: "approval:pending",
         decision: "PENDING",
         approver: null,
         decidedAt: null,
       }),
-      expectedApprovalIntentId: approvalIntentId,
-      expectedApprovalExactIntentHash: approvalIntentHash,
-      expectedAuthorizedEvaluatorId: authorizedEvaluatorId,
     });
 
     expect(result.status).toBe("ELIGIBLE");
@@ -194,31 +233,23 @@ describe("milestone engine", () => {
       requirementIds: requirementIds.filter((item) => item !== "req:approval"),
     };
     const noApprovalRequirements = baseRequirements.filter((item) => item.kind !== "HUMAN_APPROVAL");
-    const result = evaluateMilestone({
+    const result = evaluateMilestone(approvalInput({
       milestone: noApprovalRequirementMilestone,
       requirements: noApprovalRequirements,
-      observations: baseObservations(),
       verifiedSpend: usdc("149999999"),
-      evaluatedAt,
-      policyVersion,
       approvalRecord: null,
-    });
+    }));
     expect(result.status).toBe("ELIGIBLE");
     expect(result.humanApprovalRequired).toBe(true);
     expect(result.erc8183ActionPermitted).toBe(false);
   });
 
   it("requires exact evaluator and exact intent binding for action permission", () => {
+    const base = approvalInput();
+    const baseApproval = exactApprovalFor(base);
     const wrongEvaluator = evaluateMilestone({
-      milestone,
-      requirements: baseRequirements,
-      observations: baseObservations(),
-      verifiedSpend: usdc("150000000"),
-      evaluatedAt,
-      policyVersion,
-      approvalRecord: exactApproval,
-      expectedApprovalIntentId: approvalIntentId,
-      expectedApprovalExactIntentHash: approvalIntentHash,
+      ...base,
+      approvalRecord: baseApproval,
       expectedAuthorizedEvaluatorId: "evaluator:other",
     });
     expect(wrongEvaluator.status).toBe("ELIGIBLE");
@@ -227,16 +258,9 @@ describe("milestone engine", () => {
     expect(approvalEvaluation(wrongEvaluator)?.reasonCodes).toEqual(["HUMAN_APPROVAL_PENDING"]);
 
     const wrongIntent = evaluateMilestone({
-      milestone,
-      requirements: baseRequirements,
-      observations: baseObservations(),
-      verifiedSpend: usdc("150000000"),
-      evaluatedAt,
-      policyVersion,
-      approvalRecord: exactApproval,
+      ...base,
+      approvalRecord: baseApproval,
       expectedApprovalIntentId: "intent:other",
-      expectedApprovalExactIntentHash: approvalIntentHash,
-      expectedAuthorizedEvaluatorId: authorizedEvaluatorId,
     });
     expect(wrongIntent.status).toBe("ELIGIBLE");
     expect(wrongIntent.erc8183ActionPermitted).toBe(false);
@@ -244,16 +268,8 @@ describe("milestone engine", () => {
     expect(approvalEvaluation(wrongIntent)?.reasonCodes).toEqual(["HUMAN_APPROVAL_PENDING"]);
 
     const wrongHash = evaluateMilestone({
-      milestone,
-      requirements: baseRequirements,
-      observations: baseObservations(),
-      verifiedSpend: usdc("150000000"),
-      evaluatedAt,
-      policyVersion,
-      approvalRecord: exactApproval,
-      expectedApprovalIntentId: approvalIntentId,
-      expectedApprovalExactIntentHash: `sha256:${"b".repeat(64)}`,
-      expectedAuthorizedEvaluatorId: authorizedEvaluatorId,
+      ...base,
+      approvalRecord: ApprovalRecordSchema.parse({ ...baseApproval, exactIntentHash: `sha256:${"b".repeat(64)}` }),
     });
     expect(wrongHash.status).toBe("ELIGIBLE");
     expect(wrongHash.erc8183ActionPermitted).toBe(false);
@@ -261,18 +277,53 @@ describe("milestone engine", () => {
     expect(approvalEvaluation(wrongHash)?.reasonCodes).toEqual(["HUMAN_APPROVAL_PENDING"]);
   });
 
+  it("binds milestone approval to canonical policy-driving payload", () => {
+    const base = approvalInput();
+    const approved = exactApprovalFor(base);
+    expect(evaluateMilestone({ ...base, approvalRecord: approved }).humanApprovalRequired).toBe(false);
+
+    const changedRequirement = evaluateMilestone({
+      ...base,
+      requirements: base.requirements.map((requirement) => requirement.id === "req:purpose" ? { ...requirement, description: "Changed policy definition" } : requirement),
+      approvalRecord: approved,
+    });
+    expect(approvalEvaluation(changedRequirement)?.reasonCodes).toEqual(["HUMAN_APPROVAL_PENDING"]);
+
+    const changedEvidenceBinding = evaluateMilestone({
+      ...base,
+      evidenceMatches: (base.evidenceMatches ?? []).map((match) => match.id === "match:purpose" ? { ...match, requirementId: "req:tx" } : match),
+      approvalRecord: approved,
+    });
+    expect(approvalEvaluation(changedEvidenceBinding)?.reasonCodes).toEqual(["HUMAN_APPROVAL_PENDING"]);
+
+    const changedSpend = evaluateMilestone({
+      ...base,
+      verifiedSpend: usdc("149999999"),
+      approvalRecord: approved,
+    });
+    expect(approvalEvaluation(changedSpend)?.reasonCodes).toEqual(["HUMAN_APPROVAL_PENDING"]);
+
+    const changedPolicy = evaluateMilestone({
+      ...base,
+      policyVersion: "policy:v2",
+      approvalRecord: approved,
+    });
+    expect(approvalEvaluation(changedPolicy)?.reasonCodes).toEqual(["HUMAN_APPROVAL_PENDING"]);
+
+    const changedMilestone = evaluateMilestone({
+      ...base,
+      milestone: { ...base.milestone, dueAt: "2026-02-02T00:00:00.000Z" },
+      approvalRecord: approved,
+    });
+    expect(approvalEvaluation(changedMilestone)?.reasonCodes).toEqual(["HUMAN_APPROVAL_PENDING"]);
+  });
+
   it("blocks rejected or expired approvals and permits only valid exact current approval", () => {
+    const base = approvalInput();
+    const approved = exactApprovalFor(base);
     const rejectedApproval = evaluateMilestone({
-      milestone,
-      requirements: baseRequirements,
-      observations: baseObservations(),
-      verifiedSpend: usdc("150000000"),
-      evaluatedAt,
-      policyVersion,
-      approvalRecord: ApprovalRecordSchema.parse({ ...exactApproval, decision: "REJECTED" }),
-      expectedApprovalIntentId: approvalIntentId,
-      expectedApprovalExactIntentHash: approvalIntentHash,
-      expectedAuthorizedEvaluatorId: authorizedEvaluatorId,
+      ...base,
+      approvalRecord: ApprovalRecordSchema.parse({ ...approved, decision: "REJECTED" }),
     });
     expect(rejectedApproval.status).toBe("ELIGIBLE");
     expect(rejectedApproval.erc8183ActionPermitted).toBe(false);
@@ -280,34 +331,15 @@ describe("milestone engine", () => {
     expect(approvalEvaluation(rejectedApproval)?.reasonCodes).toEqual(["HUMAN_APPROVAL_REJECTED"]);
 
     const expiredApproval = evaluateMilestone({
-      milestone,
-      requirements: baseRequirements,
-      observations: baseObservations(),
-      verifiedSpend: usdc("150000000"),
-      evaluatedAt,
-      policyVersion,
-      approvalRecord: ApprovalRecordSchema.parse({ ...exactApproval, expiresAt: "2026-01-10T00:00:00.000Z", decidedAt: "2026-01-09T00:00:00.000Z" }),
-      expectedApprovalIntentId: approvalIntentId,
-      expectedApprovalExactIntentHash: approvalIntentHash,
-      expectedAuthorizedEvaluatorId: authorizedEvaluatorId,
+      ...base,
+      approvalRecord: ApprovalRecordSchema.parse({ ...approved, expiresAt: "2026-01-10T00:00:00.000Z", decidedAt: "2026-01-09T00:00:00.000Z" }),
     });
     expect(expiredApproval.status).toBe("ELIGIBLE");
     expect(expiredApproval.erc8183ActionPermitted).toBe(false);
     expect(approvalEvaluation(expiredApproval)?.outcome).toBe("REVIEW");
     expect(approvalEvaluation(expiredApproval)?.reasonCodes).toEqual(["HUMAN_APPROVAL_PENDING"]);
 
-    const validApproval = evaluateMilestone({
-      milestone,
-      requirements: baseRequirements,
-      observations: baseObservations(),
-      verifiedSpend: usdc("150000000"),
-      evaluatedAt,
-      policyVersion,
-      approvalRecord: exactApproval,
-      expectedApprovalIntentId: approvalIntentId,
-      expectedApprovalExactIntentHash: approvalIntentHash,
-      expectedAuthorizedEvaluatorId: authorizedEvaluatorId,
-    });
+    const validApproval = evaluateMilestone({ ...base, approvalRecord: approved });
     expect(validApproval.status).toBe("ELIGIBLE");
     expect(validApproval.erc8183ActionPermitted).toBe(false);
     expect(validApproval.recommendedNextAction).toBe("PREPARE_JOB_DRAFT");
@@ -316,18 +348,8 @@ describe("milestone engine", () => {
   });
 
   it("keeps ERC-8183 write permission false even when exact milestone approval is confirmed", () => {
-    const result = evaluateMilestone({
-      milestone,
-      requirements: baseRequirements,
-      observations: baseObservations(),
-      verifiedSpend: usdc("150000000"),
-      evaluatedAt,
-      policyVersion,
-      approvalRecord: exactApproval,
-      expectedApprovalIntentId: approvalIntentId,
-      expectedApprovalExactIntentHash: approvalIntentHash,
-      expectedAuthorizedEvaluatorId: authorizedEvaluatorId,
-    });
+    const input = approvalInput();
+    const result = evaluateMilestone({ ...input, approvalRecord: exactApprovalFor(input) });
     expect(result.status).toBe("ELIGIBLE");
     expect(result.humanApprovalRequired).toBe(false);
     expect(result.recommendedNextAction).toBe("PREPARE_JOB_DRAFT");
@@ -336,8 +358,7 @@ describe("milestone engine", () => {
 
   it("handles missing/conflicting evidence and keeps optional failures from blocking eligibility", () => {
     const optionalPurpose = baseRequirements.map((item) => (item.id === "req:purpose" ? { ...item, required: false } : item));
-    const result = evaluateMilestone({
-      milestone,
+    const result = evaluateMilestone(approvalInput({
       requirements: optionalPurpose,
       observations: {
         ...baseObservations(),
@@ -345,12 +366,11 @@ describe("milestone engine", () => {
         "req:expenses": { evidenceReferences: ["evidence:receipt:1"], receiptCount: 1, hasConflictingEvidence: true },
         "req:purpose": { evidenceReferences: [], businessPurposePresent: false },
       },
+      evidenceMatches: baseEvidenceMatches().filter((match) => !["match:receipt:2", "match:deliverable", "match:purpose"].includes(match.id)),
       verifiedSpend: usdc("150000001"),
-      evaluatedAt,
-      policyVersion,
       approvalRecord: null,
       reviewerNotesByRequirementId: { "req:expenses": "conflicting invoice totals" },
-    });
+    }));
     expect(result.status).toBe("INCOMPLETE");
     expect(result.reasonCodes).toEqual(expect.arrayContaining(["DELIVERABLE_COUNT_SHORT", "EVIDENCE_CONFLICT", "SPEND_LIMIT_EXCEEDED", "BUSINESS_PURPOSE_MISSING"]));
     expect(result.requirementEvaluations.find((item) => item.requirementId === "req:purpose")?.blocksEligibility).toBe(false);
@@ -358,87 +378,79 @@ describe("milestone engine", () => {
   });
 
   it("ignores LLM-suggested status fields", () => {
-    const withInjectedField = evaluateMilestone({
-      milestone,
-      requirements: baseRequirements,
+    const injected = approvalInput({
       observations: { ...baseObservations(), "req:deliverable": { evidenceReferences: ["evidence:deliverable"], deliverableCount: 1, llmSuggestedMilestoneStatus: "ELIGIBLE" } },
-      verifiedSpend: usdc("150000000"),
-      evaluatedAt,
-      policyVersion,
-      approvalRecord: exactApproval,
-      expectedApprovalIntentId: approvalIntentId,
-      expectedApprovalExactIntentHash: approvalIntentHash,
-      expectedAuthorizedEvaluatorId: authorizedEvaluatorId,
     });
+    const withInjectedField = evaluateMilestone({ ...injected, approvalRecord: exactApprovalFor(injected) });
     expect(withInjectedField.status).toBe("ELIGIBLE");
     expect(withInjectedField.erc8183ActionPermitted).toBe(false);
   });
 
+  it("does not allow naked booleans or AI suggestions to authorize PASS", () => {
+    const aiOnly = approvalInput({
+      evidenceMatches: [
+        ...baseEvidenceMatches().filter((match) => ["match:deliverable", "match:receipt:1", "match:receipt:2"].includes(match.id)),
+        EvidenceMatchSchema.parse({ id: "match:tx:ai", source: "AI_SUGGESTION", evidenceId: "evidence:tx:match", requirementId: "req:tx", confidenceBasisPoints: 9500, explanation: "ai suggests", acceptedBy: null }),
+        EvidenceMatchSchema.parse({ id: "match:confirm:ai", source: "AI_SUGGESTION", evidenceId: "evidence:confirmation", requirementId: "req:confirmation", confidenceBasisPoints: 9500, explanation: "ai suggests", acceptedBy: null }),
+      ],
+      observations: {
+        ...baseObservations(),
+        "req:tx": { evidenceReferences: ["evidence:tx:match"], transactionMatched: true },
+        "req:confirmation": { evidenceReferences: ["evidence:confirmation"], founderConfirmationPresent: true },
+      },
+    });
+    const aiOnlyResult = evaluateMilestone({ ...aiOnly, approvalRecord: null });
+    expect(aiOnlyResult.requirementEvaluations.find((item) => item.requirementId === "req:tx")?.outcome).toBe("REVIEW");
+    expect(aiOnlyResult.requirementEvaluations.find((item) => item.requirementId === "req:confirmation")?.outcome).toBe("REVIEW");
+
+    const noAuthorizedConfirmation = approvalInput({
+      evidenceMatches: baseEvidenceMatches().map((match) =>
+        match.id === "match:confirmation"
+          ? EvidenceMatchSchema.parse({ ...match, acceptedBy: { actorType: "FOUNDER", actorId: "founder:other" } })
+          : match),
+    });
+    const noAuthorizedConfirmationResult = evaluateMilestone({ ...noAuthorizedConfirmation, approvalRecord: null });
+    expect(noAuthorizedConfirmationResult.requirementEvaluations.find((item) => item.requirementId === "req:confirmation")?.outcome).not.toBe("PASS");
+  });
+
   it("fails closed for count-based requirements without distinct evidence-reference consistency", () => {
-    expect(() => evaluateMilestone({
-      milestone,
-      requirements: baseRequirements,
+    expect(() => evaluateMilestone(approvalInput({
       observations: {
         ...baseObservations(),
         "req:expenses": { evidenceReferences: [], receiptCount: 1 },
       },
-      verifiedSpend: usdc("150000000"),
-      evaluatedAt,
-      policyVersion,
       approvalRecord: exactApproval,
-      expectedApprovalIntentId: approvalIntentId,
-      expectedApprovalExactIntentHash: approvalIntentHash,
-      expectedAuthorizedEvaluatorId: authorizedEvaluatorId,
-    })).toThrow(/receiptCount must match/i);
+    }))).toThrow(/receiptCount must match/i);
 
-    expect(() => evaluateMilestone({
-      milestone,
-      requirements: baseRequirements,
+    expect(() => evaluateMilestone(approvalInput({
       observations: {
         ...baseObservations(),
         "req:expenses": { evidenceReferences: ["evidence:receipt:1", "evidence:receipt:1"], receiptCount: 2 },
       },
-      verifiedSpend: usdc("150000000"),
-      evaluatedAt,
-      policyVersion,
       approvalRecord: exactApproval,
-      expectedApprovalIntentId: approvalIntentId,
-      expectedApprovalExactIntentHash: approvalIntentHash,
-      expectedAuthorizedEvaluatorId: authorizedEvaluatorId,
-    })).toThrow(/must be unique/i);
+    }))).toThrow(/must be unique/i);
 
-    expect(() => evaluateMilestone({
-      milestone,
-      requirements: baseRequirements,
+    expect(() => evaluateMilestone(approvalInput({
       observations: {
         ...baseObservations(),
         "req:deliverable": { evidenceReferences: ["evidence:deliverable"], deliverableCount: 2 },
       },
-      verifiedSpend: usdc("150000000"),
-      evaluatedAt,
-      policyVersion,
       approvalRecord: exactApproval,
-      expectedApprovalIntentId: approvalIntentId,
-      expectedApprovalExactIntentHash: approvalIntentHash,
-      expectedAuthorizedEvaluatorId: authorizedEvaluatorId,
-    })).toThrow(/deliverableCount must match/i);
+    }))).toThrow(/deliverableCount must match/i);
 
-    const result = evaluateMilestone({
-      milestone,
-      requirements: baseRequirements,
+    const wrongKind = approvalInput({
+      evidenceItems: baseEvidenceItems().map((item) => item.id === "evidence:receipt:2" ? EvidenceItemSchema.parse({ ...item, kind: "INVOICE" }) : item),
+    });
+    expect(() => evaluateMilestone({ ...wrongKind, approvalRecord: null })).toThrow(/validated evidence set/i);
+
+    const resultInput = approvalInput({
       observations: {
         ...baseObservations(),
         "req:expenses": { evidenceReferences: ["evidence:receipt:1", "evidence:receipt:2"], receiptCount: 2 },
         "req:deliverable": { evidenceReferences: ["evidence:deliverable"], deliverableCount: 1 },
       },
-      verifiedSpend: usdc("150000000"),
-      evaluatedAt,
-      policyVersion,
-      approvalRecord: exactApproval,
-      expectedApprovalIntentId: approvalIntentId,
-      expectedApprovalExactIntentHash: approvalIntentHash,
-      expectedAuthorizedEvaluatorId: authorizedEvaluatorId,
     });
+    const result = evaluateMilestone({ ...resultInput, approvalRecord: exactApprovalFor(resultInput) });
     expect(result.requirementEvaluations.find((item) => item.requirementId === "req:expenses")?.reasonCodes).toEqual(["RECEIPT_COUNT_MET"]);
     expect(result.requirementEvaluations.find((item) => item.requirementId === "req:deliverable")?.reasonCodes).toEqual(["DELIVERABLE_COUNT_MET"]);
   });
@@ -489,50 +501,26 @@ describe("milestone engine", () => {
   });
 
   it("rejects raw private evidence content in references while accepting ID/hash references", () => {
-    expect(() => evaluateMilestone({
-      milestone,
-      requirements: baseRequirements,
-      observations: { ...baseObservations(), "req:deliverable": { evidenceReferences: ["founder private receipt text"], deliverableCount: 1 } },
-      verifiedSpend: usdc("150000000"),
-      evaluatedAt,
-      policyVersion,
+    expect(() => evaluateMilestone(approvalInput({
+      observations: { ...baseObservations(), "req:tx": { evidenceReferences: ["founder private receipt text"], transactionMatched: true } },
       approvalRecord: exactApproval,
-      expectedApprovalIntentId: approvalIntentId,
-      expectedApprovalExactIntentHash: approvalIntentHash,
-      expectedAuthorizedEvaluatorId: authorizedEvaluatorId,
-    })).toThrow();
+    }))).toThrow();
 
-    const result = evaluateMilestone({
-      milestone,
-      requirements: baseRequirements,
+    const input = approvalInput({
       observations: {
         ...baseObservations(),
-        "req:deliverable": { evidenceReferences: ["evidence:deliverable-id", `sha256:${"f".repeat(64)}`], deliverableCount: 2 },
+        "req:tx": { evidenceReferences: ["evidence:tx:match", `sha256:${"f".repeat(64)}`], transactionMatched: true },
       },
-      verifiedSpend: usdc("150000000"),
-      evaluatedAt,
-      policyVersion,
-      approvalRecord: exactApproval,
-      expectedApprovalIntentId: approvalIntentId,
-      expectedApprovalExactIntentHash: approvalIntentHash,
-      expectedAuthorizedEvaluatorId: authorizedEvaluatorId,
     });
+    const result = evaluateMilestone({ ...input, approvalRecord: exactApprovalFor(input) });
     expect(result.status).toBe("ELIGIBLE");
   });
 
   it("does not emit private passthrough fields and keeps release confirmation gated by settlement reference", () => {
-    const result = evaluateMilestone({
-      milestone,
-      requirements: baseRequirements,
-      observations: { ...baseObservations(), "req:deliverable": { evidenceReferences: ["evidence:deliverable-id"], deliverableCount: 1, rawPrivateEvidence: "founder-private-receipt-content" } },
-      verifiedSpend: usdc("150000000"),
-      evaluatedAt,
-      policyVersion,
-      approvalRecord: exactApproval,
-      expectedApprovalIntentId: approvalIntentId,
-      expectedApprovalExactIntentHash: approvalIntentHash,
-      expectedAuthorizedEvaluatorId: authorizedEvaluatorId,
+    const input = approvalInput({
+      observations: { ...baseObservations(), "req:deliverable": { evidenceReferences: ["evidence:deliverable"], deliverableCount: 1, rawPrivateEvidence: "founder-private-receipt-content" } },
     });
+    const result = evaluateMilestone({ ...input, approvalRecord: exactApprovalFor(input) });
     expect(JSON.stringify(result)).not.toContain("founder-private-receipt-content");
     expect(() => ReleaseRequestSchema.parse({
       id: "release:1",
