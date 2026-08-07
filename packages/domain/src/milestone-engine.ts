@@ -197,7 +197,19 @@ const normalizeDistinctEvidenceReferences = (
   }
   return evidenceReferences;
 };
-const createProvenanceIndex = (input: Pick<MilestoneEvaluationInput, "milestone" | "requirements" | "evidenceItems" | "evidenceMatches">): ProvenanceIndex => {
+const isAllowedDecisionActor = (
+  actor: Actor,
+  expectedAuthorizedFounderId: string | undefined,
+  expectedAuthorizedEvaluatorId: string | undefined,
+): boolean =>
+  (actor.actorType === "FOUNDER" && expectedAuthorizedFounderId !== undefined && actor.actorId === expectedAuthorizedFounderId) ||
+  (actor.actorType === "EVALUATOR" && expectedAuthorizedEvaluatorId !== undefined && actor.actorId === expectedAuthorizedEvaluatorId);
+const createProvenanceIndex = (
+  input: Pick<
+    MilestoneEvaluationInput,
+    "milestone" | "requirements" | "evidenceItems" | "evidenceMatches" | "expectedAuthorizedFounderId" | "expectedAuthorizedEvaluatorId"
+  >,
+): ProvenanceIndex => {
   const requirementIds = new Set(input.requirements.map((requirement) => requirement.id));
   const evidenceById = new Map<string, EvidenceItem>();
   const evidenceIdsBySourceHash = new Map<string, Set<string>>();
@@ -226,6 +238,7 @@ const createProvenanceIndex = (input: Pick<MilestoneEvaluationInput, "milestone"
       requirement.hasAiSuggestion = true;
       continue;
     }
+    if (!isAllowedDecisionActor(match.acceptedBy, input.expectedAuthorizedFounderId, input.expectedAuthorizedEvaluatorId)) continue;
     requirement.hasAcceptedHumanDecision = true;
     const acceptedEvidence = requirement.acceptedEvidenceByKind[evidence.kind] ?? new Set<string>();
     acceptedEvidence.add(evidence.id);
@@ -249,13 +262,6 @@ const hasAiOnlySuggestion = (
   const entry = provenance.byRequirementId.get(requirementId);
   return entry?.hasAiSuggestion === true && entry.hasAcceptedHumanDecision !== true;
 };
-const isAllowedConfirmationActor = (
-  actor: Actor,
-  expectedAuthorizedFounderId: string | undefined,
-  expectedAuthorizedEvaluatorId: string | undefined,
-): boolean =>
-  (actor.actorType === "FOUNDER" && expectedAuthorizedFounderId !== undefined && actor.actorId === expectedAuthorizedFounderId) ||
-  (actor.actorType === "EVALUATOR" && expectedAuthorizedEvaluatorId !== undefined && actor.actorId === expectedAuthorizedEvaluatorId);
 const acceptedConfirmationCount = (
   requirementId: string,
   input: Pick<MilestoneEvaluationInput, "milestone" | "expectedAuthorizedFounderId" | "expectedAuthorizedEvaluatorId" | "evidenceItems" | "evidenceMatches">,
@@ -268,7 +274,7 @@ const acceptedConfirmationCount = (
   const acceptedEvidence = new Set<string>();
   for (const match of input.evidenceMatches ?? []) {
     if (match.source !== "HUMAN_DECISION" || match.requirementId !== requirementId) continue;
-    if (!isAllowedConfirmationActor(match.acceptedBy, input.expectedAuthorizedFounderId, input.expectedAuthorizedEvaluatorId)) continue;
+    if (!isAllowedDecisionActor(match.acceptedBy, input.expectedAuthorizedFounderId, input.expectedAuthorizedEvaluatorId)) continue;
     if (!evidenceById.has(match.evidenceId)) continue;
     acceptedEvidence.add(match.evidenceId);
   }
@@ -284,30 +290,54 @@ const countValidatedEvidenceReferences = (
 ): number => {
   const evidenceReferences = normalizeDistinctEvidenceReferences(observation, legacyCount, legacyCountLabel);
   const acceptedEvidence = provenance.byRequirementId.get(requirement.id)?.acceptedEvidenceByKind[evidenceKind] ?? new Set<string>();
+  return resolveValidatedEvidenceReferences(evidenceReferences, acceptedEvidence, provenance, "Count-based evidence references");
+};
+const resolveValidatedEvidenceReferences = (
+  evidenceReferences: readonly string[],
+  acceptedEvidence: ReadonlySet<string>,
+  provenance: ProvenanceIndex,
+  label: string,
+): number => {
   const resolvedEvidenceIds = new Set<string>();
   for (const reference of evidenceReferences) {
     let resolvedEvidenceId: string | null = null;
     if (HashReferenceSchema.safeParse(reference).success) {
       const matchingEvidenceIds = [...(provenance.evidenceIdsBySourceHash.get(reference) ?? new Set<string>())]
         .filter((evidenceId) => acceptedEvidence.has(evidenceId));
-      if (matchingEvidenceIds.length === 0) throw new Error("Count-based evidence references must resolve to accepted evidence records.");
-      if (matchingEvidenceIds.length > 1) throw new Error("Count-based evidence references cannot ambiguously resolve to multiple accepted evidence records.");
+      if (matchingEvidenceIds.length === 0) throw new Error(`${label} must resolve to accepted evidence records.`);
+      if (matchingEvidenceIds.length > 1) throw new Error(`${label} cannot ambiguously resolve to multiple accepted evidence records.`);
       [resolvedEvidenceId] = matchingEvidenceIds;
     } else {
       const evidence = provenance.evidenceById.get(reference);
-      if (evidence === undefined || !acceptedEvidence.has(evidence.id)) throw new Error("Count-based evidence references must resolve to accepted evidence records.");
+      if (evidence === undefined || !acceptedEvidence.has(evidence.id)) throw new Error(`${label} must resolve to accepted evidence records.`);
       resolvedEvidenceId = evidence.id;
     }
     if (resolvedEvidenceIds.has(resolvedEvidenceId)) {
-      throw new Error("Count-based evidence references cannot alias the same accepted evidence record.");
+      throw new Error(`${label} cannot alias the same accepted evidence record.`);
     }
     resolvedEvidenceIds.add(resolvedEvidenceId);
   }
-  if (resolvedEvidenceIds.size !== acceptedEvidence.size) throw new Error("Count-based evidence references must exactly match the distinct validated evidence set.");
+  if (resolvedEvidenceIds.size !== acceptedEvidence.size) throw new Error(`${label} must exactly match the distinct validated evidence set.`);
   for (const acceptedEvidenceId of acceptedEvidence) {
-    if (!resolvedEvidenceIds.has(acceptedEvidenceId)) throw new Error("Count-based evidence references must exactly match the distinct validated evidence set.");
+    if (!resolvedEvidenceIds.has(acceptedEvidenceId)) throw new Error(`${label} must exactly match the distinct validated evidence set.`);
   }
   return acceptedEvidence.size;
+};
+const acceptedEvidenceSet = (provenance: ProvenanceIndex, requirementId: string): Set<string> => {
+  const byKind = provenance.byRequirementId.get(requirementId)?.acceptedEvidenceByKind ?? {};
+  const accepted = new Set<string>();
+  for (const ids of Object.values(byKind)) {
+    for (const id of ids ?? []) accepted.add(id);
+  }
+  return accepted;
+};
+const validateNonCountEvidenceReferences = (
+  requirementId: string,
+  observation: RequirementObservation,
+  provenance: ProvenanceIndex,
+): void => {
+  const acceptedEvidence = acceptedEvidenceSet(provenance, requirementId);
+  resolveValidatedEvidenceReferences(observation.evidenceReferences ?? [], acceptedEvidence, provenance, "Non-count evidence references");
 };
 const evaluateByKind = (
   requirement: MilestoneRequirement,
@@ -336,12 +366,18 @@ const evaluateByKind = (
       if (observation.founderConfirmationPresent === true || hasAiOnlySuggestion(provenance, requirement.id)) return { outcome: "REVIEW", reasonCode: "EVIDENCE_MISSING" };
       return { outcome: "FAIL", reasonCode: "CONFIRMATION_MISSING" };
     case "TRANSACTION_MATCH":
-      if (hasAcceptedEvidence(provenance, requirement.id)) return { outcome: "PASS", reasonCode: "TRANSACTION_MATCHED" };
+      if (hasAcceptedEvidence(provenance, requirement.id)) {
+        validateNonCountEvidenceReferences(requirement.id, observation, provenance);
+        return { outcome: "PASS", reasonCode: "TRANSACTION_MATCHED" };
+      }
       if (observation.transactionMatched === false) return { outcome: "FAIL", reasonCode: "TRANSACTION_MISMATCH" };
       if (observation.transactionMatched === true || hasAiOnlySuggestion(provenance, requirement.id)) return { outcome: "REVIEW", reasonCode: "EVIDENCE_MISSING" };
       return { outcome: "FAIL", reasonCode: "EVIDENCE_MISSING" };
     case "BUSINESS_PURPOSE":
-      if (hasAcceptedEvidence(provenance, requirement.id)) return { outcome: "PASS", reasonCode: "BUSINESS_PURPOSE_PRESENT" };
+      if (hasAcceptedEvidence(provenance, requirement.id)) {
+        validateNonCountEvidenceReferences(requirement.id, observation, provenance);
+        return { outcome: "PASS", reasonCode: "BUSINESS_PURPOSE_PRESENT" };
+      }
       if (observation.businessPurposePresent === true || hasAiOnlySuggestion(provenance, requirement.id)) return { outcome: "REVIEW", reasonCode: "EVIDENCE_MISSING" };
       return { outcome: "FAIL", reasonCode: "BUSINESS_PURPOSE_MISSING" };
     case "DUE_DATE": {
@@ -412,6 +448,9 @@ const serializeCanonicalMilestoneEvaluationApprovalSubject = (input: CanonicalMi
         parsed.hasConflictingEvidence ?? null,
         parsed.deliverableCount ?? null,
         parsed.receiptCount ?? null,
+        parsed.transactionMatched ?? null,
+        parsed.businessPurposePresent ?? null,
+        parsed.founderConfirmationPresent ?? null,
       ];
     });
   const normalizedEvidenceItems = [...(input.evidenceItems ?? [])]
