@@ -2329,6 +2329,139 @@ describe("LaunchVault treasury MVP slice", () => {
     }
   });
 
+  it("serializes transaction-hash uniqueness: concurrent identical settlement hash allows only one tranche to become CONFIRMED", async () => {
+    const { treasury } = setup();
+    const sharedHash = "mock:transaction:shared-concurrent";
+    // Establish tranche-a through PREPARED
+    await treasury.recordIncomingTranche({
+      trancheId: "tranche:concurrent-a",
+      amount: usdc("10"),
+      transactionRef: mockTransaction("PREPARED", "SETTLEMENT"),
+      actor: authorizedSystem,
+      idempotencyKey: "tranche:concurrent-a:prepared",
+      eventId: "audit:tranche:concurrent-a:prepared",
+      occurredAt: context.occurredAt,
+    });
+    // Establish tranche-b through PREPARED
+    await treasury.recordIncomingTranche({
+      trancheId: "tranche:concurrent-b",
+      amount: usdc("10"),
+      transactionRef: mockTransaction("PREPARED", "SETTLEMENT"),
+      actor: authorizedSystem,
+      idempotencyKey: "tranche:concurrent-b:prepared",
+      eventId: "audit:tranche:concurrent-b:prepared",
+      occurredAt: context.occurredAt,
+    });
+    const snapshotBeforeRace = treasury.getSnapshot();
+    // Both tranches now race to claim the same SUBMITTED hash
+    const [resultA, resultB] = await Promise.allSettled([
+      treasury.recordIncomingTranche({
+        trancheId: "tranche:concurrent-a",
+        amount: usdc("10"),
+        transactionRef: { ...mockTransaction("SUBMITTED", "SETTLEMENT"), transactionHash: sharedHash },
+        actor: authorizedSystem,
+        idempotencyKey: "tranche:concurrent-a:submitted",
+        eventId: "audit:tranche:concurrent-a:submitted",
+        occurredAt: context.occurredAt,
+      }),
+      treasury.recordIncomingTranche({
+        trancheId: "tranche:concurrent-b",
+        amount: usdc("10"),
+        transactionRef: { ...mockTransaction("SUBMITTED", "SETTLEMENT"), transactionHash: sharedHash },
+        actor: authorizedSystem,
+        idempotencyKey: "tranche:concurrent-b:submitted",
+        eventId: "audit:tranche:concurrent-b:submitted",
+        occurredAt: context.occurredAt,
+      }),
+    ]);
+    // Exactly one must succeed and one must be rejected
+    const fulfilled = [resultA, resultB].filter((r) => r.status === "fulfilled");
+    const rejected = [resultA, resultB].filter((r) => r.status === "rejected");
+    expect(fulfilled).toHaveLength(1);
+    expect(rejected).toHaveLength(1);
+    expect((rejected[0] as PromiseRejectedResult).reason.message).toMatch(/already bound to another tranche/);
+    // Exactly one tranche holds the shared hash; the other is still PREPARED
+    const snapshot = treasury.getSnapshot();
+    const withHash = snapshot.incomingTranches.filter((t) => t.transactionRef.transactionHash === sharedHash);
+    expect(withHash).toHaveLength(1);
+    const withoutHash = snapshot.incomingTranches.filter((t) => ["tranche:concurrent-a", "tranche:concurrent-b"].includes(t.id) && t.transactionRef.transactionHash === null);
+    expect(withoutHash).toHaveLength(1);
+    // Financial state is unchanged from before the race (no credit has been confirmed)
+    expect(snapshot.balances.confirmed.atomicUnits).toBe(snapshotBeforeRace.balances.confirmed.atomicUnits);
+    expect(snapshot.vault.totalCapital.atomicUnits).toBe(snapshotBeforeRace.vault.totalCapital.atomicUnits);
+  });
+
+  it("serializes transaction-hash uniqueness: accepted tranche can reconcile once; rejected call leaves no side effects", async () => {
+    const { treasury } = setup();
+    const sharedHash = "mock:transaction:reconcile-race";
+    // Establish two tranches through PREPARED
+    for (const id of ["tranche:race-a", "tranche:race-b"]) {
+      await treasury.recordIncomingTranche({
+        trancheId: id,
+        amount: usdc("5"),
+        transactionRef: mockTransaction("PREPARED", "SETTLEMENT"),
+        actor: authorizedSystem,
+        idempotencyKey: `${id}:prepared`,
+        eventId: `audit:${id}:prepared`,
+        occurredAt: context.occurredAt,
+      });
+    }
+    // Race for CONFIRMED with the same hash
+    const [resultA, resultB] = await Promise.allSettled([
+      treasury.recordIncomingTranche({
+        trancheId: "tranche:race-a",
+        amount: usdc("5"),
+        transactionRef: { ...mockTransaction("CONFIRMED", "SETTLEMENT"), transactionHash: sharedHash },
+        actor: authorizedSystem,
+        idempotencyKey: "tranche:race-a:confirmed",
+        eventId: "audit:tranche:race-a:confirmed",
+        occurredAt: context.occurredAt,
+      }),
+      treasury.recordIncomingTranche({
+        trancheId: "tranche:race-b",
+        amount: usdc("5"),
+        transactionRef: { ...mockTransaction("CONFIRMED", "SETTLEMENT"), transactionHash: sharedHash },
+        actor: authorizedSystem,
+        idempotencyKey: "tranche:race-b:confirmed",
+        eventId: "audit:tranche:race-b:confirmed",
+        occurredAt: context.occurredAt,
+      }),
+    ]);
+    const fulfilled = [resultA, resultB].filter((r) => r.status === "fulfilled");
+    const rejected = [resultA, resultB].filter((r) => r.status === "rejected");
+    expect(fulfilled).toHaveLength(1);
+    expect(rejected).toHaveLength(1);
+    const winnerTranche = (fulfilled[0] as PromiseFulfilledResult<import("../src/treasury").IncomingTranche>).value;
+    const loserId = winnerTranche.id === "tranche:race-a" ? "tranche:race-b" : "tranche:race-a";
+    // The winner can reconcile
+    const snapshotBeforeReconcile = treasury.getSnapshot();
+    await expect(treasury.reconcileConfirmedTranche({
+      trancheId: winnerTranche.id,
+      actor: authorizedSystem,
+      idempotencyKey: `reconcile:${winnerTranche.id}`,
+      eventId: `audit:reconcile:${winnerTranche.id}`,
+      occurredAt: context.occurredAt,
+    })).resolves.toBeDefined();
+    // The loser remains PREPARED and cannot be reconciled
+    const snapshot = treasury.getSnapshot();
+    const loser = snapshot.incomingTranches.find((t) => t.id === loserId);
+    expect(loser?.state).toBe("PREPARED");
+    await expect(treasury.reconcileConfirmedTranche({
+      trancheId: loserId,
+      actor: authorizedSystem,
+      idempotencyKey: `reconcile:${loserId}`,
+      eventId: `audit:reconcile:${loserId}`,
+      occurredAt: context.occurredAt,
+    })).rejects.toThrow();
+    // Exactly one tranche was credited — no duplicate settlement
+    expect(snapshot.balances.confirmed.atomicUnits).not.toBe(snapshotBeforeReconcile.balances.confirmed.atomicUnits);
+    const additionalReconcile = treasury.getSnapshot();
+    expect(additionalReconcile.balances.confirmed.atomicUnits).toBe(snapshot.balances.confirmed.atomicUnits);
+    // Audit log contains no duplicate entries for the loser's CONFIRMED state
+    const loserConfirmedEvents = snapshot.audit.filter((e) => e.aggregateId === loserId && e.details.nextState === "CONFIRMED");
+    expect(loserConfirmedEvents).toHaveLength(0);
+  });
+
   it("records append-only audit history with actor, state transition, timestamp, and related IDs", async () => {
     const { treasury } = setup();
     const proposal = treasury.createAllocationProposal({

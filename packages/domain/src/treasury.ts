@@ -1028,13 +1028,6 @@ export class LaunchVaultTreasury {
         throw new TreasuryError("INVALID_STATE", "Incoming tranche amount and asset must exactly match source job budget for this MVP path.");
       }
     }
-    if (transactionRef.transactionHash !== null) {
-      const transactionIdentity = this.#transactionHashIdentity(transactionRef.transactionHash);
-      const conflicting = [...this.#incomingTranches.values()].find((entry) =>
-        entry.id !== input.trancheId && this.#transactionHashIdentity(entry.transactionRef.transactionHash) === transactionIdentity,
-      );
-      if (conflicting !== undefined) throw new TreasuryError("INVALID_STATE", "Incoming tranche transaction hash is already bound to another tranche.");
-    }
     const current = this.#incomingTranches.get(input.trancheId);
     if (current === undefined && state !== "PREPARED") {
       throw new TreasuryError("INVALID_TRANSITION", "New incoming tranche lifecycle must start in PREPARED state.");
@@ -1082,6 +1075,13 @@ export class LaunchVaultTreasury {
 
     return this.#idempotency.execute("tranche-record", input.idempotencyKey, fingerprint, () => {
       if (this.#audit.some((record) => record.id === eventId)) throw new TreasuryError("INVALID_STATE", `Audit event ${eventId} already exists.`);
+      if (transactionRef.transactionHash !== null) {
+        const transactionIdentity = this.#transactionHashIdentity(transactionRef.transactionHash);
+        const conflicting = [...this.#incomingTranches.values()].find(
+          (entry) => entry.id !== input.trancheId && this.#transactionHashIdentity(entry.transactionRef.transactionHash) === transactionIdentity,
+        );
+        if (conflicting !== undefined) throw new TreasuryError("INVALID_STATE", "Incoming tranche transaction hash is already bound to another tranche.");
+      }
       const tranche = IncomingTrancheSchema.parse({
         id: input.trancheId,
         projectId: this.#vault.projectId,
