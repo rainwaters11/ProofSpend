@@ -147,12 +147,16 @@ export type ApprovalRecord = z.infer<typeof ApprovalRecordSchema>;
 export const AuditEventSchema = z.object({ id: Id, aggregateType: z.string().min(1), aggregateId: Id, eventType: z.string().min(1), actor: ActorSchema, idempotencyKey: Id.nullable(), occurredAt: Time, details: z.record(z.string(), z.union([z.string(), z.boolean(), z.null()])) });
 export type AuditEvent = z.infer<typeof AuditEventSchema>;
 
-const RequirementBaseSchema = z.object({ id: Id, milestoneId: Id, description: z.string().min(1) });
+const RequirementBaseSchema = z.object({ id: Id, milestoneId: Id, description: z.string().min(1), required: z.boolean().optional() });
 export const MilestoneRequirementSchema = z.discriminatedUnion("kind", [
   RequirementBaseSchema.extend({ kind: z.literal("DELIVERABLE"), requiredCount: z.never().optional(), spendLimit: z.never().optional() }),
   RequirementBaseSchema.extend({ kind: z.literal("EXPENSE_RECORDS"), requiredCount: z.number().int().positive(), spendLimit: z.never().optional() }),
   RequirementBaseSchema.extend({ kind: z.literal("SPEND_LIMIT"), requiredCount: z.never().optional(), spendLimit: SettlementMoneyAmountSchema }),
   RequirementBaseSchema.extend({ kind: z.literal("FOUNDER_CONFIRMATION"), requiredCount: z.never().optional(), spendLimit: z.never().optional() }),
+  RequirementBaseSchema.extend({ kind: z.literal("TRANSACTION_MATCH"), requiredCount: z.never().optional(), spendLimit: z.never().optional() }),
+  RequirementBaseSchema.extend({ kind: z.literal("BUSINESS_PURPOSE"), requiredCount: z.never().optional(), spendLimit: z.never().optional() }),
+  RequirementBaseSchema.extend({ kind: z.literal("DUE_DATE"), requiredCount: z.never().optional(), spendLimit: z.never().optional() }),
+  RequirementBaseSchema.extend({ kind: z.literal("HUMAN_APPROVAL"), requiredCount: z.never().optional(), spendLimit: z.never().optional() }),
 ]);
 export type MilestoneRequirement = z.infer<typeof MilestoneRequirementSchema>;
 export const MilestoneSchema = z.object({ id: Id, projectId: Id, title: z.string().min(1), proposedAmount: SettlementMoneyAmountSchema, status: z.enum(["INCOMPLETE", "NEEDS_REVIEW", "ELIGIBLE", "APPROVAL_PENDING", "APPROVED", "REJECTED"]), requirementIds: z.array(Id), dueAt: Time.nullable() });
