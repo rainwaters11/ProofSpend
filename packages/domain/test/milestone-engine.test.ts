@@ -13,13 +13,14 @@ import {
 } from "../src";
 
 const usdc = (atomicUnits: string) => SettlementMoneyAmountSchema.parse({ asset: "USDC", atomicUnits });
+const requirementIds = ["req:deliverable", "req:expenses", "req:spend", "req:confirmation", "req:tx", "req:purpose", "req:due", "req:approval"];
 const milestone = {
   id: "milestone:launch",
   projectId: "project:launch",
   title: "Launch tranche",
   proposedAmount: usdc("150000000"),
   status: "INCOMPLETE" as const,
-  requirementIds: [],
+  requirementIds,
   dueAt: "2026-02-01T00:00:00.000Z",
 };
 const baseRequirements: MilestoneRequirement[] = [
@@ -34,6 +35,9 @@ const baseRequirements: MilestoneRequirement[] = [
 ];
 const evaluatedAt = "2026-01-20T00:00:00.000Z";
 const policyVersion = "policy:v1";
+const approvalIntentId = "intent:exact";
+const approvalIntentHash = `sha256:${"a".repeat(64)}`;
+const authorizedEvaluatorId = "evaluator:1";
 
 function baseObservations() {
   return {
@@ -47,6 +51,21 @@ function baseObservations() {
   };
 }
 
+const exactApproval = ApprovalRecordSchema.parse({
+  id: "approval:exact",
+  aggregateId: milestone.id,
+  intentId: approvalIntentId,
+  actionKind: "MILESTONE_EVALUATION",
+  authorizedActorType: "EVALUATOR",
+  authorizedActorId: authorizedEvaluatorId,
+  exactIntentHash: approvalIntentHash,
+  idempotencyKey: "approval:key:exact",
+  decision: "APPROVED",
+  approver: { actorId: authorizedEvaluatorId, actorType: "EVALUATOR" },
+  expiresAt: "2026-01-30T00:00:00.000Z",
+  decidedAt: "2026-01-19T00:00:00.000Z",
+});
+
 describe("milestone engine", () => {
   it("returns deterministic, stable requirement ordering and structured outcomes", () => {
     const input = {
@@ -56,28 +75,89 @@ describe("milestone engine", () => {
       verifiedSpend: usdc("150000000"),
       evaluatedAt,
       policyVersion,
-      approvalRecord: ApprovalRecordSchema.parse({
-        id: "approval:1",
-        aggregateId: milestone.id,
-        intentId: "intent:1",
-        actionKind: "MILESTONE_EVALUATION",
-        authorizedActorType: "EVALUATOR",
-        authorizedActorId: "evaluator:1",
-        exactIntentHash: `sha256:${"a".repeat(64)}`,
-        idempotencyKey: "approval:key:1",
-        decision: "APPROVED",
-        approver: { actorId: "evaluator:1", actorType: "EVALUATOR" },
-        expiresAt: "2026-01-30T00:00:00.000Z",
-        decidedAt: "2026-01-19T00:00:00.000Z",
-      }),
+      approvalRecord: exactApproval,
+      expectedApprovalIntentId: approvalIntentId,
+      expectedApprovalExactIntentHash: approvalIntentHash,
+      expectedAuthorizedEvaluatorId: authorizedEvaluatorId,
     };
     const first = evaluateMilestone(input);
     const second = evaluateMilestone(input);
     expect(first).toEqual(second);
-    expect(first.requirementEvaluations.map((item) => item.requirementId)).toEqual([...baseRequirements].map((item) => item.id).sort());
+    expect(first.requirementEvaluations.map((item) => item.requirementId)).toEqual([...requirementIds].sort((left, right) => (left < right ? -1 : left > right ? 1 : 0)));
     expect(first.status).toBe("ELIGIBLE");
     expect(first.humanApprovalRequired).toBe(false);
     expect(first.erc8183ActionPermitted).toBe(true);
+  });
+
+  it("is deterministic with non-ASCII and tie-style IDs using locale-independent ordering", () => {
+    const customMilestone = {
+      ...milestone,
+      requirementIds: ["req:a", "req:a-1", "req:ä"],
+    };
+    const customRequirements: MilestoneRequirement[] = [
+      { id: "req:ä", milestoneId: customMilestone.id, kind: "TRANSACTION_MATCH", description: "match" },
+      { id: "req:a-1", milestoneId: customMilestone.id, kind: "HUMAN_APPROVAL", description: "approval" },
+      { id: "req:a", milestoneId: customMilestone.id, kind: "DELIVERABLE", description: "deliverable" },
+    ];
+    const result = evaluateMilestone({
+      milestone: customMilestone,
+      requirements: customRequirements,
+      observations: {
+        "req:ä": { evidenceReferences: ["evidence:tx"], transactionMatched: true },
+        "req:a-1": { evidenceReferences: ["approval:record"] },
+        "req:a": { evidenceReferences: ["evidence:deliverable"], deliverableCount: 1 },
+      },
+      verifiedSpend: usdc("1"),
+      evaluatedAt,
+      policyVersion,
+      approvalRecord: exactApproval,
+      expectedApprovalIntentId: approvalIntentId,
+      expectedApprovalExactIntentHash: approvalIntentHash,
+      expectedAuthorizedEvaluatorId: authorizedEvaluatorId,
+    });
+    expect(result.requirementEvaluations.map((item) => item.requirementId)).toEqual(["req:a", "req:a-1", "req:ä"]);
+  });
+
+  it("fails closed when supplied requirements are missing, extra, duplicate, or foreign", () => {
+    expect(() => evaluateMilestone({
+      milestone,
+      requirements: baseRequirements.slice(0, -1),
+      observations: baseObservations(),
+      verifiedSpend: usdc("150000000"),
+      evaluatedAt,
+      policyVersion,
+      approvalRecord: exactApproval,
+    })).toThrow(/exactly match/i);
+
+    expect(() => evaluateMilestone({
+      milestone,
+      requirements: [...baseRequirements, { ...baseRequirements[0], id: "req:extra" }],
+      observations: baseObservations(),
+      verifiedSpend: usdc("150000000"),
+      evaluatedAt,
+      policyVersion,
+      approvalRecord: exactApproval,
+    })).toThrow(/exactly match/i);
+
+    expect(() => evaluateMilestone({
+      milestone,
+      requirements: [...baseRequirements, baseRequirements[0]],
+      observations: baseObservations(),
+      verifiedSpend: usdc("150000000"),
+      evaluatedAt,
+      policyVersion,
+      approvalRecord: exactApproval,
+    })).toThrow(/unique/i);
+
+    expect(() => evaluateMilestone({
+      milestone,
+      requirements: baseRequirements.map((requirement, index) => (index === 0 ? { ...requirement, milestoneId: "milestone:other" } : requirement)),
+      observations: baseObservations(),
+      verifiedSpend: usdc("150000000"),
+      evaluatedAt,
+      policyVersion,
+      approvalRecord: exactApproval,
+    })).toThrow(/belong to the evaluated milestone/i);
   });
 
   it("keeps ELIGIBLE while approval is pending and blocks later ERC action", () => {
@@ -89,19 +169,15 @@ describe("milestone engine", () => {
       evaluatedAt,
       policyVersion,
       approvalRecord: ApprovalRecordSchema.parse({
+        ...exactApproval,
         id: "approval:pending",
-        aggregateId: milestone.id,
-        intentId: "intent:pending",
-        actionKind: "MILESTONE_EVALUATION",
-        authorizedActorType: "EVALUATOR",
-        authorizedActorId: "evaluator:1",
-        exactIntentHash: `sha256:${"b".repeat(64)}`,
-        idempotencyKey: "approval:key:pending",
         decision: "PENDING",
         approver: null,
-        expiresAt: "2026-01-30T00:00:00.000Z",
         decidedAt: null,
       }),
+      expectedApprovalIntentId: approvalIntentId,
+      expectedApprovalExactIntentHash: approvalIntentHash,
+      expectedAuthorizedEvaluatorId: authorizedEvaluatorId,
     });
 
     expect(result.status).toBe("ELIGIBLE");
@@ -110,10 +186,15 @@ describe("milestone engine", () => {
     expect(result.recommendedNextAction).toBe("REQUEST_HUMAN_APPROVAL");
   });
 
-  it("does not require human approval when requirement is omitted", () => {
+  it("requires global exact approval even when HUMAN_APPROVAL requirement is omitted", () => {
+    const noApprovalRequirementMilestone = {
+      ...milestone,
+      requirementIds: requirementIds.filter((item) => item !== "req:approval"),
+    };
+    const noApprovalRequirements = baseRequirements.filter((item) => item.kind !== "HUMAN_APPROVAL");
     const result = evaluateMilestone({
-      milestone,
-      requirements: baseRequirements.filter((item) => item.kind !== "HUMAN_APPROVAL"),
+      milestone: noApprovalRequirementMilestone,
+      requirements: noApprovalRequirements,
       observations: baseObservations(),
       verifiedSpend: usdc("149999999"),
       evaluatedAt,
@@ -121,8 +202,102 @@ describe("milestone engine", () => {
       approvalRecord: null,
     });
     expect(result.status).toBe("ELIGIBLE");
-    expect(result.humanApprovalRequired).toBe(false);
-    expect(result.erc8183ActionPermitted).toBe(true);
+    expect(result.humanApprovalRequired).toBe(true);
+    expect(result.erc8183ActionPermitted).toBe(false);
+  });
+
+  it("requires exact evaluator and exact intent binding for action permission", () => {
+    const wrongEvaluator = evaluateMilestone({
+      milestone,
+      requirements: baseRequirements,
+      observations: baseObservations(),
+      verifiedSpend: usdc("150000000"),
+      evaluatedAt,
+      policyVersion,
+      approvalRecord: exactApproval,
+      expectedApprovalIntentId: approvalIntentId,
+      expectedApprovalExactIntentHash: approvalIntentHash,
+      expectedAuthorizedEvaluatorId: "evaluator:other",
+    });
+    expect(wrongEvaluator.status).toBe("ELIGIBLE");
+    expect(wrongEvaluator.erc8183ActionPermitted).toBe(false);
+
+    const wrongIntent = evaluateMilestone({
+      milestone,
+      requirements: baseRequirements,
+      observations: baseObservations(),
+      verifiedSpend: usdc("150000000"),
+      evaluatedAt,
+      policyVersion,
+      approvalRecord: exactApproval,
+      expectedApprovalIntentId: "intent:other",
+      expectedApprovalExactIntentHash: approvalIntentHash,
+      expectedAuthorizedEvaluatorId: authorizedEvaluatorId,
+    });
+    expect(wrongIntent.status).toBe("ELIGIBLE");
+    expect(wrongIntent.erc8183ActionPermitted).toBe(false);
+
+    const wrongHash = evaluateMilestone({
+      milestone,
+      requirements: baseRequirements,
+      observations: baseObservations(),
+      verifiedSpend: usdc("150000000"),
+      evaluatedAt,
+      policyVersion,
+      approvalRecord: exactApproval,
+      expectedApprovalIntentId: approvalIntentId,
+      expectedApprovalExactIntentHash: `sha256:${"b".repeat(64)}`,
+      expectedAuthorizedEvaluatorId: authorizedEvaluatorId,
+    });
+    expect(wrongHash.status).toBe("ELIGIBLE");
+    expect(wrongHash.erc8183ActionPermitted).toBe(false);
+  });
+
+  it("blocks rejected or expired approvals and permits only valid exact current approval", () => {
+    const rejectedApproval = evaluateMilestone({
+      milestone,
+      requirements: baseRequirements,
+      observations: baseObservations(),
+      verifiedSpend: usdc("150000000"),
+      evaluatedAt,
+      policyVersion,
+      approvalRecord: ApprovalRecordSchema.parse({ ...exactApproval, decision: "REJECTED" }),
+      expectedApprovalIntentId: approvalIntentId,
+      expectedApprovalExactIntentHash: approvalIntentHash,
+      expectedAuthorizedEvaluatorId: authorizedEvaluatorId,
+    });
+    expect(rejectedApproval.status).toBe("ELIGIBLE");
+    expect(rejectedApproval.erc8183ActionPermitted).toBe(false);
+
+    const expiredApproval = evaluateMilestone({
+      milestone,
+      requirements: baseRequirements,
+      observations: baseObservations(),
+      verifiedSpend: usdc("150000000"),
+      evaluatedAt,
+      policyVersion,
+      approvalRecord: ApprovalRecordSchema.parse({ ...exactApproval, expiresAt: "2026-01-10T00:00:00.000Z", decidedAt: "2026-01-09T00:00:00.000Z" }),
+      expectedApprovalIntentId: approvalIntentId,
+      expectedApprovalExactIntentHash: approvalIntentHash,
+      expectedAuthorizedEvaluatorId: authorizedEvaluatorId,
+    });
+    expect(expiredApproval.status).toBe("ELIGIBLE");
+    expect(expiredApproval.erc8183ActionPermitted).toBe(false);
+
+    const validApproval = evaluateMilestone({
+      milestone,
+      requirements: baseRequirements,
+      observations: baseObservations(),
+      verifiedSpend: usdc("150000000"),
+      evaluatedAt,
+      policyVersion,
+      approvalRecord: exactApproval,
+      expectedApprovalIntentId: approvalIntentId,
+      expectedApprovalExactIntentHash: approvalIntentHash,
+      expectedAuthorizedEvaluatorId: authorizedEvaluatorId,
+    });
+    expect(validApproval.status).toBe("ELIGIBLE");
+    expect(validApproval.erc8183ActionPermitted).toBe(true);
   });
 
   it("handles missing/conflicting evidence and keeps optional failures from blocking eligibility", () => {
@@ -148,7 +323,7 @@ describe("milestone engine", () => {
     expect(result.requirementEvaluations.find((item) => item.requirementId === "req:expenses")?.reviewerNotes).toBe("conflicting invoice totals");
   });
 
-  it("handles rejected/expired approvals and ignores LLM-suggested status fields", () => {
+  it("ignores LLM-suggested status fields", () => {
     const withInjectedField = evaluateMilestone({
       milestone,
       requirements: baseRequirements,
@@ -156,50 +331,13 @@ describe("milestone engine", () => {
       verifiedSpend: usdc("150000000"),
       evaluatedAt,
       policyVersion,
-      approvalRecord: ApprovalRecordSchema.parse({
-        id: "approval:rejected",
-        aggregateId: milestone.id,
-        intentId: "intent:rejected",
-        actionKind: "MILESTONE_EVALUATION",
-        authorizedActorType: "EVALUATOR",
-        authorizedActorId: "evaluator:1",
-        exactIntentHash: `sha256:${"c".repeat(64)}`,
-        idempotencyKey: "approval:key:rejected",
-        decision: "REJECTED",
-        approver: { actorId: "evaluator:1", actorType: "EVALUATOR" },
-        expiresAt: "2026-01-30T00:00:00.000Z",
-        decidedAt: "2026-01-19T00:00:00.000Z",
-      }),
+      approvalRecord: exactApproval,
+      expectedApprovalIntentId: approvalIntentId,
+      expectedApprovalExactIntentHash: approvalIntentHash,
+      expectedAuthorizedEvaluatorId: authorizedEvaluatorId,
     });
     expect(withInjectedField.status).toBe("ELIGIBLE");
-    const approvalEvaluation = withInjectedField.requirementEvaluations.find((item) => item.requirementId === "req:approval");
-    expect(approvalEvaluation?.outcome).toBe("FAIL");
-    expect(approvalEvaluation?.reasonCodes).toEqual(["HUMAN_APPROVAL_REJECTED"]);
-    expect(withInjectedField.erc8183ActionPermitted).toBe(false);
-    expect(withInjectedField.recommendedNextAction).toBe("REQUEST_HUMAN_APPROVAL");
-    const expiredApproval = evaluateMilestone({
-      milestone,
-      requirements: baseRequirements,
-      observations: baseObservations(),
-      verifiedSpend: usdc("150000000"),
-      evaluatedAt,
-      policyVersion,
-      approvalRecord: ApprovalRecordSchema.parse({
-        id: "approval:expired",
-        aggregateId: milestone.id,
-        intentId: "intent:expired",
-        actionKind: "MILESTONE_EVALUATION",
-        authorizedActorType: "EVALUATOR",
-        authorizedActorId: "evaluator:1",
-        exactIntentHash: `sha256:${"f".repeat(64)}`,
-        idempotencyKey: "approval:key:expired",
-        decision: "APPROVED",
-        approver: { actorId: "evaluator:1", actorType: "EVALUATOR" },
-        expiresAt: "2026-01-10T00:00:00.000Z",
-        decidedAt: "2026-01-09T00:00:00.000Z",
-      }),
-    });
-    expect(expiredApproval.requirementEvaluations.find((item) => item.requirementId === "req:approval")?.reasonCodes).toEqual(["HUMAN_APPROVAL_PENDING"]);
+    expect(withInjectedField.erc8183ActionPermitted).toBe(true);
   });
 
   it("enforces agentic job draft budget and expiry boundaries", () => {
@@ -227,7 +365,7 @@ describe("milestone engine", () => {
 
   it("has exhaustive allowed/disallowed ERC-8183 transitions", () => {
     const allowed: Record<AgenticJobStatus, AgenticJobStatus[]> = {
-      OPEN: ["FUNDED"],
+      OPEN: ["FUNDED", "REJECTED"],
       FUNDED: ["SUBMITTED", "REJECTED", "EXPIRED"],
       SUBMITTED: ["COMPLETED", "REJECTED", "EXPIRED"],
       COMPLETED: [],
@@ -247,7 +385,39 @@ describe("milestone engine", () => {
     expect(isAllowedErc8183Transition("FUNDED", "FUNDED")).toBe(false);
   });
 
-  it("does not emit private evidence content and keeps release confirmation gated by settlement reference", () => {
+  it("rejects raw private evidence content in references while accepting ID/hash references", () => {
+    expect(() => evaluateMilestone({
+      milestone,
+      requirements: baseRequirements,
+      observations: { ...baseObservations(), "req:deliverable": { evidenceReferences: ["founder private receipt text"], deliverableCount: 1 } },
+      verifiedSpend: usdc("150000000"),
+      evaluatedAt,
+      policyVersion,
+      approvalRecord: exactApproval,
+      expectedApprovalIntentId: approvalIntentId,
+      expectedApprovalExactIntentHash: approvalIntentHash,
+      expectedAuthorizedEvaluatorId: authorizedEvaluatorId,
+    })).toThrow();
+
+    const result = evaluateMilestone({
+      milestone,
+      requirements: baseRequirements,
+      observations: {
+        ...baseObservations(),
+        "req:deliverable": { evidenceReferences: ["evidence:deliverable-id", `sha256:${"f".repeat(64)}`], deliverableCount: 1 },
+      },
+      verifiedSpend: usdc("150000000"),
+      evaluatedAt,
+      policyVersion,
+      approvalRecord: exactApproval,
+      expectedApprovalIntentId: approvalIntentId,
+      expectedApprovalExactIntentHash: approvalIntentHash,
+      expectedAuthorizedEvaluatorId: authorizedEvaluatorId,
+    });
+    expect(result.status).toBe("ELIGIBLE");
+  });
+
+  it("does not emit private passthrough fields and keeps release confirmation gated by settlement reference", () => {
     const result = evaluateMilestone({
       milestone,
       requirements: baseRequirements,
@@ -255,7 +425,10 @@ describe("milestone engine", () => {
       verifiedSpend: usdc("150000000"),
       evaluatedAt,
       policyVersion,
-      approvalRecord: null,
+      approvalRecord: exactApproval,
+      expectedApprovalIntentId: approvalIntentId,
+      expectedApprovalExactIntentHash: approvalIntentHash,
+      expectedAuthorizedEvaluatorId: authorizedEvaluatorId,
     });
     expect(JSON.stringify(result)).not.toContain("founder-private-receipt-content");
     expect(() => ReleaseRequestSchema.parse({

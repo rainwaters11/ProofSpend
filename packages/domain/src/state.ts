@@ -12,10 +12,16 @@ const applicationTransitions: Record<ProofSpendApplicationState, readonly ProofS
   APPROVAL_PENDING: ["APPROVED", "REJECTED"], APPROVED: ["PREPARED"], PREPARED: ["FAILED"],
   SUBMITTED: ["CONFIRMED", "FAILED"], CONFIRMED: ["RECONCILED"], REJECTED: [], FAILED: [], RECONCILED: [],
 };
-const jobTransitions: Record<AgenticJobStatus, readonly AgenticJobStatus[]> = {
+export const AgenticJobTransitionMap: Readonly<Record<AgenticJobStatus, readonly AgenticJobStatus[]>> = {
   OPEN: ["FUNDED", "REJECTED"], FUNDED: ["SUBMITTED", "REJECTED", "EXPIRED"], SUBMITTED: ["COMPLETED", "REJECTED", "EXPIRED"],
   COMPLETED: [], REJECTED: [], EXPIRED: [],
 };
+export function isAllowedAgenticJobTransition(from: AgenticJobStatus, to: AgenticJobStatus): boolean {
+  return AgenticJobTransitionMap[from].includes(to);
+}
+export function assertAgenticJobTransition(from: AgenticJobStatus, to: AgenticJobStatus): void {
+  if (!isAllowedAgenticJobTransition(from, to)) throw new InvalidTransitionError("agentic job", from, to);
+}
 export interface TransitionContext {
   aggregateType: string; aggregateId: string; eventId: string; occurredAt: string; actor: Actor;
   authorizedSystemId?: string; authorizedApproverId?: string; authorizedAdapterId?: string; authorizedProviderId?: string; authorizedEvaluatorId?: string; idempotencyKey?: string;
@@ -376,7 +382,7 @@ async function validateJobRefundAuthorization(context: TransitionContext, target
 
 
 export async function transitionAgenticJob(from: AgenticJobStatus, to: AgenticJobStatus, context: TransitionContext) {
-  if (!jobTransitions[from].includes(to)) throw new InvalidTransitionError("agentic job", from, to);
+  assertAgenticJobTransition(from, to);
   const authority = jobAuthority[`${from}->${to}`];
   if (authority === undefined || context.actor.actorType !== authority.actorType || context[authority.identifier] === undefined || context.actor.actorId !== context[authority.identifier]) throw new InvalidTransitionError("agentic job authority", from, to);
   if (to === "EXPIRED") {

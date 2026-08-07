@@ -1,8 +1,10 @@
 import { z } from "zod";
 import { ApprovalRecordSchema, AgenticJobStatusSchema, MilestoneRequirementSchema, MilestoneSchema, SettlementMoneyAmountSchema, type AgenticJobStatus, type ApprovalRecord, type MilestoneRequirement } from "./models";
+import { AgenticJobTransitionMap, assertAgenticJobTransition, isAllowedAgenticJobTransition } from "./state";
 
-const ReasonReferenceSchema = z.string().min(1);
+const InternalEvidenceReferenceSchema = z.string().regex(/^[a-z][a-z0-9-]*:[A-Za-z0-9._:-]+$/);
 const HashReferenceSchema = z.string().regex(/^sha256:[a-f0-9]{64}$/);
+const ReasonReferenceSchema = z.union([InternalEvidenceReferenceSchema, HashReferenceSchema]);
 const finiteTime = (value: string): number | null => {
   const parsed = Date.parse(value);
   return Number.isFinite(parsed) ? parsed : null;
@@ -62,6 +64,9 @@ export const MilestoneEvaluationInputSchema = z.object({
   policyVersion: z.string().min(1),
   evaluatedAt: z.string().datetime(),
   approvalRecord: ApprovalRecordSchema.nullable().optional(),
+  expectedApprovalIntentId: z.string().min(1).optional(),
+  expectedApprovalExactIntentHash: HashReferenceSchema.optional(),
+  expectedAuthorizedEvaluatorId: z.string().min(1).optional(),
   reviewerNotesByRequirementId: z.record(z.string(), z.string().min(1)).optional(),
 });
 export type MilestoneEvaluationInput = z.infer<typeof MilestoneEvaluationInputSchema>;
@@ -145,6 +150,57 @@ const evaluateByKind = (
 };
 
 const normalizeRequired = (requirement: MilestoneRequirement): boolean => requirement.required !== false;
+const compareByCodePoint = (left: string, right: string): number => {
+  if (left === right) return 0;
+  return left < right ? -1 : 1;
+};
+const validateRequirementSet = (milestoneId: string, milestoneRequirementIds: readonly string[], requirements: readonly MilestoneRequirement[]): void => {
+  const milestoneIds = new Set(milestoneRequirementIds);
+  if (milestoneIds.size !== milestoneRequirementIds.length) throw new Error("Milestone requirementIds must be unique.");
+  const suppliedIds = new Set<string>();
+  for (const requirement of requirements) {
+    if (requirement.milestoneId !== milestoneId) throw new Error("Every requirement must belong to the evaluated milestone.");
+    if (suppliedIds.has(requirement.id)) throw new Error("Supplied requirements must contain unique IDs.");
+    suppliedIds.add(requirement.id);
+  }
+  if (suppliedIds.size !== milestoneIds.size) throw new Error("Supplied requirements must exactly match milestone.requirementIds.");
+  for (const requirementId of milestoneIds) {
+    if (!suppliedIds.has(requirementId)) throw new Error("Supplied requirements must exactly match milestone.requirementIds.");
+  }
+  for (const requirementId of suppliedIds) {
+    if (!milestoneIds.has(requirementId)) throw new Error("Supplied requirements must exactly match milestone.requirementIds.");
+  }
+};
+const isExactCurrentMilestoneApproval = (
+  approval: ApprovalRecord | null,
+  input: Pick<MilestoneEvaluationInput, "milestone" | "evaluatedAt" | "expectedApprovalIntentId" | "expectedApprovalExactIntentHash" | "expectedAuthorizedEvaluatorId">,
+): boolean => {
+  if (
+    approval === null ||
+    approval.actionKind !== "MILESTONE_EVALUATION" ||
+    approval.authorizedActorType !== "EVALUATOR" ||
+    approval.aggregateId !== input.milestone.id
+  ) return false;
+  const expectedIntentId = input.expectedApprovalIntentId;
+  const expectedIntentHash = input.expectedApprovalExactIntentHash;
+  const expectedEvaluatorId = input.expectedAuthorizedEvaluatorId;
+  if (expectedIntentId === undefined || expectedIntentHash === undefined || expectedEvaluatorId === undefined) return false;
+  if (
+    approval.intentId !== expectedIntentId ||
+    approval.exactIntentHash !== expectedIntentHash ||
+    approval.authorizedActorId !== expectedEvaluatorId ||
+    approval.decision !== "APPROVED" ||
+    approval.approver === null ||
+    approval.decidedAt === null ||
+    approval.approver.actorType !== approval.authorizedActorType ||
+    approval.approver.actorId !== approval.authorizedActorId
+  ) return false;
+  const evaluatedAt = finiteTime(input.evaluatedAt);
+  const expiresAt = finiteTime(approval.expiresAt);
+  const decidedAt = finiteTime(approval.decidedAt);
+  if (evaluatedAt === null || expiresAt === null || decidedAt === null) return false;
+  return decidedAt <= evaluatedAt && evaluatedAt < expiresAt;
+};
 const recommendedAction = (status: MilestoneEvaluationStatus, reasonCodes: readonly MilestoneReasonCode[], humanApprovalRequired: boolean): MilestoneNextAction => {
   if (status === "INCOMPLETE") return "PROVIDE_EVIDENCE";
   if (status === "NEEDS_REVIEW") return reasonCodes.includes("EVIDENCE_CONFLICT") ? "ANSWER_PROOF_RECOVERY" : "REQUEST_HUMAN_REVIEW";
@@ -155,9 +211,10 @@ const recommendedAction = (status: MilestoneEvaluationStatus, reasonCodes: reado
 
 export function evaluateMilestone(input: MilestoneEvaluationInput): MilestoneEvaluationResult {
   const parsed = MilestoneEvaluationInputSchema.parse(input);
+  validateRequirementSet(parsed.milestone.id, parsed.milestone.requirementIds, parsed.requirements);
   const observations = parsed.observations ?? {};
   const reviewerNotesByRequirementId = parsed.reviewerNotesByRequirementId ?? {};
-  const sortedRequirements = [...parsed.requirements].sort((left, right) => left.id.localeCompare(right.id));
+  const sortedRequirements = [...parsed.requirements].sort((left, right) => compareByCodePoint(left.id, right.id));
   const requirementEvaluations = sortedRequirements.map((requirement) => {
     const observation = RequirementObservationSchema.parse(observations[requirement.id] ?? {});
     const required = normalizeRequired(requirement);
@@ -186,8 +243,8 @@ export function evaluateMilestone(input: MilestoneEvaluationInput): MilestoneEva
       if (!reasonCodes.includes(reason)) reasonCodes.push(reason);
     }
   }
-  const humanApproval = requirementEvaluations.find((item) => sortedRequirements.find((requirement) => requirement.id === item.requirementId)?.kind === "HUMAN_APPROVAL");
-  const humanApprovalRequired = humanApproval === undefined ? false : humanApproval.outcome !== "PASS";
+  const globalApprovalSatisfied = isExactCurrentMilestoneApproval(parsed.approvalRecord ?? null, parsed);
+  const humanApprovalRequired = !globalApprovalSatisfied;
   const erc8183ActionPermitted = status === "ELIGIBLE" && !humanApprovalRequired;
   return MilestoneEvaluationResultSchema.parse({
     status,
@@ -246,19 +303,12 @@ export function createAgenticJobDraft(input: AgenticJobDraftInput): AgenticJobDr
   });
 }
 
-export const Erc8183JobTransitionMap: Readonly<Record<AgenticJobStatus, readonly AgenticJobStatus[]>> = {
-  OPEN: ["FUNDED"],
-  FUNDED: ["SUBMITTED", "REJECTED", "EXPIRED"],
-  SUBMITTED: ["COMPLETED", "REJECTED", "EXPIRED"],
-  COMPLETED: [],
-  REJECTED: [],
-  EXPIRED: [],
-};
+export const Erc8183JobTransitionMap = AgenticJobTransitionMap;
 
 export function isAllowedErc8183Transition(from: AgenticJobStatus, to: AgenticJobStatus): boolean {
-  return Erc8183JobTransitionMap[from].includes(to);
+  return isAllowedAgenticJobTransition(from, to);
 }
 
 export function assertErc8183Transition(from: AgenticJobStatus, to: AgenticJobStatus): void {
-  if (!isAllowedErc8183Transition(from, to)) throw new Error(`Invalid ERC-8183 transition from ${from} to ${to}.`);
+  assertAgenticJobTransition(from, to);
 }
