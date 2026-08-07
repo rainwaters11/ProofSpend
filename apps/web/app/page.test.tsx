@@ -27,9 +27,22 @@ describe("Home", () => {
     expect(markup).toContain("Adapter: mock");
   });
 
+  it("links directly to the guided demo overview", () => {
+    const markup = renderToStaticMarkup(Home());
+
+    expect(markup).toContain('href="/app/overview"');
+    expect(markup).toContain("Launch the guided demo");
+  });
+
   it("fails closed when adapter mode is missing", () => {
     delete process.env.PROOFSPEND_ADAPTER_MODE;
 
     expect(() => renderToStaticMarkup(Home())).toThrow();
+  });
+
+  it("scopes legacy landing-page styles to the landing-page class", () => {
+    const markup = renderToStaticMarkup(Home());
+
+    expect(markup).toContain('class="landing-page"');
   });
 });
