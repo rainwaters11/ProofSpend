@@ -1009,6 +1009,7 @@ export class LaunchVaultTreasury {
       );
     }
     const sourceJobRef = input.sourceJobRef == null ? null : AgenticJobRefSchema.parse(input.sourceJobRef);
+    if (sourceJobRef !== null) {
       if (sourceJobRef.isMock !== transactionRef.isMock) throw new TreasuryError("INVALID_STATE", "Incoming tranche job and transaction mode must match.");
       if (sourceJobRef.status !== "COMPLETED" || sourceJobRef.transaction === null || sourceJobRef.transaction.status !== "CONFIRMED" || sourceJobRef.transaction.operationType !== "JOB_EVALUATE") {
         throw new TreasuryError("INVALID_STATE", "Incoming tranche job evidence must represent a completed ERC-8183 evaluation.");
