@@ -20,7 +20,7 @@ Issue #13 owns ERC-8004 identity and reputation governance. Issue #8 owns ERC-81
 
 Issue #16 → #2 → #14 Phase A → #3 → #4 → #14 Phase B and eligible Phase C portions → #5 → #6 → #7 → #13 → #8 → #14 Phase D → #9 → #10.
 
-Issue #7 is an ADR gate and cannot begin implementation before Issues #2, #3, and #4. Circle patterns may be researched earlier, but execution architecture remains unresolved. Consider only `packages/circle-tools` and `kits/openai-agents` selectively; exclude `packages/agent-cli`, terminal UI, unrelated framework kits, and autonomous payments.
+Issue #7's ADR-001 (`docs/architecture/adr-001-circle-execution-architecture.md`) selects **Circle Developer-Controlled Wallets** as the Arc Testnet custody and contract-execution path; adapter implementation still cannot begin before Issues #2, #3, and #4. Circle patterns may be researched earlier. Consider only `packages/circle-tools` and `kits/openai-agents` selectively; exclude `packages/agent-cli`, terminal UI, unrelated framework kits, and autonomous payments.
 
 Issue #14 uses only the approved four phases documented in the roadmap. The complete Verification Agent runtime is a backlog gap requiring a dedicated future issue unless the live backlog explicitly assigns it elsewhere.
 

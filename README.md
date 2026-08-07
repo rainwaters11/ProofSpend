@@ -95,7 +95,7 @@ The merged foundation includes:
 ProofSpend is being built for the **Payments track** of the Programmable Money Hackathon on Arc.
 
 - **Arc Testnet** provides the programmable settlement environment.
-- **Circle wallet infrastructure** will provide the approved wallet and contract-execution path after the Issue #7 architecture decision record is completed.
+- **Circle wallet infrastructure** provides the approved wallet and contract-execution path selected by ADR-001 (Issue #7): Circle Developer-Controlled Wallets on Arc Testnet.
 - **ERC-8004** provides registered agent identity and reputation boundaries.
 - **ERC-8183** provides the milestone-job, escrow, evaluation, and settlement lifecycle.
 - **ProofSpend** provides the evidence, policy, governance, treasury, and selective disclosure layer connecting those standards to real founder workflows.

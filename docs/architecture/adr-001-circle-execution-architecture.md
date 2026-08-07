@@ -2,7 +2,7 @@
 
 ## Context
 
-Issue #7 requires ProofSpend to select **one** primary Circle custody and contract-execution path for Arc Testnet, then implement a typed server-side adapter behind the existing `WalletProvider` boundary. The selected path must support the ERC-8004 registration calls (Issue #13) and ERC-8183 job/settlement calls (Issue #8) on Arc Testnet, while preserving explicit mock mode, prepare/submit separation, idempotency, redaction, and server-side credentials.
+Issue #7 requires ProofSpend to select **one** primary Circle custody and contract-execution path for Arc Testnet, then implement a typed server-side adapter behind an explicitly extended or replaced `WalletProvider` boundary. The current `WalletProvider` (`packages/circle-adapter/src/types.ts`) exposes only balance reads, `preparePayment`, and `executePayment`; it has no contract-call representation and no separate submission, confirmation, and reconciliation operations. This ADR therefore explicitly requires extending or replacing that boundary before adapter implementation, with `MockWalletProvider` and the Circle adapter implementing the same extended interface. The selected path must support the ERC-8004 registration calls (Issue #13) and ERC-8183 job/settlement calls (Issue #8) on Arc Testnet, while preserving explicit mock mode, prepare/submit separation, idempotency, redaction, and server-side credentials.
 
 ## Decision criteria
 
@@ -77,7 +77,7 @@ Positive:
 - ERC-8004 (Issue #13) and ERC-8183 (Issue #8) can consume the same adapter without a second custody stack.
 - Wallet-per-client and wallet-per-role mapping supports the required authority model; a shared entity secret signs only the authorized wallet's action, never mixing balances.
 - CI stays credential-free and uses the mock adapter only. Live `CIRCLE_API_KEY`/`CIRCLE_ENTITY_SECRET` values exist only in an approved server-side deployment or a secured, human-in-the-loop manual smoke-test environment; they are never committed, logged, or exposed in the browser.
-- The existing `WalletProvider` boundary remains the controlling application architecture; `MockWalletProvider` and the Circle adapter implement the same typed interface.
+- The typed application-owned adapter boundary remains the controlling application architecture, but `WalletProvider` must be extended (or, where the mismatch is structural, replaced) before adapter implementation. The extended interface must add typed contract-call representation and distinct submission, confirmation, and reconciliation operations so it can carry ERC-8004 (Issue #13) and ERC-8183 (Issue #8) calls. `MockWalletProvider` and the Circle adapter implement the same extended interface, so mock and Arc paths never diverge silently.
 
 Risks and required follow-ups:
 
@@ -85,6 +85,7 @@ Risks and required follow-ups:
 - Manage `CIRCLE_API_KEY` and `CIRCLE_ENTITY_SECRET` strictly server-side; never expose them in browser storage, logs, or screenshots; store the recovery file securely.
 - Idempotency must be enforced at the application level (the domain layer already models idempotency keys and authorization bindings), because per-wallet operations require caller-provided idempotency keys.
 - Transaction preparation and submission must remain separate persisted operations with immediate pre-submit revalidation, per AGENTS.md.
+- Extend `WalletProvider` before adapter implementation: add typed contract-call representation plus separate submission, confirmation, and reconciliation operations; never present `preparePayment`/`executePayment` as covering confirmation or reconciliation.
 - The SDK license is not declared on npm; verify the license terms before committing the dependency.
 - Arc Testnet remains the only network; mainnet is out of scope.
 

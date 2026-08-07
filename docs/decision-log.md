@@ -42,6 +42,10 @@ Use only approved Phases A–D as recorded in `roadmap.md`; compositions ship on
 
 After Issue #16, create a dedicated implementation issue unless the live backlog explicitly assigns the work elsewhere. It must cover controlled OpenAI Agents SDK orchestration, structured evidence-service calls, deterministic-policy explanation, human interruption, transaction-proposal preparation, and direct-submission prohibition. Issue #13 does not silently own this runtime.
 
+### D-011 — Circle execution architecture selected (ADR-001)
+
+ADR-001 (`docs/architecture/adr-001-circle-execution-architecture.md`) selects **Circle Developer-Controlled Wallets** as the single primary custody and contract-execution path for Arc Testnet. The Agent Stack CLI and user-controlled wallets are rejected alternatives. The typed adapter boundary must be extended or replaced to add contract-call representation and separate submission, confirmation, and reconciliation operations; adapter implementation still waits for Issues #3, and #4.
+
 ## Unresolved decisions
 
-Issue #7 must select the Circle execution architecture using current official evidence. Later implementation work must define ERC-8004 controller/recovery details, independent reputation writer, ERC-8183 role addresses, deliverable commitment encoding, exact intent schema, confirmation/reconciliation policy, and deterministic rejection/refund recovery without inventing protocol deployment details here.
+Circle adapter implementation remains open until Issues #2, #3, and #4 complete. Implementation work must define ERC-8004 controller/recovery details, independent reputation writer, ERC-8183 role addresses, deliverable commitment encoding, exact intent schema, confirmation/reconciliation policy, and deterministic rejection/refund recovery without inventing protocol deployment details here.
