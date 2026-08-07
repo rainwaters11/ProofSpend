@@ -358,20 +358,26 @@ export class LaunchVaultTreasury {
       reserveIds.add(parsed.id);
       return parsed;
     });
-    this.#confirmed = amount(this.#vault.asset, this.#vault.totalCapital.atomicUnits);
+    if (this.#vault.mode === "ARC_TESTNET" && this.#vault.totalCapital.atomicUnits !== "0") {
+      throw new TreasuryError("INVALID_STATE", "Arc Testnet treasury must start at zero confirmed capital; live settlement credit is deferred to the Circle/Arc integration layer.");
+    }
+    const initialConfirmedAtomicUnits = this.#vault.mode === "ARC_TESTNET" ? "0" : this.#vault.totalCapital.atomicUnits;
+    this.#confirmed = amount(this.#vault.asset, initialConfirmedAtomicUnits);
     this.#escrowed = amount(this.#vault.asset, "0");
-    this.#ledger = [
-      LedgerEntrySchema.parse({
-        id: "ledger:seed-capital",
-        kind: "CAPITAL",
-        vaultId: this.#vault.id,
-        reserveId: null,
-        amount: amount(this.#vault.asset, this.#vault.totalCapital.atomicUnits),
-        idempotencyKey: "seed:capital",
-        occurredAt: this.#vault.createdAt,
-        reversesEntryId: null,
-      }),
-    ];
+    this.#ledger = this.#vault.mode === "ARC_TESTNET"
+      ? []
+      : [
+          LedgerEntrySchema.parse({
+            id: "ledger:seed-capital",
+            kind: "CAPITAL",
+            vaultId: this.#vault.id,
+            reserveId: null,
+            amount: amount(this.#vault.asset, this.#vault.totalCapital.atomicUnits),
+            idempotencyKey: "seed:capital",
+            occurredAt: this.#vault.createdAt,
+            reversesEntryId: null,
+          }),
+        ];
     this.#audit = [
       event({
         id: "audit:treasury-initialized",
@@ -1022,6 +1028,9 @@ export class LaunchVaultTreasury {
       if (conflicting !== undefined) throw new TreasuryError("INVALID_STATE", "Incoming tranche transaction hash is already bound to another tranche.");
     }
     const current = this.#incomingTranches.get(input.trancheId);
+    if (current === undefined && state !== "PREPARED") {
+      throw new TreasuryError("INVALID_TRANSITION", "New incoming tranche lifecycle must start in PREPARED state.");
+    }
     if (current !== undefined && current.state === "RECONCILED") throw new TreasuryError("INVALID_STATE", "Reconciled tranches cannot be modified.");
     if (current !== undefined && current.state === "FAILED") throw new TreasuryError("INVALID_STATE", "Failed tranches cannot be modified.");
     if (current !== undefined) {
