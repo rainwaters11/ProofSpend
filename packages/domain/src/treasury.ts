@@ -1081,6 +1081,7 @@ export class LaunchVaultTreasury {
     ]);
 
     return this.#idempotency.execute("tranche-record", input.idempotencyKey, fingerprint, () => {
+      if (this.#audit.some((record) => record.id === eventId)) throw new TreasuryError("INVALID_STATE", `Audit event ${eventId} already exists.`);
       const tranche = IncomingTrancheSchema.parse({
         id: input.trancheId,
         projectId: this.#vault.projectId,

@@ -2198,6 +2198,38 @@ describe("LaunchVault treasury MVP slice", () => {
     expect(snapshot.incomingTranches.map((t) => t.id)).toContain("tranche:conflict-key");
   });
 
+  it("rejects a different idempotency key reusing an existing eventId and leaves vault unchanged", async () => {
+    const { treasury } = setup();
+    const eventId = "audit:tranche:dup-eventid:prepared";
+    await treasury.recordIncomingTranche({
+      trancheId: "tranche:dup-eventid",
+      amount: usdc("5"),
+      transactionRef: mockTransaction("PREPARED", "SETTLEMENT"),
+      actor: authorizedSystem,
+      idempotencyKey: "tranche:dup-eventid:key1",
+      eventId,
+      occurredAt: context.occurredAt,
+    });
+    const snapshotBefore = treasury.getSnapshot();
+    // Different idempotency key but same eventId — must be rejected
+    await expect(treasury.recordIncomingTranche({
+      trancheId: "tranche:dup-eventid-other",
+      amount: usdc("7"),
+      transactionRef: mockTransaction("PREPARED", "SETTLEMENT"),
+      actor: authorizedSystem,
+      idempotencyKey: "tranche:dup-eventid:key2",
+      eventId,
+      occurredAt: context.occurredAt,
+    })).rejects.toThrow("already exists");
+    const snapshotAfter = treasury.getSnapshot();
+    // Vault state, tranche list, balances, ledger, and audit log are all unchanged
+    expect(snapshotAfter.audit).toHaveLength(snapshotBefore.audit.length);
+    expect(snapshotAfter.incomingTranches.map((t) => t.id)).not.toContain("tranche:dup-eventid-other");
+    expect(snapshotAfter.balances.confirmed).toEqual(snapshotBefore.balances.confirmed);
+    expect(snapshotAfter.vault.totalCapital).toEqual(snapshotBefore.vault.totalCapital);
+    expect(snapshotAfter.ledger).toHaveLength(snapshotBefore.ledger.length);
+  });
+
   it("keeps tranche reconciliation idempotent and keeps vault totals aligned with ledger-derived balances", async () => {
     const { treasury } = setup();
     await treasury.recordIncomingTranche({
