@@ -507,7 +507,7 @@ describe("milestone engine", () => {
       requirements: baseRequirements,
       observations: {
         ...baseObservations(),
-        "req:deliverable": { evidenceReferences: ["evidence:deliverable-id", `sha256:${"f".repeat(64)}`], deliverableCount: 1 },
+        "req:deliverable": { evidenceReferences: ["evidence:deliverable-id", `sha256:${"f".repeat(64)}`], deliverableCount: 2 },
       },
       verifiedSpend: usdc("150000000"),
       evaluatedAt,
