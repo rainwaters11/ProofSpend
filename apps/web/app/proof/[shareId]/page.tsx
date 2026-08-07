@@ -56,7 +56,7 @@ export default async function BackerViewPage({
       </div>
 
       <section className="flex flex-col gap-3">
-        <h2 className="text-lg font-semibold text-foreground">Verified spend</h2>
+        <h2 className="text-lg font-semibold text-foreground">Disclosed mock settlement</h2>
         {disclosure.settlements.length === 0 ? (
           <EmptyState
             title="No disclosed settlements yet"

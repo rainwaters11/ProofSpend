@@ -34,4 +34,17 @@ describe("MilestoneDetailPage", () => {
 
     expect(purposeText).not.toMatch(/\b(confirmed|reconciled|satisfied|passed|approved)\b/i);
   });
+
+  it("distinguishes no approval request from an actual pending approval", async () => {
+    const markup = renderToStaticMarkup(
+      await MilestoneDetailPage({
+        params: Promise.resolve({ milestoneId: scenario.milestone.id }),
+        searchParams: Promise.resolve({ state: "DRAFT" }),
+      }),
+    );
+
+    expect(markup).toContain("Approval not requested");
+    expect(markup).not.toContain("Awaiting founder decision");
+    expect(markup).not.toContain("Approve exact release");
+  });
 });

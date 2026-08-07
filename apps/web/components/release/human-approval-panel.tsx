@@ -29,7 +29,8 @@ export function HumanApprovalPanel({
   network,
   interactive = false,
 }: HumanApprovalPanelProps) {
-  const decision = approval?.decision ?? "PENDING";
+  const decision = approval?.decision ?? null;
+  const hasApprovalRequest = approval !== null;
 
   return (
     <Card>
@@ -70,7 +71,7 @@ export function HumanApprovalPanel({
           )}
         </div>
 
-        {interactive && decision === "PENDING" && (
+        {interactive && hasApprovalRequest && decision === "PENDING" && (
           <div className="flex flex-col gap-2 sm:flex-row">
             <Button className="sm:flex-1" disabled aria-disabled="true">
               Approve exact release
@@ -80,7 +81,7 @@ export function HumanApprovalPanel({
             </Button>
           </div>
         )}
-        {interactive && decision === "PENDING" && (
+        {interactive && hasApprovalRequest && decision === "PENDING" && (
           <p className="text-xs text-muted-foreground">
             Approval actions are disabled in this mock demonstration — no adapter is connected yet.
           </p>
@@ -90,7 +91,15 @@ export function HumanApprovalPanel({
   );
 }
 
-function DecisionBadge({ decision }: { decision: "PENDING" | "APPROVED" | "REJECTED" }) {
+function DecisionBadge({ decision }: { decision: ApprovalRecord["decision"] | null }) {
+  if (decision === null) {
+    return (
+      <Badge variant="outline">
+        <ShieldQuestion aria-hidden="true" className="size-3.5" />
+        Approval not requested
+      </Badge>
+    );
+  }
   if (decision === "APPROVED") {
     return (
       <Badge variant="success">

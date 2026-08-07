@@ -11,7 +11,7 @@ interface BackerSettlementCardProps {
   settlement: BackerSettlement;
 }
 
-/** Screen 7: verified spend summary from the allowlisted backer disclosure projection only. */
+/** Screen 7: disclosed mock settlement summary from the allowlisted backer disclosure projection only. */
 export function BackerSettlementCard({ settlement }: BackerSettlementCardProps) {
   const isRefund = settlement.disposition === "REFUND";
 
@@ -33,7 +33,9 @@ export function BackerSettlementCard({ settlement }: BackerSettlementCardProps) 
           {formatMoney(settlement.amount)}
         </span>
         <span className="text-sm text-muted-foreground">
-          {isRefund ? "Refunded to founder" : "Settled to recipient"} ·{" "}
+          {isRefund
+            ? "Synthetic mock refund preview — no USDC was transferred"
+            : "Synthetic mock preview — no USDC was transferred"} ·{" "}
           {new Date(settlement.updatedAt).toLocaleDateString()}
         </span>
       </CardContent>

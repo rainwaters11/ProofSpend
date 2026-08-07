@@ -2,6 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import { AppShell } from "./app-shell";
+import { sidebarToggleLabel } from "./desktop-sidebar";
 import { NAV_ITEMS } from "./nav-items";
 
 describe("AppShell", () => {
@@ -43,6 +44,11 @@ describe("AppShell", () => {
 
     expect(toggleMatch).not.toBeNull();
     expect(toggleMatch?.[0]).not.toContain('tabindex="-1"');
+  });
+
+  it("uses action-accurate accessible labels for the collapsible sidebar", () => {
+    expect(sidebarToggleLabel(false)).toBe("Collapse sidebar");
+    expect(sidebarToggleLabel(true)).toBe("Expand sidebar");
   });
 
   it("shows mode and role context in the header at every breakpoint", () => {

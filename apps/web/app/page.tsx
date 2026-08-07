@@ -1,3 +1,5 @@
+import Link from "next/link";
+
 import { getEnvironment } from "../lib/env";
 
 export default function Home() {
@@ -23,6 +25,13 @@ export default function Home() {
           <li>Prove</li>
           <li>Unlock</li>
         </ol>
+
+        <Link
+          href="/app/overview"
+          className="inline-flex w-fit items-center rounded-md bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground transition-opacity hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          Launch the guided demo →
+        </Link>
       </section>
     </main>
   );

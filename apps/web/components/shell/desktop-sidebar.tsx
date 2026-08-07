@@ -7,8 +7,13 @@ import { useState } from "react";
 import { NAV_ITEMS } from "@/components/shell/nav-items";
 import { cn } from "@/lib/utils";
 
+export function sidebarToggleLabel(collapsed: boolean): string {
+  return collapsed ? "Expand sidebar" : "Collapse sidebar";
+}
+
 export function DesktopSidebar() {
   const [collapsed, setCollapsed] = useState(false);
+  const toggleLabel = sidebarToggleLabel(collapsed);
 
   return (
     <nav
@@ -35,6 +40,7 @@ export function DesktopSidebar() {
       <button
         type="button"
         onClick={() => setCollapsed((value) => !value)}
+        aria-label={toggleLabel}
         aria-pressed={collapsed}
         className="flex h-11 items-center justify-center gap-2 rounded-md border border-border text-sm font-medium text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
@@ -43,7 +49,7 @@ export function DesktopSidebar() {
         ) : (
           <ChevronsLeft aria-hidden="true" className="size-4" />
         )}
-        <span className={cn(collapsed && "sr-only")}>Collapse</span>
+        <span className={cn(collapsed && "sr-only")}>{collapsed ? "Expand" : "Collapse"}</span>
       </button>
     </nav>
   );

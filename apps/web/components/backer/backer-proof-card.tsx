@@ -18,6 +18,9 @@ export function BackerProofCard({ proof }: BackerProofCardProps) {
         <CardTitle className="text-sm">Proof-of-Progress v{proof.version}</CardTitle>
       </CardHeader>
       <CardContent className="flex flex-col gap-1">
+        <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+          Synthetic mock hash
+        </span>
         <span className="break-all font-mono text-xs text-muted-foreground">{proof.recordHash}</span>
         <span className="text-xs text-muted-foreground">
           Recorded {new Date(proof.createdAt).toLocaleDateString()}
