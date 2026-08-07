@@ -8,7 +8,7 @@
 
 <p align="center"><em>Product vision — mock foundation complete; Arc Testnet capabilities are in active development.</em></p>
 
-ProofSpend LaunchVault is an evidence-aware programmable capital platform for founders, solopreneurs, and the people who fund their work. It connects business capital, milestone requirements, receipts, deliverables, deterministic policy, human approval, and Arc Testnet settlement into one accountable workflow.
+ProofSpend LaunchVault is an evidence-aware programmable capital platform for founders, solopreneurs, and the people who fund their work. It connects business capital, milestone requirements, receipts, deliverables, LLM-assisted evidence analysis, deterministic policy, human approval, and Arc Testnet settlement into one accountable workflow.
 
 > **Current status:** The technical foundation and Arc-native architecture are complete. The application currently runs in explicit mock mode, and no real funds are being moved. Smart Reserves, evidence workflows, ERC-8004 identity, ERC-8183 settlement, and the premium product interface are in active development.
 
@@ -22,6 +22,12 @@ Founders often manage business funding across receipts, spreadsheets, wallets, m
 
 ProofSpend is designed to turn those scattered records into verifiable, privacy-conscious Proof-of-Progress without allowing artificial intelligence to independently control money.
 
+## Design lineage and AI role
+
+ProofSpend carries forward the deterministic preflight, plain-language risk communication, and human-oversight principles first explored in **SendSure**. That influence is conceptual and vocabulary-based: ProofSpend does not present itself as a SendSure fork and does not rely on SendSure code unless a future change explicitly imports and documents it.
+
+The LLM remains an important assistant. It can read unstructured evidence, extract candidate facts, map evidence to requirements, identify ambiguity, ask a focused Proof Recovery question, explain results, and prepare a proposed next action. It does not produce the formal financial-policy decision, approve money movement, or submit a transaction.
+
 ## The core workflow
 
 ```text
@@ -33,11 +39,13 @@ Define milestone requirements
     ↓
 Collect receipts, deliverables, transactions, and business purpose
     ↓
-Evaluate evidence with deterministic policy
+Use the Verification Agent and LLM to extract facts, map evidence, and identify gaps
     ↓
-Obtain explicit authorized human approval
+Evaluate validated facts with deterministic policy
     ↓
-Submit and confirm the Arc Testnet action
+Obtain explicit authorized human approval for the exact intent
+    ↓
+Submit and confirm the Arc Testnet action through the typed Circle adapter
     ↓
 Share a selective Proof-of-Progress record with backers
 ```
@@ -48,7 +56,7 @@ Share a selective Proof-of-Progress record with backers
 Organize incoming capital into protected categories such as product, marketing, travel, operations, and contingency while clearly separating available, allocated, escrowed, and settled funds.
 
 ### Evidence Engine
-Connect receipts, deliverables, transaction records, and business-purpose statements to milestone requirements. Missing or uncertain proof is routed through a guided Proof Recovery workflow.
+Connect receipts, deliverables, transaction records, and business-purpose statements to milestone requirements. The LLM produces structured evidence candidates and explanations; deterministic services validate the candidates and own the formal policy result. Missing or uncertain proof is routed through a guided Proof Recovery workflow.
 
 ### Proof-of-Progress
 Create privacy-safe records that show what was completed, what evidence supported the decision, which policy rules passed, and what funding action followed—without exposing raw private receipts.
@@ -66,12 +74,12 @@ Give founders a working treasury and evidence workspace while giving backers a s
 
 ProofSpend separates automation into four decision layers:
 
-1. **AI assistance** extracts, classifies, summarizes, and explains evidence.
-2. **Deterministic policy** evaluates requirements and returns explicit outcomes such as PASS, REVIEW, or FAIL.
-3. **Authorized human approval** confirms the exact financial action.
-4. **Server-side execution** prepares, submits, and confirms the Arc Testnet transaction through a typed adapter.
+1. **LLM-assisted AI analysis** extracts, classifies, maps, summarizes, and explains evidence.
+2. **Deterministic policy** validates structured facts and returns explicit outcomes such as PASS, REVIEW, or FAIL.
+3. **Authorized human approval** confirms the exact value-moving intent, including action, amount, asset, destination, role, and expiry.
+4. **Server-side execution** prepares, submits, confirms, and reconciles the Arc Testnet transaction through a typed Circle adapter.
 
-The agent must never independently authorize or submit a value-moving action.
+The Verification Agent may autonomously inspect evidence, call approved analysis tools, explain policy output, and prepare a proposal. It must never independently produce the authoritative financial decision, approve its own proposal, alter an approved intent, or submit a value-moving action. After exact persisted approval, deterministic server-side execution revalidates and submits the action outside the agent tool loop.
 
 ## What is working now
 
@@ -87,18 +95,18 @@ The merged foundation includes:
 - Safe `/api/health` endpoint
 - Repository-wide lint, typecheck, test, and build scripts
 - Frozen dependency installation in GitHub Actions
-- Fourteen implemented tests passing in CI
 - Arc and Circle architecture, dependency, roadmap, and governance documentation
 
 ## Arc and Circle architecture
 
-ProofSpend is being built for the **Payments track** of the Programmable Money Hackathon on Arc.
+ProofSpend is positioned primarily for the **Agentic Economy track**, with a complementary **DeFi treasury and programmable-capital** use case.
 
 - **Arc Testnet** provides the programmable settlement environment.
 - **Circle wallet infrastructure** will provide the approved wallet and contract-execution path after the Issue #7 architecture decision record is completed.
+- **The Verification Agent** analyzes evidence, calls structured tools, explains deterministic outcomes, and prepares exact proposals; it does not independently authorize value movement.
 - **ERC-8004** provides registered agent identity and reputation boundaries.
 - **ERC-8183** provides the milestone-job, escrow, evaluation, and settlement lifecycle.
-- **ProofSpend** provides the evidence, policy, governance, treasury, and selective disclosure layer connecting those standards to real founder workflows.
+- **ProofSpend** provides the evidence, deterministic policy, governance, treasury, and selective disclosure layer connecting those standards to real founder workflows.
 
 See [`docs/architecture/arc-agentic-capital.md`](docs/architecture/arc-agentic-capital.md), [`docs/dependency-map.md`](docs/dependency-map.md), and [`docs/roadmap.md`](docs/roadmap.md) for the current technical plan.
 
@@ -109,10 +117,11 @@ The guided demo follows a founder preparing a PawPOVAI soft launch:
 - capital is allocated into purpose-based reserves;
 - a launch milestone is funded;
 - receipts and deliverables are connected to the milestone;
-- the Evidence Engine identifies any proof gaps;
-- deterministic policy evaluates eligibility;
-- an authorized human approves the action;
-- an Arc Testnet settlement is prepared and confirmed;
+- the LLM-assisted Verification Agent extracts facts and identifies any proof gaps;
+- deterministic policy evaluates PASS, REVIEW, or FAIL;
+- the agent prepares an exact proposed action;
+- an authorized human approves the exact intent;
+- a Circle-backed Arc Testnet action is prepared, submitted, and confirmed;
 - a privacy-safe Proof-of-Progress record is shared with the backer.
 
 ## Repository structure
@@ -157,7 +166,8 @@ http://localhost:3000/api/health
 - No real funds are moved by the current foundation.
 - Mock behavior must never fabricate a transaction hash.
 - Raw receipts and founder-private evidence remain offchain.
-- AI recommendations are not approvals.
+- LLM extractions, recommendations, and explanations are not deterministic policy decisions or approvals.
+- PASS does not mean approved; approved does not mean submitted; submitted does not mean confirmed.
 - This project is not tax, legal, investment, or accounting advice.
 - ProofSpend does not claim to eliminate fraud or guarantee funding outcomes.
 
@@ -175,6 +185,8 @@ The active implementation order is maintained in [`docs/roadmap.md`](docs/roadma
 8. ERC-8183 milestone escrow and Arc Testnet settlement
 9. Guided founder and backer demo
 10. Security, accessibility, deployment, and submission review
+
+**Separate backlog item:** Complete Verification Agent orchestration requires its own future issue and dependency review unless the live backlog explicitly assigns it elsewhere. It is not part of Issue #9.
 
 ---
 
