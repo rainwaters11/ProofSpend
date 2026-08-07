@@ -113,7 +113,7 @@ export const MilestoneEvaluationResultSchema = z.object({
 });
 export type MilestoneEvaluationResult = z.infer<typeof MilestoneEvaluationResultSchema>;
 
-type RequirementEvaluationComputation = { outcome: RequirementOutcome; reasonCode: MilestoneReasonCode };
+type RequirementEvaluationComputation = { outcome: RequirementOutcome; reasonCode: MilestoneReasonCode; evidenceReferences?: readonly string[] };
 type MilestoneApprovalClassification = "PENDING" | "REJECTED" | "CONFIRMED";
 type RequirementProvenance = {
   hasAcceptedHumanDecision: boolean;
@@ -262,24 +262,11 @@ const hasAiOnlySuggestion = (
   const entry = provenance.byRequirementId.get(requirementId);
   return entry?.hasAiSuggestion === true && entry.hasAcceptedHumanDecision !== true;
 };
-const acceptedConfirmationCount = (
+const acceptedEvidenceByKind = (
+  provenance: ProvenanceIndex,
   requirementId: string,
-  input: Pick<MilestoneEvaluationInput, "milestone" | "expectedAuthorizedFounderId" | "expectedAuthorizedEvaluatorId" | "evidenceItems" | "evidenceMatches">,
-): number => {
-  const evidenceById = new Map<string, EvidenceItem>();
-  for (const evidence of input.evidenceItems ?? []) {
-    if (evidence.projectId !== input.milestone.projectId || evidence.kind !== "CONFIRMATION") continue;
-    evidenceById.set(evidence.id, evidence);
-  }
-  const acceptedEvidence = new Set<string>();
-  for (const match of input.evidenceMatches ?? []) {
-    if (match.source !== "HUMAN_DECISION" || match.requirementId !== requirementId) continue;
-    if (!isAllowedDecisionActor(match.acceptedBy, input.expectedAuthorizedFounderId, input.expectedAuthorizedEvaluatorId)) continue;
-    if (!evidenceById.has(match.evidenceId)) continue;
-    acceptedEvidence.add(match.evidenceId);
-  }
-  return acceptedEvidence.size;
-};
+  evidenceKind: EvidenceItem["kind"],
+): Set<string> => provenance.byRequirementId.get(requirementId)?.acceptedEvidenceByKind[evidenceKind] ?? new Set<string>();
 const countValidatedEvidenceReferences = (
   requirement: MilestoneRequirement,
   observation: RequirementObservation,
@@ -339,6 +326,17 @@ const validateNonCountEvidenceReferences = (
   const acceptedEvidence = acceptedEvidenceSet(provenance, requirementId);
   resolveValidatedEvidenceReferences(observation.evidenceReferences ?? [], acceptedEvidence, provenance, "Non-count evidence references");
 };
+const approvalEvidenceReferences = (
+  approvalRecord: ApprovalRecord | null | undefined,
+  observation: RequirementObservation,
+): readonly string[] => {
+  if (approvalRecord === null || approvalRecord === undefined) return [];
+  const reportedReferences = observation.evidenceReferences ?? [];
+  if (reportedReferences.length > 0 && (reportedReferences.length !== 1 || reportedReferences[0] !== approvalRecord.id)) {
+    throw new Error("Human approval evidence references must exactly match the approval record id.");
+  }
+  return [approvalRecord.id];
+};
 const evaluateByKind = (
   requirement: MilestoneRequirement,
   observation: RequirementObservation,
@@ -362,7 +360,11 @@ const evaluateByKind = (
         : { outcome: "FAIL", reasonCode: "SPEND_LIMIT_EXCEEDED" };
     }
     case "FOUNDER_CONFIRMATION":
-      if (acceptedConfirmationCount(requirement.id, input) > 0) return { outcome: "PASS", reasonCode: "CONFIRMATION_PRESENT" };
+      if (acceptedEvidenceCountByKind(provenance, requirement.id, "CONFIRMATION") > 0) {
+        const acceptedConfirmationEvidence = acceptedEvidenceByKind(provenance, requirement.id, "CONFIRMATION");
+        resolveValidatedEvidenceReferences(observation.evidenceReferences ?? [], acceptedConfirmationEvidence, provenance, "Confirmation evidence references");
+        return { outcome: "PASS", reasonCode: "CONFIRMATION_PRESENT" };
+      }
       if (observation.founderConfirmationPresent === true || hasAiOnlySuggestion(provenance, requirement.id)) return { outcome: "REVIEW", reasonCode: "EVIDENCE_MISSING" };
       return { outcome: "FAIL", reasonCode: "CONFIRMATION_MISSING" };
     case "TRANSACTION_MATCH":
@@ -389,9 +391,10 @@ const evaluateByKind = (
     }
     case "HUMAN_APPROVAL": {
       const approval = classifyMilestoneApproval(input.approvalRecord ?? null, input);
-      if (approval === "CONFIRMED") return { outcome: "PASS", reasonCode: "HUMAN_APPROVAL_CONFIRMED" };
-      if (approval === "REJECTED") return { outcome: "FAIL", reasonCode: "HUMAN_APPROVAL_REJECTED" };
-      return { outcome: "REVIEW", reasonCode: "HUMAN_APPROVAL_PENDING" };
+      const evidenceReferences = approvalEvidenceReferences(input.approvalRecord ?? null, observation);
+      if (approval === "CONFIRMED") return { outcome: "PASS", reasonCode: "HUMAN_APPROVAL_CONFIRMED", evidenceReferences };
+      if (approval === "REJECTED") return { outcome: "FAIL", reasonCode: "HUMAN_APPROVAL_REJECTED", evidenceReferences };
+      return { outcome: "REVIEW", reasonCode: "HUMAN_APPROVAL_PENDING", evidenceReferences };
     }
   }
 };
@@ -561,7 +564,7 @@ export function evaluateMilestone(input: MilestoneEvaluationInput): MilestoneEva
     return RequirementEvaluationSchema.parse({
       requirementId: requirement.id,
       required,
-      evidenceReferences: [...(observation.evidenceReferences ?? [])],
+      evidenceReferences: [...(outcome.evidenceReferences ?? observation.evidenceReferences ?? [])],
       outcome: outcome.outcome,
       reasonCodes: [outcome.reasonCode],
       reviewerNotes: reviewerNotesByRequirementId[requirement.id] ?? null,
