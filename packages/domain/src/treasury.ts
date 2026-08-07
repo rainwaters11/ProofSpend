@@ -688,7 +688,9 @@ export class LaunchVaultTreasury {
     settlementTransactionRef?: ArcTransactionRef | null;
   }): AllocationProposal {
     const actor = ActorSchema.parse(input.actor);
+    this.#assertAuthorizedFounder(actor);
     const eventId = IdSchema.parse(input.eventId);
+    if (this.#audit.some((record) => record.id === eventId)) throw new TreasuryError("INVALID_STATE", `Audit event ${eventId} already exists.`);
     const occurredAt = z.string().datetime().parse(input.occurredAt);
     if (this.#proposals.has(input.proposalId)) throw new TreasuryError("INVALID_STATE", `Proposal ${input.proposalId} already exists.`);
     const sourceTrancheId = input.sourceTrancheId === undefined || input.sourceTrancheId === null ? null : IdSchema.parse(input.sourceTrancheId);
