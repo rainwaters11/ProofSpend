@@ -97,7 +97,7 @@ const evaluateByKind = (
   observation: RequirementObservation,
   input: MilestoneEvaluationInput,
 ): RequirementEvaluationComputation => {
-  if (observation.hasConflictingEvidence === true) return { outcome: "REVIEW", reasonCode: "EVIDENCE_CONFLICT" };
+  if (requirement.kind !== "HUMAN_APPROVAL" && observation.hasConflictingEvidence === true) return { outcome: "REVIEW", reasonCode: "EVIDENCE_CONFLICT" };
   switch (requirement.kind) {
     case "DELIVERABLE": {
       const deliverableCount = observation.deliverableCount ?? observation.evidenceReferences?.length ?? 0;
@@ -138,7 +138,7 @@ const evaluateByKind = (
       if (approval.decision === "REJECTED") return { outcome: "FAIL", reasonCode: "HUMAN_APPROVAL_REJECTED" };
       const expiresAt = finiteTime(approval.expiresAt);
       const decidedAt = approval.decidedAt === null ? null : finiteTime(approval.decidedAt);
-      if (evaluatedAt === null || expiresAt === null || decidedAt === null || approval.decidedAt === null || decidedAt > evaluatedAt || evaluatedAt >= expiresAt) return { outcome: "FAIL", reasonCode: "HUMAN_APPROVAL_REJECTED" };
+      if (evaluatedAt === null || expiresAt === null || decidedAt === null || approval.decidedAt === null || decidedAt > evaluatedAt || evaluatedAt >= expiresAt) return { outcome: "REVIEW", reasonCode: "HUMAN_APPROVAL_PENDING" };
       return { outcome: "PASS", reasonCode: "HUMAN_APPROVAL_CONFIRMED" };
     }
   }
@@ -187,7 +187,7 @@ export function evaluateMilestone(input: MilestoneEvaluationInput): MilestoneEva
     }
   }
   const humanApproval = requirementEvaluations.find((item) => sortedRequirements.find((requirement) => requirement.id === item.requirementId)?.kind === "HUMAN_APPROVAL");
-  const humanApprovalRequired = humanApproval === undefined ? true : humanApproval.outcome !== "PASS";
+  const humanApprovalRequired = humanApproval === undefined ? false : humanApproval.outcome !== "PASS";
   const erc8183ActionPermitted = status === "ELIGIBLE" && !humanApprovalRequired;
   return MilestoneEvaluationResultSchema.parse({
     status,

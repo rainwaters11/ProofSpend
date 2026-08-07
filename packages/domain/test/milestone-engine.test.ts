@@ -103,10 +103,26 @@ describe("milestone engine", () => {
         decidedAt: null,
       }),
     });
+
     expect(result.status).toBe("ELIGIBLE");
     expect(result.humanApprovalRequired).toBe(true);
     expect(result.erc8183ActionPermitted).toBe(false);
     expect(result.recommendedNextAction).toBe("REQUEST_HUMAN_APPROVAL");
+  });
+
+  it("does not require human approval when requirement is omitted", () => {
+    const result = evaluateMilestone({
+      milestone,
+      requirements: baseRequirements.filter((item) => item.kind !== "HUMAN_APPROVAL"),
+      observations: baseObservations(),
+      verifiedSpend: usdc("149999999"),
+      evaluatedAt,
+      policyVersion,
+      approvalRecord: null,
+    });
+    expect(result.status).toBe("ELIGIBLE");
+    expect(result.humanApprovalRequired).toBe(false);
+    expect(result.erc8183ActionPermitted).toBe(true);
   });
 
   it("handles missing/conflicting evidence and keeps optional failures from blocking eligibility", () => {
@@ -132,7 +148,7 @@ describe("milestone engine", () => {
     expect(result.requirementEvaluations.find((item) => item.requirementId === "req:expenses")?.reviewerNotes).toBe("conflicting invoice totals");
   });
 
-  it("rejects expired or rejected human approval and ignores LLM-suggested status fields", () => {
+  it("handles rejected/expired approvals and ignores LLM-suggested status fields", () => {
     const withInjectedField = evaluateMilestone({
       milestone,
       requirements: baseRequirements,
@@ -161,6 +177,29 @@ describe("milestone engine", () => {
     expect(approvalEvaluation?.reasonCodes).toEqual(["HUMAN_APPROVAL_REJECTED"]);
     expect(withInjectedField.erc8183ActionPermitted).toBe(false);
     expect(withInjectedField.recommendedNextAction).toBe("REQUEST_HUMAN_APPROVAL");
+    const expiredApproval = evaluateMilestone({
+      milestone,
+      requirements: baseRequirements,
+      observations: baseObservations(),
+      verifiedSpend: usdc("150000000"),
+      evaluatedAt,
+      policyVersion,
+      approvalRecord: ApprovalRecordSchema.parse({
+        id: "approval:expired",
+        aggregateId: milestone.id,
+        intentId: "intent:expired",
+        actionKind: "MILESTONE_EVALUATION",
+        authorizedActorType: "EVALUATOR",
+        authorizedActorId: "evaluator:1",
+        exactIntentHash: `sha256:${"f".repeat(64)}`,
+        idempotencyKey: "approval:key:expired",
+        decision: "APPROVED",
+        approver: { actorId: "evaluator:1", actorType: "EVALUATOR" },
+        expiresAt: "2026-01-10T00:00:00.000Z",
+        decidedAt: "2026-01-09T00:00:00.000Z",
+      }),
+    });
+    expect(expiredApproval.requirementEvaluations.find((item) => item.requirementId === "req:approval")?.reasonCodes).toEqual(["HUMAN_APPROVAL_PENDING"]);
   });
 
   it("enforces agentic job draft budget and expiry boundaries", () => {
