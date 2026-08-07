@@ -1875,18 +1875,17 @@ describe("LaunchVault treasury MVP slice", () => {
   });
 
   it("deduplicates settlement transaction hashes using canonical casing", () => {
-    const { treasury } = setup("ARC_TESTNET", authorizedAdapter);
-    const lowercaseHash = `0x${"ab".repeat(32)}`;
-    const uppercaseHash = `0x${"AB".repeat(32)}`;
+    const { treasury } = setup();
+    const lowercaseHash = `mock:transaction:0x${"ab".repeat(32)}`;
+    const uppercaseHash = `mock:transaction:0x${"AB".repeat(32)}`;
     treasury.recordIncomingTranche({
       trancheId: "tranche:canonical-hash-a",
       amount: usdc("5"),
       transactionRef: {
-        ...liveTransaction,
+        ...mockTransaction("SUBMITTED", "SETTLEMENT"),
         transactionHash: lowercaseHash,
-        explorerUrl: arcTestnetExplorerTransactionUrl(lowercaseHash),
       },
-      actor: authorizedAdapter,
+      actor: authorizedSystem,
       eventId: "audit:tranche:canonical-hash-a",
       occurredAt: context.occurredAt,
     });
@@ -1894,11 +1893,10 @@ describe("LaunchVault treasury MVP slice", () => {
       trancheId: "tranche:canonical-hash-b",
       amount: usdc("5"),
       transactionRef: {
-        ...liveTransaction,
+        ...mockTransaction("SUBMITTED", "SETTLEMENT"),
         transactionHash: uppercaseHash,
-        explorerUrl: arcTestnetExplorerTransactionUrl(uppercaseHash),
       },
-      actor: authorizedAdapter,
+      actor: authorizedSystem,
       eventId: "audit:tranche:canonical-hash-b",
       occurredAt: context.occurredAt,
     })).toThrow(/already bound to another tranche/);
@@ -2020,18 +2018,29 @@ describe("LaunchVault treasury MVP slice", () => {
     expect(invariant.dashboard.unallocated.atomicUnits).toBe(invariant.ledger.unallocated.atomicUnits);
   });
 
-  it("supports adapter-authorized Arc Testnet reconciliation only for matching live-mode evidence", async () => {
+  it("rejects live Arc incoming settlement evidence before any treasury mutation", () => {
     const { treasury } = setup("ARC_TESTNET", authorizedAdapter);
-    treasury.recordIncomingTranche({
-      trancheId: "tranche:live",
-      amount: usdc("1"),
-      transactionRef: liveTransaction,
-      actor: authorizedAdapter,
-      eventId: "audit:tranche:live",
-      occurredAt: context.occurredAt,
+    const liveByStatus = (status: "PREPARED" | "SUBMITTED" | "CONFIRMED" | "FAILED") => ArcTransactionRefSchema.parse({
+      ...liveTransaction,
+      status,
+      transactionHash: status === "PREPARED" ? null : liveHash,
+      blockNumber: status === "CONFIRMED" ? "1" : null,
+      blockHash: status === "CONFIRMED" ? liveBlockHash : null,
+      explorerUrl: status === "PREPARED" ? null : arcTestnetExplorerTransactionUrl(liveHash),
     });
-    await expect(treasury.reconcileConfirmedTranche({ trancheId: "tranche:live", actor: authorizedSystem, idempotencyKey: "reconcile:live:wrong", eventId: "audit:reconcile:live:wrong", occurredAt: context.occurredAt })).rejects.toThrow(/exact authorized ADAPTER/);
-    await expect(treasury.reconcileConfirmedTranche({ trancheId: "tranche:live", actor: authorizedAdapter, idempotencyKey: "reconcile:live", eventId: "audit:reconcile:live", occurredAt: context.occurredAt })).resolves.toMatchObject({ state: "RECONCILED" });
+
+    (["PREPARED", "SUBMITTED", "CONFIRMED", "FAILED"] as const).forEach((status) => {
+      const before = treasury.getSnapshot();
+      expect(() => treasury.recordIncomingTranche({
+        trancheId: `tranche:live-${status.toLowerCase()}`,
+        amount: usdc("1"),
+        transactionRef: liveByStatus(status),
+        actor: authorizedAdapter,
+        eventId: `audit:tranche:live-${status.toLowerCase()}`,
+        occurredAt: context.occurredAt,
+      })).toThrow(/Live Arc settlement credit is deferred to the Circle\/Arc integration layer/);
+      expect(treasury.getSnapshot()).toEqual(before);
+    });
   });
 
   it("records append-only audit history with actor, state transition, timestamp, and related IDs", async () => {

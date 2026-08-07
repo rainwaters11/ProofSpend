@@ -983,8 +983,22 @@ export class LaunchVaultTreasury {
     if (amountValue.asset !== this.#vault.asset) throw new TreasuryError("ASSET_MISMATCH", "Incoming tranche asset mismatch.");
     const transactionRef = ArcTransactionRefSchema.parse(input.transactionRef);
     if (transactionRef.operationType !== "SETTLEMENT") throw new TreasuryError("INVALID_TRANSITION", "Incoming tranche evidence must use SETTLEMENT transaction type.");
-    if (!["PREPARED", "SUBMITTED", "CONFIRMED", "FAILED"].includes(transactionRef.status)) {
-      throw new TreasuryError("INVALID_TRANSITION", "Incoming tranche lifecycle accepts PREPARED, SUBMITTED, CONFIRMED, or FAILED transaction evidence.");
+    let state: IncomingTranche["state"];
+    switch (transactionRef.status) {
+      case "PREPARED":
+      case "SUBMITTED":
+      case "CONFIRMED":
+      case "FAILED":
+        state = transactionRef.status;
+        break;
+      default:
+        throw new TreasuryError("INVALID_TRANSITION", "Incoming tranche lifecycle accepts PREPARED, SUBMITTED, CONFIRMED, or FAILED transaction evidence.");
+    }
+    if (!transactionRef.isMock) {
+      throw new TreasuryError(
+        "INVALID_STATE",
+        "Live Arc settlement credit is deferred to the Circle/Arc integration layer.",
+      );
     }
     if (transactionRef.isMock !== (this.#vault.mode === "MOCK")) throw new TreasuryError("INVALID_STATE", "Incoming tranche transaction mode is incompatible with treasury mode.");
     const sourceJobRef = input.sourceJobRef === undefined ? null : AgenticJobRefSchema.parse(input.sourceJobRef);
@@ -1007,7 +1021,6 @@ export class LaunchVaultTreasury {
       );
       if (conflicting !== undefined) throw new TreasuryError("INVALID_STATE", "Incoming tranche transaction hash is already bound to another tranche.");
     }
-    const state = transactionRef.status;
     const current = this.#incomingTranches.get(input.trancheId);
     if (current !== undefined && current.state === "RECONCILED") throw new TreasuryError("INVALID_STATE", "Reconciled tranches cannot be modified.");
     if (current !== undefined && current.state === "FAILED") throw new TreasuryError("INVALID_STATE", "Failed tranches cannot be modified.");
@@ -1020,11 +1033,12 @@ export class LaunchVaultTreasury {
       if (current.transactionRef.network !== transactionRef.network || current.transactionRef.chainId !== transactionRef.chainId) {
         throw new TreasuryError("INVALID_STATE", "Incoming tranche transaction network and chain cannot be altered.");
       }
-      const allowedTransitions: Record<Exclude<IncomingTranche["state"], "RECONCILED">, ReadonlySet<IncomingTranche["state"]>> = {
+      const allowedTransitions: Record<IncomingTranche["state"], ReadonlySet<IncomingTranche["state"]>> = {
         PREPARED: new Set(["PREPARED", "SUBMITTED", "CONFIRMED", "FAILED"]),
         SUBMITTED: new Set(["SUBMITTED", "CONFIRMED", "FAILED"]),
         CONFIRMED: new Set(["CONFIRMED"]),
         FAILED: new Set(),
+        RECONCILED: new Set(),
       };
       if (!allowedTransitions[current.state].has(state)) throw new TreasuryError("INVALID_TRANSITION", "Incoming tranche status cannot move backward or leave a terminal state.");
       if (current.transactionRef.status === "CONFIRMED" && this.#transactionFingerprint(current.transactionRef) !== this.#transactionFingerprint(transactionRef)) {
