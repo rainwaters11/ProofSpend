@@ -65,6 +65,7 @@ const exactApproval = ApprovalRecordSchema.parse({
   expiresAt: "2026-01-30T00:00:00.000Z",
   decidedAt: "2026-01-19T00:00:00.000Z",
 });
+const approvalEvaluation = (result: ReturnType<typeof evaluateMilestone>) => result.requirementEvaluations.find((item) => item.requirementId === "req:approval");
 
 describe("milestone engine", () => {
   it("returns deterministic, stable requirement ordering and structured outcomes", () => {
@@ -221,6 +222,8 @@ describe("milestone engine", () => {
     });
     expect(wrongEvaluator.status).toBe("ELIGIBLE");
     expect(wrongEvaluator.erc8183ActionPermitted).toBe(false);
+    expect(approvalEvaluation(wrongEvaluator)?.outcome).toBe("REVIEW");
+    expect(approvalEvaluation(wrongEvaluator)?.reasonCodes).toEqual(["HUMAN_APPROVAL_PENDING"]);
 
     const wrongIntent = evaluateMilestone({
       milestone,
@@ -236,6 +239,8 @@ describe("milestone engine", () => {
     });
     expect(wrongIntent.status).toBe("ELIGIBLE");
     expect(wrongIntent.erc8183ActionPermitted).toBe(false);
+    expect(approvalEvaluation(wrongIntent)?.outcome).toBe("REVIEW");
+    expect(approvalEvaluation(wrongIntent)?.reasonCodes).toEqual(["HUMAN_APPROVAL_PENDING"]);
 
     const wrongHash = evaluateMilestone({
       milestone,
@@ -251,6 +256,8 @@ describe("milestone engine", () => {
     });
     expect(wrongHash.status).toBe("ELIGIBLE");
     expect(wrongHash.erc8183ActionPermitted).toBe(false);
+    expect(approvalEvaluation(wrongHash)?.outcome).toBe("REVIEW");
+    expect(approvalEvaluation(wrongHash)?.reasonCodes).toEqual(["HUMAN_APPROVAL_PENDING"]);
   });
 
   it("blocks rejected or expired approvals and permits only valid exact current approval", () => {
@@ -268,6 +275,8 @@ describe("milestone engine", () => {
     });
     expect(rejectedApproval.status).toBe("ELIGIBLE");
     expect(rejectedApproval.erc8183ActionPermitted).toBe(false);
+    expect(approvalEvaluation(rejectedApproval)?.outcome).toBe("FAIL");
+    expect(approvalEvaluation(rejectedApproval)?.reasonCodes).toEqual(["HUMAN_APPROVAL_REJECTED"]);
 
     const expiredApproval = evaluateMilestone({
       milestone,
@@ -283,6 +292,8 @@ describe("milestone engine", () => {
     });
     expect(expiredApproval.status).toBe("ELIGIBLE");
     expect(expiredApproval.erc8183ActionPermitted).toBe(false);
+    expect(approvalEvaluation(expiredApproval)?.outcome).toBe("REVIEW");
+    expect(approvalEvaluation(expiredApproval)?.reasonCodes).toEqual(["HUMAN_APPROVAL_PENDING"]);
 
     const validApproval = evaluateMilestone({
       milestone,
@@ -298,6 +309,8 @@ describe("milestone engine", () => {
     });
     expect(validApproval.status).toBe("ELIGIBLE");
     expect(validApproval.erc8183ActionPermitted).toBe(true);
+    expect(approvalEvaluation(validApproval)?.outcome).toBe("PASS");
+    expect(approvalEvaluation(validApproval)?.reasonCodes).toEqual(["HUMAN_APPROVAL_CONFIRMED"]);
   });
 
   it("handles missing/conflicting evidence and keeps optional failures from blocking eligibility", () => {

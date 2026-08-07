@@ -97,6 +97,7 @@ export const MilestoneEvaluationResultSchema = z.object({
 export type MilestoneEvaluationResult = z.infer<typeof MilestoneEvaluationResultSchema>;
 
 type RequirementEvaluationComputation = { outcome: RequirementOutcome; reasonCode: MilestoneReasonCode };
+type MilestoneApprovalClassification = "PENDING" | "REJECTED" | "CONFIRMED";
 const evaluateByKind = (
   requirement: MilestoneRequirement,
   observation: RequirementObservation,
@@ -136,15 +137,10 @@ const evaluateByKind = (
       return evaluatedAt <= dueAt ? { outcome: "PASS", reasonCode: "DUE_DATE_VALID" } : { outcome: "FAIL", reasonCode: "DUE_DATE_EXPIRED" };
     }
     case "HUMAN_APPROVAL": {
-      const approval = input.approvalRecord ?? null;
-      const evaluatedAt = finiteTime(input.evaluatedAt);
-      if (approval === null || approval.actionKind !== "MILESTONE_EVALUATION" || approval.aggregateId !== input.milestone.id) return { outcome: "REVIEW", reasonCode: "HUMAN_APPROVAL_PENDING" };
-      if (approval.decision === "PENDING") return { outcome: "REVIEW", reasonCode: "HUMAN_APPROVAL_PENDING" };
-      if (approval.decision === "REJECTED") return { outcome: "FAIL", reasonCode: "HUMAN_APPROVAL_REJECTED" };
-      const expiresAt = finiteTime(approval.expiresAt);
-      const decidedAt = approval.decidedAt === null ? null : finiteTime(approval.decidedAt);
-      if (evaluatedAt === null || expiresAt === null || decidedAt === null || approval.decidedAt === null || decidedAt > evaluatedAt || evaluatedAt >= expiresAt) return { outcome: "REVIEW", reasonCode: "HUMAN_APPROVAL_PENDING" };
-      return { outcome: "PASS", reasonCode: "HUMAN_APPROVAL_CONFIRMED" };
+      const approval = classifyMilestoneApproval(input.approvalRecord ?? null, input);
+      if (approval === "CONFIRMED") return { outcome: "PASS", reasonCode: "HUMAN_APPROVAL_CONFIRMED" };
+      if (approval === "REJECTED") return { outcome: "FAIL", reasonCode: "HUMAN_APPROVAL_REJECTED" };
+      return { outcome: "REVIEW", reasonCode: "HUMAN_APPROVAL_PENDING" };
     }
   }
 };
@@ -171,35 +167,42 @@ const validateRequirementSet = (milestoneId: string, milestoneRequirementIds: re
     if (!milestoneIds.has(requirementId)) throw new Error("Supplied requirements must exactly match milestone.requirementIds.");
   }
 };
-const isExactCurrentMilestoneApproval = (
+const classifyMilestoneApproval = (
   approval: ApprovalRecord | null,
   input: Pick<MilestoneEvaluationInput, "milestone" | "evaluatedAt" | "expectedApprovalIntentId" | "expectedApprovalExactIntentHash" | "expectedAuthorizedEvaluatorId">,
-): boolean => {
+): MilestoneApprovalClassification => {
   if (
     approval === null ||
     approval.actionKind !== "MILESTONE_EVALUATION" ||
     approval.authorizedActorType !== "EVALUATOR" ||
     approval.aggregateId !== input.milestone.id
-  ) return false;
+  ) return "PENDING";
   const expectedIntentId = input.expectedApprovalIntentId;
   const expectedIntentHash = input.expectedApprovalExactIntentHash;
   const expectedEvaluatorId = input.expectedAuthorizedEvaluatorId;
-  if (expectedIntentId === undefined || expectedIntentHash === undefined || expectedEvaluatorId === undefined) return false;
+  if (expectedIntentId === undefined || expectedIntentHash === undefined || expectedEvaluatorId === undefined) return "PENDING";
   if (
     approval.intentId !== expectedIntentId ||
     approval.exactIntentHash !== expectedIntentHash ||
     approval.authorizedActorId !== expectedEvaluatorId ||
-    approval.decision !== "APPROVED" ||
     approval.approver === null ||
     approval.decidedAt === null ||
     approval.approver.actorType !== approval.authorizedActorType ||
     approval.approver.actorId !== approval.authorizedActorId
-  ) return false;
+  ) return "PENDING";
   const evaluatedAt = finiteTime(input.evaluatedAt);
   const expiresAt = finiteTime(approval.expiresAt);
   const decidedAt = finiteTime(approval.decidedAt);
-  if (evaluatedAt === null || expiresAt === null || decidedAt === null) return false;
-  return decidedAt <= evaluatedAt && evaluatedAt < expiresAt;
+  if (evaluatedAt === null || expiresAt === null || decidedAt === null || decidedAt > evaluatedAt || evaluatedAt >= expiresAt) return "PENDING";
+  if (approval.decision === "REJECTED") return "REJECTED";
+  if (approval.decision === "APPROVED") return "CONFIRMED";
+  return "PENDING";
+};
+const isExactCurrentMilestoneApproval = (
+  approval: ApprovalRecord | null,
+  input: Pick<MilestoneEvaluationInput, "milestone" | "evaluatedAt" | "expectedApprovalIntentId" | "expectedApprovalExactIntentHash" | "expectedAuthorizedEvaluatorId">,
+): boolean => {
+  return classifyMilestoneApproval(approval, input) === "CONFIRMED";
 };
 const recommendedAction = (status: MilestoneEvaluationStatus, reasonCodes: readonly MilestoneReasonCode[], humanApprovalRequired: boolean): MilestoneNextAction => {
   if (status === "INCOMPLETE") return "PROVIDE_EVIDENCE";
