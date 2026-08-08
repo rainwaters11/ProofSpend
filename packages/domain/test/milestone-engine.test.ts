@@ -557,6 +557,25 @@ describe("milestone engine", () => {
     }))).toThrow(/evidence submitted after the evaluation timestamp/i);
   });
 
+  it("ignores future-dated evidence from a foreign project", () => {
+    const baseline = evaluateMilestone(approvalInput({ approvalRecord: null }));
+    const foreignFutureEvidence = EvidenceItemSchema.parse({
+      id: "evidence:foreign:future",
+      projectId: "project:other",
+      kind: "RECEIPT",
+      sourceHash: `sha256:${"f".repeat(64)}`,
+      storageRef: "private://foreign/future",
+      visibility: "FOUNDER_PRIVATE",
+      submittedAt: "2026-01-20T00:00:01.000Z",
+    });
+    const result = evaluateMilestone(approvalInput({
+      evidenceItems: [...baseEvidenceItems(), foreignFutureEvidence],
+      approvalRecord: null,
+    }));
+
+    expect(result).toEqual(baseline);
+  });
+
   it("requires authorized evaluator/founder identities for accepted HUMAN_DECISION provenance", () => {
     const unauthorizedDeliverableAndReceipt = approvalInput({
       evidenceMatches: baseEvidenceMatches().map((match) => (
