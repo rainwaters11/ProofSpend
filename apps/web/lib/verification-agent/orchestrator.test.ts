@@ -76,17 +76,16 @@ describe("runVerificationAgent", () => {
   });
 
   it("rejects attempted tool overreach or direct submission intent from model", async () => {
-    const overreachProvider: AgentModelProvider = {
+    const overreachProvider = {
       async analyzeMissingReceipt() {
         return {
           missingGapId: "proof-gap:milestone:launch-ready:missing-receipt",
           question: "Please add the missing receipt required for this milestone.",
           summary: "Attempting forbidden action",
-          // @ts-expect-error: explicit invalid action to verify strict boundary
           requestedAction: "SUBMIT_TRANSACTION",
         };
       },
-    };
+    } as unknown as AgentModelProvider;
 
     await expect(
       runVerificationAgent({
