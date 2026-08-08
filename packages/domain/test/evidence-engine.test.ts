@@ -240,6 +240,33 @@ describe("bounded Evidence Engine", () => {
     })).toThrow(/Proof Recovery gap.*conflicting recovery event/i);
   });
 
+  it("rejects an idempotent retry whose accepted match identity changes", () => {
+    const scenario = createPawPovAiEvidenceScenario();
+    const first = evaluateEvidenceEngine(scenario.initialInput);
+    const recovered = applyMissingReceiptRecovery({
+      input: scenario.initialInput,
+      gap: first.proofGaps[0],
+      receipt: scenario.recoveryReceipt,
+      acceptedMatch: scenario.recoveryMatch,
+      actor: scenario.authorizedFounder,
+      resolvedAt,
+    });
+    const reboundMatch = EvidenceMatchSchema.parse({
+      ...scenario.recoveryMatch,
+      id: "match:pawpovai:receipt:2:rebound",
+    });
+
+    expect(() => applyMissingReceiptRecovery({
+      input: scenario.initialInput,
+      gap: first.proofGaps[0],
+      receipt: scenario.recoveryReceipt,
+      acceptedMatch: reboundMatch,
+      actor: scenario.authorizedFounder,
+      resolvedAt,
+      existingAuditEvents: recovered.auditEvents,
+    })).toThrow(/conflicting recovery event/i);
+  });
+
   it("allows an exact recovery retry after later unrelated append-only audit history", () => {
     const scenario = createPawPovAiEvidenceScenario();
     const first = evaluateEvidenceEngine(scenario.initialInput);
