@@ -123,7 +123,7 @@ function buildRequirementObservations(input: EvidenceEngineInput): Record<string
     const humanMatches = humanMatchesForRequirement(input, requirement.id);
     const aiMatches = aiMatchesForRequirement(input, requirement.id);
     const humanReferences = humanMatches.map((match) => match.evidenceId).sort(compareByCodePoint);
-    const aiOrHumanSuggestionPresent = humanMatches.length > 0 || aiMatches.length > 0;
+    const suggestionPresent = humanMatches.length > 0 || aiMatches.length > 0;
 
     switch (requirement.kind) {
       case "DELIVERABLE":
@@ -133,13 +133,13 @@ function buildRequirementObservations(input: EvidenceEngineInput): Record<string
         observations[requirement.id] = { evidenceReferences: humanReferences, receiptCount: humanReferences.length };
         break;
       case "FOUNDER_CONFIRMATION":
-        observations[requirement.id] = { evidenceReferences: humanReferences, founderConfirmationPresent: aiOrHumanSuggestionPresent || undefined };
+        observations[requirement.id] = { evidenceReferences: humanReferences, founderConfirmationPresent: suggestionPresent || undefined };
         break;
       case "TRANSACTION_MATCH":
-        observations[requirement.id] = { evidenceReferences: humanReferences, transactionMatched: aiOrHumanSuggestionPresent || undefined };
+        observations[requirement.id] = { evidenceReferences: humanReferences, transactionMatched: suggestionPresent || undefined };
         break;
       case "BUSINESS_PURPOSE":
-        observations[requirement.id] = { evidenceReferences: humanReferences, businessPurposePresent: aiOrHumanSuggestionPresent || undefined };
+        observations[requirement.id] = { evidenceReferences: humanReferences, businessPurposePresent: suggestionPresent || undefined };
         break;
       case "SPEND_LIMIT":
       case "DUE_DATE":
@@ -279,18 +279,21 @@ export const MilestoneEvaluationPacketSchema = z.object({
 export type MilestoneEvaluationPacket = z.infer<typeof MilestoneEvaluationPacketSchema>;
 
 export async function buildMilestoneEvaluationPacket(args: {
+  milestoneId: string;
   evaluation: MilestoneEvaluationResult;
   evidenceItems: readonly EvidenceItem[];
   verifiedSpend: SettlementMoneyAmount;
   proofGaps: readonly ProofGap[];
   generatedAt: string;
 }): Promise<MilestoneEvaluationPacket> {
+  const milestoneId = IdReferenceSchema.parse(args.milestoneId);
   const evaluation = MilestoneEvaluationResultSchema.parse(args.evaluation);
   const evidenceItems = args.evidenceItems.map((item) => EvidenceItemSchema.parse(item));
   const verifiedSpend = SettlementMoneyAmountSchema.parse(args.verifiedSpend);
   const proofGaps = args.proofGaps.map((gap) => ProofGapSchema.parse(gap));
   const generatedAt = TimeSchema.parse(args.generatedAt);
 
+  if (proofGaps.some((gap) => gap.milestoneId !== milestoneId)) throw new Error("Evaluator packet proof gaps must belong to the exact milestone.");
   const evidenceIds = evidenceItems.map((item) => item.id).sort(compareByCodePoint);
   const evidenceHashes = evidenceItems.map((item) => item.sourceHash).sort(compareByCodePoint);
   if (new Set(evidenceIds).size !== evidenceIds.length) throw new Error("Evaluator packet evidence IDs must be unique.");
@@ -304,6 +307,7 @@ export async function buildMilestoneEvaluationPacket(args: {
 
   const deliverableSubject = JSON.stringify([
     1,
+    milestoneId,
     evaluation.policyVersion,
     evaluation.evaluationTimestamp,
     evidenceIds,
@@ -314,6 +318,7 @@ export async function buildMilestoneEvaluationPacket(args: {
   ]);
   const reasonSubject = JSON.stringify([
     1,
+    milestoneId,
     evaluation.policyVersion,
     evaluation.evaluationTimestamp,
     requirementOutcomes,
@@ -325,7 +330,7 @@ export async function buildMilestoneEvaluationPacket(args: {
 
   return MilestoneEvaluationPacketSchema.parse({
     packetVersion: 1,
-    milestoneId: evaluation.requirementEvaluations[0]?.requirementId === undefined ? "milestone:unknown" : args.proofGaps[0]?.milestoneId ?? "milestone:launch-ready",
+    milestoneId,
     policyVersion: evaluation.policyVersion,
     evaluationTimestamp: evaluation.evaluationTimestamp,
     evidenceIds,
