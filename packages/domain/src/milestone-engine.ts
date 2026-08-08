@@ -62,7 +62,6 @@ export type MilestoneNextAction = z.infer<typeof MilestoneNextActionSchema>;
 export const RequirementObservationSchema = z.object({
   evidenceReferences: z.array(ReasonReferenceSchema).optional(),
   hasConflictingEvidence: z.boolean().optional(),
-  pendingEvidenceReview: z.boolean().optional(),
   deliverableCount: z.number().int().min(0).optional(),
   receiptCount: z.number().int().min(0).optional(),
   transactionMatched: z.boolean().optional(),
@@ -120,6 +119,7 @@ type RequirementProvenance = {
   hasAcceptedHumanDecision: boolean;
   hasAiSuggestion: boolean;
   acceptedEvidenceByKind: Partial<Record<EvidenceItem["kind"], Set<string>>>;
+  aiSuggestedEvidenceByKind: Partial<Record<EvidenceItem["kind"], Set<string>>>;
 };
 type ProvenanceIndex = {
   byRequirementId: Map<string, RequirementProvenance>;
@@ -226,7 +226,12 @@ const createProvenanceIndex = (
   const ensureRequirement = (requirementId: string): RequirementProvenance => {
     const existing = byRequirementId.get(requirementId);
     if (existing !== undefined) return existing;
-    const created: RequirementProvenance = { hasAcceptedHumanDecision: false, hasAiSuggestion: false, acceptedEvidenceByKind: {} };
+    const created: RequirementProvenance = {
+      hasAcceptedHumanDecision: false,
+      hasAiSuggestion: false,
+      acceptedEvidenceByKind: {},
+      aiSuggestedEvidenceByKind: {},
+    };
     byRequirementId.set(requirementId, created);
     return created;
   };
@@ -237,6 +242,9 @@ const createProvenanceIndex = (
     const requirement = ensureRequirement(match.requirementId);
     if (match.source === "AI_SUGGESTION") {
       requirement.hasAiSuggestion = true;
+      const suggestedEvidence = requirement.aiSuggestedEvidenceByKind[evidence.kind] ?? new Set<string>();
+      suggestedEvidence.add(evidence.id);
+      requirement.aiSuggestedEvidenceByKind[evidence.kind] = suggestedEvidence;
       continue;
     }
     if (!isAllowedDecisionActor(match.acceptedBy, input.expectedAuthorizedFounderId, input.expectedAuthorizedEvaluatorId)) continue;
@@ -262,6 +270,16 @@ const hasAiOnlySuggestion = (
 ): boolean => {
   const entry = provenance.byRequirementId.get(requirementId);
   return entry?.hasAiSuggestion === true && entry.hasAcceptedHumanDecision !== true;
+};
+const hasPendingAiEvidenceByKind = (
+  provenance: ProvenanceIndex,
+  requirementId: string,
+  evidenceKind: EvidenceItem["kind"],
+): boolean => {
+  const entry = provenance.byRequirementId.get(requirementId);
+  const acceptedEvidence = entry?.acceptedEvidenceByKind[evidenceKind] ?? new Set<string>();
+  const suggestedEvidence = entry?.aiSuggestedEvidenceByKind[evidenceKind] ?? new Set<string>();
+  return [...suggestedEvidence].some((evidenceId) => !acceptedEvidence.has(evidenceId));
 };
 const acceptedEvidenceByKind = (
   provenance: ProvenanceIndex,
@@ -353,7 +371,7 @@ const evaluateByKind = (
     case "EXPENSE_RECORDS": {
       const receiptCount = countValidatedEvidenceReferences(requirement, observation, observation.receiptCount, "receiptCount", "RECEIPT", provenance);
       if (receiptCount >= requirement.requiredCount) return { outcome: "PASS", reasonCode: "RECEIPT_COUNT_MET" };
-      return observation.pendingEvidenceReview === true
+      return hasPendingAiEvidenceByKind(provenance, requirement.id, "RECEIPT")
         ? { outcome: "REVIEW", reasonCode: "EVIDENCE_MISSING" }
         : { outcome: "FAIL", reasonCode: "RECEIPT_COUNT_SHORT" };
     }
@@ -453,7 +471,6 @@ const serializeCanonicalMilestoneEvaluationApprovalSubject = (input: CanonicalMi
         requirementId,
         refs,
         parsed.hasConflictingEvidence ?? null,
-        parsed.pendingEvidenceReview ?? null,
         parsed.deliverableCount ?? null,
         parsed.receiptCount ?? null,
         parsed.transactionMatched ?? null,
