@@ -149,9 +149,10 @@ describe("CircleWalletProvider", () => {
   it("submits a transfer and returns confirmed transaction metadata", async () => {
     const usdcTokenAddress = getCircleEnvironment().usdcTokenAddress;
     const arcscanBaseUrl = getCircleEnvironment().arcscanBaseUrl;
+    const transactionHash = `0x${"1a".repeat(32)}`;
     mockedGetStatus.createTransaction.mockResolvedValue({ data: { id: "tx-1", state: "SENT" } });
     mockedGetStatus.getTransaction.mockResolvedValue({
-      data: { transaction: { state: "COMPLETE", txHash: "0xabc123" } },
+      data: { transaction: { state: "COMPLETE", txHash: transactionHash } },
     });
 
     const result = await makeProvider().executePayment(validPreparation);
@@ -170,8 +171,8 @@ describe("CircleWalletProvider", () => {
       mode: "circle",
       status: "confirmed",
       transactionId: "tx-1",
-      transactionHash: "0xabc123",
-      explorerUrl: `${arcscanBaseUrl}/tx/0xabc123`,
+      transactionHash,
+      explorerUrl: `${arcscanBaseUrl}/tx/${transactionHash}`,
       terminalState: "COMPLETE",
     });
   });
@@ -209,6 +210,94 @@ describe("CircleWalletProvider", () => {
     expect(error).toBeInstanceOf(WalletProviderError);
     expect((error as WalletProviderError).code).toBe("PROVIDER_UNAVAILABLE");
     expect((error as WalletProviderError).message).toBe("Wallet provider request failed.");
+  });
+
+  it("does not deduplicate submissions and reuses the caller-provided idempotency key", async () => {
+    mockedGetStatus.createTransaction.mockResolvedValue({ data: { id: "tx-1", state: "COMPLETE" } });
+    const provider = makeProvider();
+
+    await provider.executePayment(validPreparation);
+    await provider.executePayment(validPreparation);
+
+    expect(mockedGetStatus.createTransaction).toHaveBeenCalledTimes(2);
+    expect(mockedGetStatus.createTransaction).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ idempotencyKey: validPreparation.idempotencyKey }),
+    );
+    expect(mockedGetStatus.createTransaction).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ idempotencyKey: validPreparation.idempotencyKey }),
+    );
+  });
+
+  it("surfaces an upstream idempotency conflict without leaking details", async () => {
+    mockedGetStatus.createTransaction.mockRejectedValue(
+      new Error("Idempotency key already used for a different request"),
+    );
+
+    const error = await makeProvider().executePayment(validPreparation).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(WalletProviderError);
+    expect((error as WalletProviderError).code).toBe("PROVIDER_UNAVAILABLE");
+    expect((error as WalletProviderError).message).toBe("Wallet provider request failed.");
+    expect((error as WalletProviderError).message).not.toContain("idempotency");
+  });
+
+  it("throws a normalized error when Circle omits the transaction id", async () => {
+    mockedGetStatus.createTransaction.mockResolvedValue({ data: {} });
+
+    const error = await makeProvider().executePayment(validPreparation).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(WalletProviderError);
+    expect((error as WalletProviderError).code).toBe("INVALID_REQUEST");
+    expect((error as WalletProviderError).message).toBe("Circle did not return a transaction id.");
+  });
+
+  it("keeps polling across empty transaction responses and times out", async () => {
+    mockedGetStatus.createTransaction.mockResolvedValue({ data: { id: "tx-1", state: "SENT" } });
+    mockedGetStatus.getTransaction.mockResolvedValue({});
+
+    const error = await makeProvider().executePayment(validPreparation).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(WalletProviderError);
+    expect((error as WalletProviderError).code).toBe("PROVIDER_UNAVAILABLE");
+    expect(mockedGetStatus.getTransaction).toHaveBeenCalledTimes(3);
+  });
+
+  it("ignores a transaction record without a state and times out", async () => {
+    mockedGetStatus.createTransaction.mockResolvedValue({ data: { id: "tx-1", state: "SENT" } });
+    mockedGetStatus.getTransaction.mockResolvedValue({ data: { transaction: {} } });
+
+    const error = await makeProvider().executePayment(validPreparation).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(WalletProviderError);
+    expect((error as WalletProviderError).code).toBe("PROVIDER_UNAVAILABLE");
+  });
+
+  it("does not fabricate an explorer link for a malformed transaction hash", async () => {
+    mockedGetStatus.createTransaction.mockResolvedValue({ data: { id: "tx-1", state: "SENT" } });
+    mockedGetStatus.getTransaction.mockResolvedValue({
+      data: { transaction: { state: "COMPLETE", txHash: "not-a-real-hash" } },
+    });
+
+    const result = await makeProvider().executePayment(validPreparation);
+
+    expect(result.status).toBe("confirmed");
+    expect(result.transactionId).toBe("tx-1");
+    expect(result.transactionHash).toBeNull();
+    expect(result.explorerUrl).toBeNull();
+    expect(result.terminalState).toBe("COMPLETE");
+  });
+
+  it("reports a confirmed transaction with no hash without an explorer link", async () => {
+    mockedGetStatus.createTransaction.mockResolvedValue({ data: { id: "tx-1", state: "SENT" } });
+    mockedGetStatus.getTransaction.mockResolvedValue({
+      data: { transaction: { state: "COMPLETE" } },
+    });
+
+    const result = await makeProvider().executePayment(validPreparation);
+
+    expect(result.status).toBe("confirmed");
+    expect(result.transactionId).toBe("tx-1");
+    expect(result.transactionHash).toBeNull();
+    expect(result.explorerUrl).toBeNull();
+    expect(result.terminalState).toBe("COMPLETE");
   });
 });
 

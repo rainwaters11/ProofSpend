@@ -22,7 +22,12 @@ const TERMINAL_STATES: ReadonlySet<string> = new Set([
 ]);
 
 const EVM_ADDRESS_PATTERN = /^0x[a-fA-F0-9]{40}$/;
+const EVM_HASH_PATTERN = /^0x[a-fA-F0-9]{64}$/;
 const POSITIVE_INTEGER_PATTERN = /^[1-9]\d*$/;
+
+function isValidEvmHash(value: string | undefined): value is string {
+  return typeof value === "string" && EVM_HASH_PATTERN.test(value);
+}
 
 export interface CircleWalletProviderConfig {
   apiKey: string;
@@ -166,7 +171,9 @@ export class CircleWalletProvider implements WalletProvider {
         const transaction = (await this.client.getTransaction({ id: transactionId })).data?.transaction;
         if (transaction) {
           state = transaction.state ?? state;
-          txHash = transaction.txHash ?? txHash;
+          if (isValidEvmHash(transaction.txHash)) {
+            txHash = transaction.txHash;
+          }
         }
         polls++;
       }
@@ -184,8 +191,8 @@ export class CircleWalletProvider implements WalletProvider {
         mode: "circle",
         status: confirmed ? "confirmed" : "failed",
         transactionId,
-        transactionHash: txHash ?? null,
-        explorerUrl: txHash ? `${this.arcscanBaseUrl}/tx/${txHash}` : null,
+        transactionHash: isValidEvmHash(txHash) ? txHash : null,
+        explorerUrl: isValidEvmHash(txHash) ? `${this.arcscanBaseUrl}/tx/${txHash}` : null,
         terminalState: state,
       };
     } catch (error) {
