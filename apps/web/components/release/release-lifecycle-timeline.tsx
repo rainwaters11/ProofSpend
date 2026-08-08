@@ -28,6 +28,7 @@ const STEP_LABEL: Record<ReleaseLifecycleState, string> = {
 
 interface ReleaseLifecycleTimelineProps {
   current: ReleaseLifecycleState;
+  failedAt?: "PREPARED" | "SUBMITTED";
 }
 
 /**
@@ -38,15 +39,18 @@ interface ReleaseLifecycleTimelineProps {
  *
  * Rejected and failed are kept visually and semantically separate: a
  * rejection is a human decision made at the approval gate (the release
- * never had a prepared/submitted transaction), while a failure means a
- * transaction was attempted and did not confirm. Conflating the two would
- * misrepresent how far the release actually got.
+ * never had a prepared/submitted transaction), while a failure means
+ * preparation or submission failed before confirmation. Conflating the two
+ * would misrepresent how far the release actually got.
  */
-export function ReleaseLifecycleTimeline({ current }: ReleaseLifecycleTimelineProps) {
+export function ReleaseLifecycleTimeline({
+  current,
+  failedAt = "PREPARED",
+}: ReleaseLifecycleTimelineProps) {
   const isRejected = current === "REJECTED";
   const isFailed = current === "FAILED";
   const isTerminalFailure = isRejected || isFailed;
-  const anchorStep = isRejected ? "APPROVAL_PENDING" : isFailed ? "APPROVED" : current;
+  const anchorStep = isRejected ? "APPROVAL_PENDING" : isFailed ? failedAt : current;
   const currentIndex = HAPPY_PATH.indexOf(anchorStep);
   const FailureIcon = isRejected ? ShieldX : AlertOctagon;
 
