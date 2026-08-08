@@ -743,10 +743,12 @@ describe("protocol-safe mocks and privacy", () => {
   });
   it("separates AI evidence suggestions from authorized human decisions", async () => {
     const base = { id: "match:1", evidenceId: "evidence:1", requirementId: "requirement:1", confidenceBasisPoints: 9000, explanation: "Matched by evidence content." };
+    const acceptedEvidenceHash = `sha256:${"a".repeat(64)}`;
     expect(EvidenceMatchSchema.parse({ ...base, source: "AI_SUGGESTION", acceptedBy: null })).toBeDefined();
     for (const actorType of ["FOUNDER", "EVALUATOR", "AI"] as const) expect(() => EvidenceMatchSchema.parse({ ...base, source: "AI_SUGGESTION", acceptedBy: { actorId: "actor:1", actorType } })).toThrow();
-    for (const actorType of ["FOUNDER", "EVALUATOR"] as const) expect(EvidenceMatchSchema.parse({ ...base, source: "HUMAN_DECISION", acceptedBy: { actorId: "actor:1", actorType } })).toBeDefined();
-    for (const acceptedBy of [null, { actorId: "actor:ai", actorType: "AI" }, { actorId: "actor:system", actorType: "SYSTEM" }, { actorId: "actor:provider", actorType: "PROVIDER" }]) expect(() => EvidenceMatchSchema.parse({ ...base, source: "HUMAN_DECISION", acceptedBy })).toThrow();
+    for (const actorType of ["FOUNDER", "EVALUATOR"] as const) expect(EvidenceMatchSchema.parse({ ...base, source: "HUMAN_DECISION", acceptedEvidenceHash, acceptedBy: { actorId: "actor:1", actorType } })).toBeDefined();
+    expect(() => EvidenceMatchSchema.parse({ ...base, source: "HUMAN_DECISION", acceptedBy: { actorId: "actor:1", actorType: "EVALUATOR" } })).toThrow();
+    for (const acceptedBy of [null, { actorId: "actor:ai", actorType: "AI" }, { actorId: "actor:system", actorType: "SYSTEM" }, { actorId: "actor:provider", actorType: "PROVIDER" }]) expect(() => EvidenceMatchSchema.parse({ ...base, source: "HUMAN_DECISION", acceptedEvidenceHash, acceptedBy })).toThrow();
   });
   it("keeps evidence private and excludes raw content and notes", async () => {
     const evidence = EvidenceItemSchema.parse({ id: "e1", projectId: "p1", kind: "RECEIPT", sourceHash: `sha256:${"a".repeat(64)}`, storageRef: "private://e1", visibility: "FOUNDER_PRIVATE", submittedAt: "2026-01-01T00:00:00.000Z", rawContent: "secret", privateNotes: "secret" });

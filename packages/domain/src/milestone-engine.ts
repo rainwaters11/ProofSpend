@@ -119,6 +119,7 @@ type RequirementProvenance = {
   hasAcceptedHumanDecision: boolean;
   hasAiSuggestion: boolean;
   acceptedEvidenceByKind: Partial<Record<EvidenceItem["kind"], Set<string>>>;
+  aiSuggestedEvidenceByKind: Partial<Record<EvidenceItem["kind"], Set<string>>>;
 };
 type ProvenanceIndex = {
   byRequirementId: Map<string, RequirementProvenance>;
@@ -207,7 +208,8 @@ const isAllowedDecisionActor = (
 const createProvenanceIndex = (
   input: Pick<
     MilestoneEvaluationInput,
-    "milestone" | "requirements" | "evidenceItems" | "evidenceMatches" | "expectedAuthorizedFounderId" | "expectedAuthorizedEvaluatorId"
+    "milestone" | "requirements" | "evidenceItems" | "evidenceMatches" | "evaluatedAt" |
+    "expectedAuthorizedFounderId" | "expectedAuthorizedEvaluatorId"
   >,
 ): ProvenanceIndex => {
   const requirementIds = new Set(input.requirements.map((requirement) => requirement.id));
@@ -215,6 +217,9 @@ const createProvenanceIndex = (
   const evidenceIdsBySourceHash = new Map<string, Set<string>>();
   for (const evidence of input.evidenceItems ?? []) {
     if (evidence.projectId !== input.milestone.projectId) continue;
+    if (Date.parse(evidence.submittedAt) > Date.parse(input.evaluatedAt)) {
+      throw new Error("Milestone Engine rejects evidence submitted after the evaluation timestamp.");
+    }
     if (evidenceById.has(evidence.id)) throw new Error("Evidence item IDs must be unique within a milestone evaluation.");
     evidenceById.set(evidence.id, evidence);
     const ids = evidenceIdsBySourceHash.get(evidence.sourceHash) ?? new Set<string>();
@@ -225,7 +230,12 @@ const createProvenanceIndex = (
   const ensureRequirement = (requirementId: string): RequirementProvenance => {
     const existing = byRequirementId.get(requirementId);
     if (existing !== undefined) return existing;
-    const created: RequirementProvenance = { hasAcceptedHumanDecision: false, hasAiSuggestion: false, acceptedEvidenceByKind: {} };
+    const created: RequirementProvenance = {
+      hasAcceptedHumanDecision: false,
+      hasAiSuggestion: false,
+      acceptedEvidenceByKind: {},
+      aiSuggestedEvidenceByKind: {},
+    };
     byRequirementId.set(requirementId, created);
     return created;
   };
@@ -236,8 +246,12 @@ const createProvenanceIndex = (
     const requirement = ensureRequirement(match.requirementId);
     if (match.source === "AI_SUGGESTION") {
       requirement.hasAiSuggestion = true;
+      const suggestedEvidence = requirement.aiSuggestedEvidenceByKind[evidence.kind] ?? new Set<string>();
+      suggestedEvidence.add(evidence.id);
+      requirement.aiSuggestedEvidenceByKind[evidence.kind] = suggestedEvidence;
       continue;
     }
+    if (match.acceptedEvidenceHash !== evidence.sourceHash) continue;
     if (!isAllowedDecisionActor(match.acceptedBy, input.expectedAuthorizedFounderId, input.expectedAuthorizedEvaluatorId)) continue;
     requirement.hasAcceptedHumanDecision = true;
     const acceptedEvidence = requirement.acceptedEvidenceByKind[evidence.kind] ?? new Set<string>();
@@ -261,6 +275,16 @@ const hasAiOnlySuggestion = (
 ): boolean => {
   const entry = provenance.byRequirementId.get(requirementId);
   return entry?.hasAiSuggestion === true && entry.hasAcceptedHumanDecision !== true;
+};
+const hasPendingAiEvidenceByKind = (
+  provenance: ProvenanceIndex,
+  requirementId: string,
+  evidenceKind: EvidenceItem["kind"],
+): boolean => {
+  const entry = provenance.byRequirementId.get(requirementId);
+  const acceptedEvidence = entry?.acceptedEvidenceByKind[evidenceKind] ?? new Set<string>();
+  const suggestedEvidence = entry?.aiSuggestedEvidenceByKind[evidenceKind] ?? new Set<string>();
+  return [...suggestedEvidence].some((evidenceId) => !acceptedEvidence.has(evidenceId));
 };
 const acceptedEvidenceByKind = (
   provenance: ProvenanceIndex,
@@ -351,7 +375,10 @@ const evaluateByKind = (
     }
     case "EXPENSE_RECORDS": {
       const receiptCount = countValidatedEvidenceReferences(requirement, observation, observation.receiptCount, "receiptCount", "RECEIPT", provenance);
-      return receiptCount >= requirement.requiredCount ? { outcome: "PASS", reasonCode: "RECEIPT_COUNT_MET" } : { outcome: "FAIL", reasonCode: "RECEIPT_COUNT_SHORT" };
+      if (receiptCount >= requirement.requiredCount) return { outcome: "PASS", reasonCode: "RECEIPT_COUNT_MET" };
+      return hasPendingAiEvidenceByKind(provenance, requirement.id, "RECEIPT")
+        ? { outcome: "REVIEW", reasonCode: "EVIDENCE_MISSING" }
+        : { outcome: "FAIL", reasonCode: "RECEIPT_COUNT_SHORT" };
     }
     case "SPEND_LIMIT": {
       if (input.verifiedSpend === undefined) return { outcome: "FAIL", reasonCode: "EVIDENCE_MISSING" };
@@ -466,7 +493,7 @@ const serializeCanonicalMilestoneEvaluationApprovalSubject = (input: CanonicalMi
       compareByCodePoint(left.requirementId, right.requirementId) ||
       compareByCodePoint(left.evidenceId, right.evidenceId) ||
       compareByCodePoint(left.id, right.id))
-    .map((match) => [match.id, match.evidenceId, match.requirementId, match.source, match.acceptedBy.actorType, match.acceptedBy.actorId]);
+    .map((match) => [match.id, match.evidenceId, match.acceptedEvidenceHash, match.requirementId, match.source, match.acceptedBy.actorType, match.acceptedBy.actorId]);
   return JSON.stringify([
     1,
     "MILESTONE_EVALUATION",
