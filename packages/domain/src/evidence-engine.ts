@@ -276,15 +276,30 @@ export function applyMissingReceiptRecovery(args: {
       resolution: "ADDITIONAL_RECEIPT_ACCEPTED",
     },
   });
+  const existingRecoveryEvent = existingAuditEvents.find((event) =>
+    event.id === auditEvent.id ||
+    (auditEvent.idempotencyKey !== null && event.idempotencyKey === auditEvent.idempotencyKey)
+  );
+  if (existingRecoveryEvent !== undefined && JSON.stringify(existingRecoveryEvent) !== JSON.stringify(auditEvent)) {
+    throw new Error("Proof Recovery idempotency key or audit event ID is already bound to a conflicting recovery event.");
+  }
+  const auditEvents = existingRecoveryEvent === undefined ? [...existingAuditEvents, auditEvent] : existingAuditEvents;
 
   return ProofRecoveryResultSchema.parse({
     input: recoveredInput,
     evaluation: recovered.evaluation,
     originalGap: gap,
     resolvedGap: { ...gap, resolvedAt },
-    auditEvents: [...existingAuditEvents, auditEvent],
+    auditEvents,
   });
 }
+
+export const AcceptedEvidenceBindingSchema = z.object({
+  evidenceId: IdReferenceSchema,
+  evidenceHash: HashReferenceSchema,
+  requirementId: IdReferenceSchema,
+}).strict();
+export type AcceptedEvidenceBinding = z.infer<typeof AcceptedEvidenceBindingSchema>;
 
 export const MilestoneEvaluationPacketSchema = z.object({
   packetVersion: z.literal(1),
@@ -293,6 +308,7 @@ export const MilestoneEvaluationPacketSchema = z.object({
   evaluationTimestamp: TimeSchema,
   evidenceIds: z.array(IdReferenceSchema),
   evidenceHashes: z.array(HashReferenceSchema),
+  evidenceBindings: z.array(AcceptedEvidenceBindingSchema),
   requirementOutcomes: z.array(z.object({
     requirementId: IdReferenceSchema,
     outcome: RequirementOutcomeSchema,
@@ -323,6 +339,9 @@ export async function buildMilestoneEvaluationPacket(args: {
   if (JSON.stringify(recomputed.evaluation) !== JSON.stringify(evaluation)) {
     throw new Error("Evaluator packet evaluation must match the exact current Evidence Engine input.");
   }
+  if (Date.parse(generatedAt) < Date.parse(evaluation.evaluationTimestamp)) {
+    throw new Error("Evaluator packet generation time cannot precede the evaluation timestamp.");
+  }
   if (proofGaps.some((gap) => gap.milestoneId !== input.milestone.id || !input.milestone.requirementIds.includes(gap.requirementId))) {
     throw new Error("Evaluator packet proof gaps must belong to the exact milestone and requirement set.");
   }
@@ -333,11 +352,30 @@ export async function buildMilestoneEvaluationPacket(args: {
   }
   if (evaluation.erc8183ActionPermitted) throw new Error("Issue #5 evaluator packets cannot authorize an ERC-8183 write.");
 
-  const acceptedEvidenceIdSet = new Set(
-    input.evidenceMatches
-      .filter((match) => isAuthorizedHumanDecision(input, match))
-      .map((match) => match.evidenceId),
-  );
+  const evidenceById = new Map(input.evidenceItems.map((item) => [item.id, item] as const));
+  const evidenceBindingKeys = new Set<string>();
+  const evidenceBindings = input.evidenceMatches
+    .filter((match) => isAuthorizedHumanDecision(input, match))
+    .map((match) => {
+      const evidence = evidenceById.get(match.evidenceId);
+      if (evidence === undefined) throw new Error("Accepted evidence binding references missing evidence.");
+      return AcceptedEvidenceBindingSchema.parse({
+        evidenceId: evidence.id,
+        evidenceHash: evidence.sourceHash,
+        requirementId: match.requirementId,
+      });
+    })
+    .filter((binding) => {
+      const key = JSON.stringify([binding.evidenceId, binding.evidenceHash, binding.requirementId]);
+      if (evidenceBindingKeys.has(key)) return false;
+      evidenceBindingKeys.add(key);
+      return true;
+    })
+    .sort((left, right) => compareByCodePoint(
+      JSON.stringify([left.evidenceId, left.requirementId, left.evidenceHash]),
+      JSON.stringify([right.evidenceId, right.requirementId, right.evidenceHash]),
+    ));
+  const acceptedEvidenceIdSet = new Set(evidenceBindings.map((binding) => binding.evidenceId));
   const acceptedEvidence = input.evidenceItems.filter((item) => acceptedEvidenceIdSet.has(item.id));
   const evidenceIds = acceptedEvidence.map((item) => item.id).sort(compareByCodePoint);
   const evidenceHashes = acceptedEvidence.map((item) => item.sourceHash).sort(compareByCodePoint);
@@ -350,8 +388,7 @@ export async function buildMilestoneEvaluationPacket(args: {
     input.milestone.id,
     evaluation.policyVersion,
     evaluation.evaluationTimestamp,
-    evidenceIds,
-    evidenceHashes,
+    evidenceBindings,
     requirementOutcomes,
     input.verifiedSpend.asset,
     input.verifiedSpend.atomicUnits,
@@ -375,6 +412,7 @@ export async function buildMilestoneEvaluationPacket(args: {
     evaluationTimestamp: evaluation.evaluationTimestamp,
     evidenceIds,
     evidenceHashes,
+    evidenceBindings,
     requirementOutcomes,
     verifiedSpend: input.verifiedSpend,
     unresolvedProofGapIds: suppliedUnresolvedGapIds,
