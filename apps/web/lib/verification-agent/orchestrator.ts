@@ -236,6 +236,9 @@ export function resumeVerificationAgentAfterFounderCorrection(args: {
     actor: scenario.authorizedFounder,
     resolvedAt: now,
   });
+  if (recovered.evaluation.status !== "ELIGIBLE") {
+    throw new Error("AGENT_CORRECTION_NOT_ELIGIBLE");
+  }
 
   appendEvent(trace, {
     id: `${run.runId}:correction`,

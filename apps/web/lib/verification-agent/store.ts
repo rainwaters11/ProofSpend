@@ -65,8 +65,11 @@ export function persistApprovedHandoff(args: {
     return false;
   }
   const handoff = parseHandoffAttempt(args);
-  stored.handoff = handoff;
-  stored.handoffAttempts.push(handoff);
+  runs.set(args.runId, {
+    ...stored,
+    handoff,
+    handoffAttempts: [...stored.handoffAttempts, handoff],
+  });
   consumedProposalKeys.add(stored.run.proposal.idempotencyKey);
   return true;
 }
@@ -80,7 +83,10 @@ export function recordRejectedHandoff(args: {
   if (stored === undefined) {
     throw new Error("VERIFICATION_RUN_NOT_FOUND");
   }
-  stored.handoffAttempts.push(parseHandoffAttempt(args));
+  runs.set(args.runId, {
+    ...stored,
+    handoffAttempts: [...stored.handoffAttempts, parseHandoffAttempt(args)],
+  });
 }
 
 function parseHandoffAttempt(args: {
