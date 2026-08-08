@@ -67,6 +67,8 @@ describe("bounded Evidence Engine", () => {
 
     expect(recovered.originalGap.resolvedAt).toBeNull();
     expect(recovered.resolvedGap.resolvedAt).toBe(resolvedAt);
+    expect(recovered.input.evaluatedAt).toBe(resolvedAt);
+    expect(recovered.evaluation.evaluationTimestamp).toBe(resolvedAt);
     expect(recovered.auditEvents).toHaveLength(2);
     expect(recovered.auditEvents[0]).toEqual(existingAudit);
     expect(recovered.auditEvents[1]).toMatchObject({
@@ -83,6 +85,20 @@ describe("bounded Evidence Engine", () => {
     expect(recovered.evaluation.humanApprovalRequired).toBe(true);
     expect(recovered.evaluation.recommendedNextAction).toBe("REQUEST_HUMAN_APPROVAL");
     expect(recovered.evaluation.erc8183ActionPermitted).toBe(false);
+  });
+
+  it("rejects recovery timestamps that predate the evaluated evidence state", () => {
+    const scenario = createPawPovAiEvidenceScenario();
+    const first = evaluateEvidenceEngine(scenario.initialInput);
+
+    expect(() => applyMissingReceiptRecovery({
+      input: scenario.initialInput,
+      gap: first.proofGaps[0],
+      receipt: scenario.recoveryReceipt,
+      acceptedMatch: scenario.recoveryMatch,
+      actor: scenario.authorizedFounder,
+      resolvedAt: "2026-01-19T23:59:59.000Z",
+    })).toThrow(/time must not precede/i);
   });
 
   it("keeps AI suggestions separate from accepted HUMAN_DECISION provenance", () => {
@@ -108,6 +124,26 @@ describe("bounded Evidence Engine", () => {
     expect(txResult?.reasonCodes).toEqual(["EVIDENCE_MISSING"]);
     expect(result.evaluation.status).toBe("NEEDS_REVIEW");
     expect(result.evaluation.erc8183ActionPermitted).toBe(false);
+  });
+
+  it("requires the exact configured founder for founder confirmation", () => {
+    const scenario = createPawPovAiEvidenceScenario();
+    const input = recoveredInput();
+    const confirmationMatch = input.evidenceMatches.find((match) => match.requirementId === "requirement:confirmation" && match.source === "HUMAN_DECISION");
+    expect(confirmationMatch).toBeDefined();
+    const evaluatorConfirmation = EvidenceMatchSchema.parse({
+      ...confirmationMatch!,
+      id: "match:pawpovai:confirmation:evaluator",
+      acceptedBy: scenario.authorizedEvaluator,
+    });
+    const result = evaluateEvidenceEngine({
+      ...input,
+      evidenceMatches: [...input.evidenceMatches.filter((match) => match.id !== confirmationMatch?.id), evaluatorConfirmation],
+    });
+    const confirmation = result.evaluation.requirementEvaluations.find((item) => item.requirementId === "requirement:confirmation");
+
+    expect(confirmation?.outcome).not.toBe("PASS");
+    expect(result.evaluation.status).not.toBe("ELIGIBLE");
   });
 
   it("fails closed on duplicate evidence IDs and duplicate canonical hashes", () => {
@@ -225,6 +261,51 @@ describe("bounded Evidence Engine", () => {
     expect(packetA.evidenceHashes).toEqual([...packetA.evidenceHashes].sort());
     expect(packetA.unresolvedProofGapIds).toEqual([]);
     expect(packetA.recommendedNextAction).toBe("REQUEST_HUMAN_APPROVAL");
+  });
+
+  it("excludes unmatched and AI-only evidence from evaluator packet commitments", async () => {
+    const scenario = createPawPovAiEvidenceScenario();
+    const first = evaluateEvidenceEngine(scenario.initialInput);
+    const baseline = await buildMilestoneEvaluationPacket({
+      input: scenario.initialInput,
+      evaluation: first.evaluation,
+      proofGaps: first.proofGaps,
+      generatedAt,
+    });
+    const unapproved = EvidenceItemSchema.parse({
+      id: "evidence:pawpovai:unapproved",
+      projectId: scenario.milestone.projectId,
+      kind: "STATEMENT",
+      sourceHash: `sha256:${"7".repeat(64)}`,
+      storageRef: "private://pawpovai/unapproved",
+      visibility: "FOUNDER_PRIVATE",
+      submittedAt: scenario.initialInput.evaluatedAt,
+    });
+    const aiOnly = EvidenceMatchSchema.parse({
+      id: "match:pawpovai:unapproved:ai",
+      evidenceId: unapproved.id,
+      requirementId: "requirement:business-purpose",
+      source: "AI_SUGGESTION",
+      confidenceBasisPoints: 9000,
+      explanation: "AI-only extra evidence suggestion.",
+      acceptedBy: null,
+    });
+    const augmentedInput: EvidenceEngineInput = {
+      ...scenario.initialInput,
+      evidenceItems: [...scenario.initialInput.evidenceItems, unapproved],
+      evidenceMatches: [...scenario.initialInput.evidenceMatches, aiOnly],
+    };
+    const augmentedEvaluation = evaluateEvidenceEngine(augmentedInput).evaluation;
+    const packet = await buildMilestoneEvaluationPacket({
+      input: augmentedInput,
+      evaluation: augmentedEvaluation,
+      proofGaps: first.proofGaps,
+      generatedAt,
+    });
+
+    expect(packet.evidenceIds).not.toContain(unapproved.id);
+    expect(packet.evidenceHashes).not.toContain(unapproved.sourceHash);
+    expect(packet.deliverableHashCandidate).toBe(baseline.deliverableHashCandidate);
   });
 
   it("binds packet hashes and fields to the exact evaluated evidence input", async () => {
