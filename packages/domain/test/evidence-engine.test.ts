@@ -206,6 +206,40 @@ describe("bounded Evidence Engine", () => {
     })).toThrow(/idempotency key|audit event ID/i);
   });
 
+  it("rejects a stale second recovery with a different receipt for the same proof gap", () => {
+    const scenario = createPawPovAiEvidenceScenario();
+    const first = evaluateEvidenceEngine(scenario.initialInput);
+    const recovered = applyMissingReceiptRecovery({
+      input: scenario.initialInput,
+      gap: first.proofGaps[0],
+      receipt: scenario.recoveryReceipt,
+      acceptedMatch: scenario.recoveryMatch,
+      actor: scenario.authorizedFounder,
+      resolvedAt,
+    });
+    const alternateReceipt = EvidenceItemSchema.parse({
+      ...scenario.recoveryReceipt,
+      id: "evidence:pawpovai:receipt:alternate",
+      sourceHash: `sha256:${"a".repeat(64)}`,
+      storageRef: "private://pawpovai/receipt/alternate",
+    });
+    const alternateMatch = EvidenceMatchSchema.parse({
+      ...scenario.recoveryMatch,
+      id: "match:pawpovai:receipt:alternate",
+      evidenceId: alternateReceipt.id,
+    });
+
+    expect(() => applyMissingReceiptRecovery({
+      input: scenario.initialInput,
+      gap: first.proofGaps[0],
+      receipt: alternateReceipt,
+      acceptedMatch: alternateMatch,
+      actor: scenario.authorizedFounder,
+      resolvedAt,
+      existingAuditEvents: recovered.auditEvents,
+    })).toThrow(/Proof Recovery gap.*conflicting recovery event/i);
+  });
+
   it("allows an exact recovery retry after later unrelated append-only audit history", () => {
     const scenario = createPawPovAiEvidenceScenario();
     const first = evaluateEvidenceEngine(scenario.initialInput);
