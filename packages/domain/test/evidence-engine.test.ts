@@ -41,6 +41,22 @@ describe("bounded Evidence Engine", () => {
     expect(first.evaluation.erc8183ActionPermitted).toBe(false);
   });
 
+  it("does not let replaced evidence content inherit an earlier human decision", () => {
+    const input = recoveredInput();
+    const replacedEvidence = input.evidenceItems.map((item) => item.id === "evidence:pawpovai:deliverable"
+      ? EvidenceItemSchema.parse({ ...item, sourceHash: `sha256:${"c".repeat(64)}` })
+      : item);
+
+    const result = evaluateEvidenceEngine({ ...input, evidenceItems: replacedEvidence });
+
+    expect(result.evaluation.status).toBe("INCOMPLETE");
+    expect(result.evaluation.requirementEvaluations.find((item) => item.requirementId === "requirement:identity")).toMatchObject({
+      outcome: "FAIL",
+      reasonCodes: ["DELIVERABLE_COUNT_SHORT"],
+    });
+    expect(result.evaluation.erc8183ActionPermitted).toBe(false);
+  });
+
   it("routes an uploaded AI-suggested receipt to human review instead of duplicate Proof Recovery", () => {
     const scenario = createPawPovAiEvidenceScenario();
     const aiSuggestedReceipt = EvidenceMatchSchema.parse({
@@ -173,6 +189,24 @@ describe("bounded Evidence Engine", () => {
     expect(recovered.evaluation.erc8183ActionPermitted).toBe(false);
   });
 
+  it("rejects recovery when the human decision approved different receipt content", () => {
+    const scenario = createPawPovAiEvidenceScenario();
+    const first = evaluateEvidenceEngine(scenario.initialInput);
+    const staleDecision = EvidenceMatchSchema.parse({
+      ...scenario.recoveryMatch,
+      acceptedEvidenceHash: `sha256:${"d".repeat(64)}`,
+    });
+
+    expect(() => applyMissingReceiptRecovery({
+      input: scenario.initialInput,
+      gap: first.proofGaps[0],
+      receipt: scenario.recoveryReceipt,
+      acceptedMatch: staleDecision,
+      actor: scenario.authorizedFounder,
+      resolvedAt,
+    })).toThrow(/exact accepted receipt content hash/i);
+  });
+
   it("deduplicates exact recovery retries and rejects conflicting idempotency reuse", () => {
     const scenario = createPawPovAiEvidenceScenario();
     const first = evaluateEvidenceEngine(scenario.initialInput);
@@ -233,6 +267,7 @@ describe("bounded Evidence Engine", () => {
       ...scenario.recoveryMatch,
       id: "match:pawpovai:receipt:alternate",
       evidenceId: alternateReceipt.id,
+      acceptedEvidenceHash: alternateReceipt.sourceHash,
     });
 
     expect(() => applyMissingReceiptRecovery({
@@ -613,6 +648,12 @@ describe("bounded Evidence Engine", () => {
         if (item.id === deliverable.id) return EvidenceItemSchema.parse({ ...item, sourceHash: transaction.sourceHash });
         if (item.id === transaction.id) return EvidenceItemSchema.parse({ ...item, sourceHash: deliverable.sourceHash });
         return item;
+      }),
+      evidenceMatches: scenario.initialInput.evidenceMatches.map((match) => {
+        if (match.source !== "HUMAN_DECISION") return match;
+        if (match.evidenceId === deliverable.id) return EvidenceMatchSchema.parse({ ...match, acceptedEvidenceHash: transaction.sourceHash });
+        if (match.evidenceId === transaction.id) return EvidenceMatchSchema.parse({ ...match, acceptedEvidenceHash: deliverable.sourceHash });
+        return match;
       }),
     };
     const swappedHashesResult = evaluateEvidenceEngine(swappedHashesInput);
