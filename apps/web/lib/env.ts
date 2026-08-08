@@ -34,7 +34,13 @@ export type ServerEnvironment = z.infer<typeof environmentSchema>;
 export function parseEnvironment(
   environment: Record<string, string | undefined>,
 ): ServerEnvironment {
-  return environmentSchema.parse(environment);
+  return environmentSchema.parse({
+    OPENAI_API_KEY: environment.OPENAI_API_KEY,
+    LLM_MODEL: environment.LLM_MODEL,
+    CIRCLE_CHAIN: environment.CIRCLE_CHAIN,
+    PROOFSPEND_ADAPTER_MODE: environment.PROOFSPEND_ADAPTER_MODE,
+    PROOFSPEND_AGENT_MODE: environment.PROOFSPEND_AGENT_MODE,
+  });
 }
 
 export function getEnvironment(): ServerEnvironment {

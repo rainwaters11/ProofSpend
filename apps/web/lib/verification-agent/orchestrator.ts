@@ -16,6 +16,7 @@ import {
   ActivityEventSchema,
   MissingReceiptModelOutputSchema,
   ReleaseProposalSchema,
+  SanitizedEvidenceSummarySchema,
   VerificationAgentResultSchema,
   selectSingleMissingReceiptGap,
   type ActivityEvent,
@@ -23,7 +24,9 @@ import {
   type VerificationAgentResult,
 } from "./schemas";
 
-const MAX_ACTIVITY_EVENTS = 10;
+const MAX_MODEL_CALLS = 1;
+const MAX_ACTIVITY_EVENTS = 9;
+const RELEASE_TTL_MS = 15 * 60 * 1000;
 const PROPOSAL_INTENT_ID = "intent:release:pawpovai:milestone-launch-ready";
 const PROPOSAL_IDEMPOTENCY_KEY = "release:pawpovai:milestone-launch-ready:250usdc";
 const PROPOSAL_DESTINATION = "mock:destination:pawpovai-operating-wallet";
@@ -58,11 +61,11 @@ function redactMessage(message: string): string {
     .replaceAll(/sk-[A-Za-z0-9_-]+/g, "[REDACTED_SECRET]");
 }
 
-function proposalExpiryFor(now: string): string {
-  return new Date(Date.parse(now) + 7 * 24 * 60 * 60 * 1000).toISOString();
-}
-
-function buildProposal(reason: string, expiresAt: string) {
+function buildProposal(reason: string, now: string) {
+  const nowMs = Date.parse(now);
+  if (!Number.isFinite(nowMs)) {
+    throw new Error("AGENT_INVALID_RUN_TIME");
+  }
   return ReleaseProposalSchema.parse({
     action: "PREPARE_RELEASE_PROPOSAL",
     state: "APPROVAL_REQUIRED",
@@ -73,7 +76,7 @@ function buildProposal(reason: string, expiresAt: string) {
     chain: "ARC_TESTNET",
     destination: PROPOSAL_DESTINATION,
     authorizedRole: "FOUNDER",
-    expiresAt,
+    expiresAt: new Date(nowMs + RELEASE_TTL_MS).toISOString(),
     reason,
   });
 }
@@ -94,6 +97,7 @@ export async function runVerificationAgent(
   const provider =
     options.provider ?? buildProvider(options.agentMode ?? environment.PROOFSPEND_AGENT_MODE);
   const trace: ActivityEvent[] = [];
+  let modelCallCount = 0;
 
   appendEvent(trace, {
     id: `${runId}:start`,
@@ -121,11 +125,32 @@ export async function runVerificationAgent(
     message: "Exactly one missing receipt proof gap was identified.",
   });
 
+  if (modelCallCount >= MAX_MODEL_CALLS) {
+    throw new Error("AGENT_MAX_TURNS_EXCEEDED");
+  }
+
+  modelCallCount += 1;
+  const evidenceKindCounts = new Map<string, number>();
+  for (const evidence of scenario.initialInput.evidenceItems) {
+    evidenceKindCounts.set(
+      evidence.kind,
+      (evidenceKindCounts.get(evidence.kind) ?? 0) + 1,
+    );
+  }
+  const evidenceSummary = SanitizedEvidenceSummarySchema.parse({
+    evidenceItemCount: scenario.initialInput.evidenceItems.length,
+    evidenceKinds: Array.from(evidenceKindCounts, ([kind, count]) => ({
+      kind,
+      count,
+    })),
+    requirementCount: scenario.initialInput.requirements.length,
+  });
   const modelOutput = MissingReceiptModelOutputSchema.parse(
     await provider.analyzeMissingReceipt({
-    runId,
-    policyResult: initial.evaluation,
-    proofGaps: initial.proofGaps,
+      runId,
+      evidenceSummary,
+      policyResult: initial.evaluation,
+      proofGaps: initial.proofGaps,
     }),
   );
 
@@ -176,7 +201,7 @@ export async function runVerificationAgent(
 
   const proposal = buildProposal(
     "Seeded deterministic evaluation passed after one founder receipt correction.",
-    proposalExpiryFor(now),
+    now,
   );
 
   appendEvent(trace, {
@@ -195,18 +220,6 @@ export async function runVerificationAgent(
     message: "Run paused at APPROVAL_REQUIRED for explicit founder approval.",
   });
 
-  appendEvent(trace, {
-    id: `${runId}:adapter`,
-    at: now,
-    layer:
-      environment.PROOFSPEND_ADAPTER_MODE === "mock" ? "MOCK" : "ARC TESTNET",
-    code: "HANDOFF_READY",
-    message:
-      environment.PROOFSPEND_ADAPTER_MODE === "mock"
-        ? "Adapter mode is MOCK; execution remains outside the model loop."
-        : "Adapter mode is ARC TESTNET; execution remains outside the model loop.",
-  });
-
   const result = VerificationAgentResultSchema.parse({
     runId,
     status: "APPROVAL_REQUIRED",
@@ -223,7 +236,7 @@ export async function runVerificationAgent(
   });
 
   if (result.activityTrace.length > MAX_ACTIVITY_EVENTS) {
-    throw new Error("AGENT_MAX_TURNS_EXCEEDED");
+    throw new Error("AGENT_MAX_ACTIVITY_EVENTS_EXCEEDED");
   }
 
   return result;

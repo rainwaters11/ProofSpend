@@ -5,6 +5,7 @@ import {
   resetApprovalHandoffStateForTest,
   runVerificationAgent,
   type AgentModelProvider,
+  type MissingReceiptModelOutput,
 } from "./index";
 
 const ORIGINAL_ENV = {
@@ -52,8 +53,10 @@ describe("runVerificationAgent", () => {
       "MILESTONE_REEVALUATED",
       "PROPOSAL_PREPARED",
       "APPROVAL_REQUIRED",
-      "HANDOFF_READY",
     ]);
+    expect(Date.parse(result.proposal.expiresAt)).toBeGreaterThan(
+      Date.parse("2026-01-21T00:00:00.000Z"),
+    );
   });
 
   it("rejects invalid model output", async () => {
@@ -83,7 +86,7 @@ describe("runVerificationAgent", () => {
           question: "Please add the missing receipt required for this milestone.",
           summary: "Attempting forbidden action",
           requestedAction: "SUBMIT_TRANSACTION",
-        };
+        } as unknown as MissingReceiptModelOutput;
       },
     } as unknown as AgentModelProvider;
 

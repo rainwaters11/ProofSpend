@@ -19,6 +19,20 @@ describe("environment validation", () => {
     });
   });
 
+  it("ignores unrelated server process variables", () => {
+    expect(
+      parseEnvironment({
+        PATH: "/usr/bin",
+        NODE_ENV: "test",
+        PROOFSPEND_ADAPTER_MODE: "mock",
+        PROOFSPEND_AGENT_MODE: "mock",
+      }),
+    ).toEqual({
+      PROOFSPEND_ADAPTER_MODE: "mock",
+      PROOFSPEND_AGENT_MODE: "mock",
+    });
+  });
+
   it("treats empty optional credentials as absent in mock mode", () => {
     expect(
       parseEnvironment({

@@ -2,11 +2,17 @@ import "server-only";
 
 import { type MilestoneEvaluationResult, type ProofGap } from "@proofspend/domain";
 
-import { MissingReceiptModelOutputSchema, type MissingReceiptModelOutput } from "./schemas";
+import {
+  MissingReceiptModelOutputSchema,
+  SanitizedEvidenceSummarySchema,
+  type MissingReceiptModelOutput,
+  type SanitizedEvidenceSummary,
+} from "./schemas";
 
 export interface AgentModelProvider {
   analyzeMissingReceipt(args: {
     runId: string;
+    evidenceSummary: SanitizedEvidenceSummary;
     policyResult: MilestoneEvaluationResult;
     proofGaps: readonly ProofGap[];
   }): Promise<MissingReceiptModelOutput>;
@@ -36,7 +42,7 @@ export function createOpenAiAgentModelProvider(config: {
   const timeoutMs = config.timeoutMs ?? 15_000;
 
   return {
-    async analyzeMissingReceipt({ policyResult, proofGaps }) {
+    async analyzeMissingReceipt({ evidenceSummary, policyResult, proofGaps }) {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -59,6 +65,7 @@ export function createOpenAiAgentModelProvider(config: {
               {
                 type: "input_text",
                 text: JSON.stringify({
+                  evidenceSummary: SanitizedEvidenceSummarySchema.parse(evidenceSummary),
                   milestoneStatus: policyResult.status,
                   reasonCodes: policyResult.reasonCodes,
                   recommendedNextAction: policyResult.recommendedNextAction,
@@ -99,6 +106,7 @@ export function createOpenAiAgentModelProvider(config: {
             },
           },
         },
+        store: false,
       };
 
       try {
@@ -131,7 +139,18 @@ export function createOpenAiAgentModelProvider(config: {
           throw new Error("AGENT_INVALID_MODEL_OUTPUT");
         }
 
-        return MissingReceiptModelOutputSchema.parse(JSON.parse(outputText));
+        let parsedOutput: unknown;
+        try {
+          parsedOutput = JSON.parse(outputText);
+        } catch {
+          throw new Error("AGENT_INVALID_MODEL_OUTPUT");
+        }
+
+        const validatedOutput = MissingReceiptModelOutputSchema.safeParse(parsedOutput);
+        if (!validatedOutput.success) {
+          throw new Error("AGENT_INVALID_MODEL_OUTPUT");
+        }
+        return validatedOutput.data;
       } catch (error) {
         if (
           error instanceof Error &&

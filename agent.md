@@ -51,13 +51,15 @@ Explicit approval is required for reserve activation, proof visibility, mock-to-
 
 Issue #32 implements a small, server-only Verification Agent orchestrator for the seeded PawPOVAI judge path. The runtime is intentionally narrow:
 
-- one model invocation in explicit `PROOFSPEND_AGENT_MODE=openai`;
+- one OpenAI Responses API invocation over a sanitized evidence summary in explicit `PROOFSPEND_AGENT_MODE=openai`;
 - deterministic `mock` provider support for CI and offline development;
 - strict schema validation at model input/output, tool output, activity trace, proposal, and handoff boundaries;
 - deterministic Evidence Engine and Milestone Engine ownership of policy outcomes;
 - one missing-receipt question, one validated founder correction, deterministic re-evaluation, and exact 250 USDC proposal;
 - stop at `APPROVAL_REQUIRED` with human authorization and value-moving execution outside the model loop;
 - sanitized ordered activity trace labels (`AI`, `DETERMINISTIC`, `HUMAN`, `MOCK` or `ARC TESTNET`);
-- no silent fallback from live to mock mode and no fabricated Arc hash/confirmation/explorer output in mock mode.
+- no silent fallback from live to mock mode, no stored OpenAI response, and no fabricated Arc hash/confirmation/explorer output in mock mode.
 
 This runtime remains separate from Issue #13 identity governance and Issue #8 ERC-8183 settlement lifecycle ownership.
+
+Production persistence, generalized chat, arbitrary evidence uploads, wallet creation, full ERC-8183 lifecycle operations, and autonomous payment behavior remain out of scope.

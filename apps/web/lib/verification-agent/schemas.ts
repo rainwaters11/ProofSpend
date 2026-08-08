@@ -74,6 +74,29 @@ export const MissingReceiptModelOutputSchema = z
   .strict();
 export type MissingReceiptModelOutput = z.infer<typeof MissingReceiptModelOutputSchema>;
 
+export const SanitizedEvidenceSummarySchema = z
+  .object({
+    evidenceItemCount: z.number().int().nonnegative(),
+    evidenceKinds: z.array(
+      z
+        .object({
+          kind: z.enum([
+            "RECEIPT",
+            "SCREENSHOT",
+            "INVOICE",
+            "DELIVERABLE",
+            "STATEMENT",
+            "CONFIRMATION",
+          ]),
+          count: z.number().int().nonnegative(),
+        })
+        .strict(),
+    ),
+    requirementCount: z.number().int().nonnegative(),
+  })
+  .strict();
+export type SanitizedEvidenceSummary = z.infer<typeof SanitizedEvidenceSummarySchema>;
+
 export const ReleaseProposalSchema = z
   .object({
     action: z.literal("PREPARE_RELEASE_PROPOSAL"),

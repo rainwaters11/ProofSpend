@@ -27,7 +27,8 @@ describe("POST /api/verification-agent/handoff", () => {
   });
 
   it("accepts valid approval handoff and keeps mock execution truthful", async () => {
-    const run = await runVerificationAgent({ now: "2026-01-21T00:00:00.000Z" });
+    const decidedAt = new Date().toISOString();
+    const run = await runVerificationAgent({ now: decidedAt });
     const request = new Request("http://localhost/api/verification-agent/handoff", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -39,8 +40,8 @@ describe("POST /api/verification-agent/handoff", () => {
           authorizedActorRole: "FOUNDER",
           authorizedActorId: "founder:fictional",
           decision: "APPROVED",
-          decidedAt: "2026-01-21T00:00:00.000Z",
-          expiresAt: "2027-02-01T00:00:00.000Z",
+          decidedAt,
+          expiresAt: run.proposal.expiresAt,
           idempotencyKey: "approval:test:key",
         },
       }),

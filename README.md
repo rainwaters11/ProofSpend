@@ -96,6 +96,9 @@ The merged foundation includes:
 - Repository-wide lint, typecheck, test, and build scripts
 - Frozen dependency installation in GitHub Actions
 - Arc and Circle architecture, dependency, roadmap, and governance documentation
+- A bounded server-side PawPOVAI Verification Agent runtime with explicit `mock` and `openai` modes
+- One validated Proof Recovery interaction, deterministic re-evaluation, and an exact 250 USDC proposal that stops at `APPROVAL_REQUIRED`
+- A privacy-safe Agent Activity trace with independently visible agent and wallet-adapter modes
 
 ## Arc and Circle architecture
 
@@ -154,6 +157,8 @@ bun --filter @proofspend/web dev
 
 Open `http://localhost:3000`.
 
+Set `PROOFSPEND_AGENT_MODE=mock` for deterministic offline development. To run the one-call live path, set `PROOFSPEND_AGENT_MODE=openai` together with a server-only `OPENAI_API_KEY` and `LLM_MODEL`. Live mode fails closed and never falls back to mock mode.
+
 The safe health endpoint is available at:
 
 ```text
@@ -187,7 +192,7 @@ The active implementation order is maintained in [`docs/roadmap.md`](docs/roadma
 9. Guided founder and backer demo
 10. Security, accessibility, deployment, and submission review
 
-**Implemented bounded runtime:** Issue #32 provides the live, server-only Verification Agent orchestrator for the seeded judge path while keeping approval and value-moving execution outside the agent loop.
+Issue #32 owns the bounded submission-ready Verification Agent runtime. It remains separate from Issue #9 integration work and from value-moving Circle execution.
 
 ---
 
