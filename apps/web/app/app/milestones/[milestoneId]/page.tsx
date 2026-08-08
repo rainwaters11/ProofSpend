@@ -138,7 +138,14 @@ export default async function MilestoneDetailPage({
       </div>
 
       <div className="rounded-lg border border-border bg-surface p-4 md:p-6">
-        <ReleaseLifecycleTimeline current={activeState} />
+        <ReleaseLifecycleTimeline
+          current={activeState}
+          failedAt={
+            activeState === "FAILED" && snapshot.transaction?.arcTransaction?.transactionHash
+              ? "SUBMITTED"
+              : "PREPARED"
+          }
+        />
       </div>
 
       <LifecycleCallout
