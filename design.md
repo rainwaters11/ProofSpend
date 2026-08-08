@@ -96,7 +96,7 @@ The complete Verification Agent orchestration—controlled OpenAI Agents SDK loo
 
 ## Circle execution boundary
 
-Issue #7 depends on Issues #2, #3, and #4, which are now complete. ADR-001 (Issue #7) selects Circle Developer-Controlled Wallets as the execution architecture and is accepted; only adapter implementation details remain. Preliminary research may happen earlier, but it cannot change the selected architecture or runtime configuration.
+Issue #7 depends on Issues #2, #3, and #4, which are now complete. ADR-001 (Issue #7) selects Circle Developer-Controlled Wallets as the execution architecture and is accepted as the decision. Issue #7 acceptance still requires upgrading the repository runtime and CI to Node.js 22.6+ (the selected SDK's requirement; the repo currently documents and runs Node 20.18.2) and completing adapter implementation. Preliminary research may happen earlier, but it cannot change the selected architecture or runtime configuration.
 
 Selectively evaluate patterns from Circle `packages/circle-tools` and `kits/openai-agents`, verifying current official documentation and preserving required attribution. Exclude `packages/agent-cli`, terminal UI, unrelated framework kits, Base/Polygon assumptions, and autonomous payment behavior. Mock and Arc adapters share typed application-owned interfaces but are explicitly selected and never silently interchanged.
 
