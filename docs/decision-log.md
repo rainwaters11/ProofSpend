@@ -44,8 +44,8 @@ After Issue #16, create a dedicated implementation issue unless the live backlog
 
 ### D-011 — Circle execution architecture selected (ADR-001)
 
-ADR-001 (`docs/architecture/adr-001-circle-execution-architecture.md`) selects **Circle Developer-Controlled Wallets** as the single primary custody and contract-execution path for Arc Testnet. The Agent Stack CLI and user-controlled wallets are rejected alternatives. The typed adapter boundary must be extended or replaced to add contract-call representation and separate submission, confirmation, and reconciliation operations. Issues #2 and #3 are complete; Issue #4 is the only remaining dependency before ADR-001 can be accepted and adapter implementation can begin.
+ADR-001 (`docs/architecture/adr-001-circle-execution-architecture.md`) selects **Circle Developer-Controlled Wallets** as the single primary custody and contract-execution path for Arc Testnet. The Agent Stack CLI and user-controlled wallets are rejected alternatives. The typed adapter boundary must be extended or replaced to add contract-call representation and separate submission, confirmation, and reconciliation operations. Issues #2, #3, and #4 are complete, so the dependency gate is cleared and ADR-001 is accepted; only adapter implementation details remain for Issue #7.
 
 ## Unresolved decisions
 
-Circle adapter implementation remains open until Issue #4 completes. Implementation work must define ERC-8004 controller/recovery details, independent reputation writer, ERC-8183 role addresses, deliverable commitment encoding, exact intent schema, confirmation/reconciliation policy, and deterministic rejection/refund recovery without inventing protocol deployment details here.
+Circle adapter implementation remains open for Issue #7. Implementation work must define ERC-8004 controller/recovery details, independent reputation writer, ERC-8183 role addresses, deliverable commitment encoding, exact intent schema, confirmation/reconciliation policy, and deterministic rejection/refund recovery without inventing protocol deployment details here.
