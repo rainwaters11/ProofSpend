@@ -41,6 +41,86 @@ describe("bounded Evidence Engine", () => {
     expect(first.evaluation.erc8183ActionPermitted).toBe(false);
   });
 
+  it("routes an uploaded AI-suggested receipt to human review instead of duplicate Proof Recovery", () => {
+    const scenario = createPawPovAiEvidenceScenario();
+    const aiSuggestedReceipt = EvidenceMatchSchema.parse({
+      id: "match:pawpovai:receipt:2:ai",
+      evidenceId: scenario.recoveryReceipt.id,
+      requirementId: "requirement:expenses",
+      source: "AI_SUGGESTION",
+      confidenceBasisPoints: 9200,
+      explanation: "AI suggested the uploaded receipt for evaluator review.",
+      acceptedBy: null,
+    });
+    const result = evaluateEvidenceEngine({
+      ...scenario.initialInput,
+      evidenceItems: [...scenario.initialInput.evidenceItems, scenario.recoveryReceipt],
+      evidenceMatches: [...scenario.initialInput.evidenceMatches, aiSuggestedReceipt],
+    });
+
+    expect(result.proofGaps).toEqual([]);
+    expect(result.evaluation.status).toBe("NEEDS_REVIEW");
+    expect(result.evaluation.recommendedNextAction).toBe("REQUEST_HUMAN_REVIEW");
+    expect(result.evaluation.requirementEvaluations.find((item) => item.requirementId === "requirement:expenses")).toMatchObject({
+      outcome: "REVIEW",
+      reasonCodes: ["EVIDENCE_MISSING"],
+    });
+    expect(result.evaluation.erc8183ActionPermitted).toBe(false);
+  });
+
+  it("keeps the canonical landing and flyer deliverables in evaluation and packet commitments", async () => {
+    const input = recoveredInput();
+    const result = evaluateEvidenceEngine(input);
+    const canonicalDeliverables = ["requirement:landing", "requirement:flyer"];
+
+    expect(input.milestone.requirementIds).toEqual(expect.arrayContaining(canonicalDeliverables));
+    for (const requirementId of canonicalDeliverables) {
+      expect(result.evaluation.requirementEvaluations.find((item) => item.requirementId === requirementId)).toMatchObject({
+        outcome: "PASS",
+        reasonCodes: ["DELIVERABLE_COUNT_MET"],
+      });
+    }
+
+    const packet = await buildMilestoneEvaluationPacket({
+      input,
+      evaluation: result.evaluation,
+      proofGaps: result.proofGaps,
+      generatedAt,
+    });
+    expect(packet.evidenceBindings).toEqual(expect.arrayContaining([
+      {
+        evidenceId: "evidence:pawpovai:landing",
+        evidenceHash: `sha256:${"8".repeat(64)}`,
+        requirementId: "requirement:landing",
+      },
+      {
+        evidenceId: "evidence:pawpovai:flyer",
+        evidenceHash: `sha256:${"9".repeat(64)}`,
+        requirementId: "requirement:flyer",
+      },
+    ]));
+  });
+
+  it("blocks eligibility when either canonical deliverable is absent", () => {
+    for (const [requirementId, evidenceId] of [
+      ["requirement:landing", "evidence:pawpovai:landing"],
+      ["requirement:flyer", "evidence:pawpovai:flyer"],
+    ] as const) {
+      const input = recoveredInput();
+      const result = evaluateEvidenceEngine({
+        ...input,
+        evidenceItems: input.evidenceItems.filter((item) => item.id !== evidenceId),
+        evidenceMatches: input.evidenceMatches.filter((match) => match.evidenceId !== evidenceId),
+      });
+
+      expect(result.evaluation.status).toBe("INCOMPLETE");
+      expect(result.evaluation.requirementEvaluations.find((item) => item.requirementId === requirementId)).toMatchObject({
+        outcome: "FAIL",
+        reasonCodes: ["DELIVERABLE_COUNT_SHORT"],
+      });
+    }
+  });
+
   it("accepts one founder receipt correction, preserves append-only audit history, and becomes eligible for human approval", () => {
     const scenario = createPawPovAiEvidenceScenario();
     const first = evaluateEvidenceEngine(scenario.initialInput);
