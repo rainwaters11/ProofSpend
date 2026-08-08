@@ -35,7 +35,7 @@ describe("POST /api/verification-agent/handoff", () => {
         authorizedActorId: "founder:fictional",
         decision: "APPROVED",
         decidedAt: "2026-01-21T00:00:00.000Z",
-        expiresAt: "2026-02-01T00:00:00.000Z",
+        expiresAt: "2027-02-01T00:00:00.000Z",
         idempotencyKey: "approval:test:key",
       }),
     });

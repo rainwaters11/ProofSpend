@@ -15,7 +15,7 @@ const mockEnvironmentSchema = z
     PROOFSPEND_ADAPTER_MODE: z.literal("mock"),
     PROOFSPEND_AGENT_MODE: z.literal("mock"),
   })
-  .strict();
+  .passthrough();
 
 const openAiEnvironmentSchema = z
   .object({
@@ -25,7 +25,7 @@ const openAiEnvironmentSchema = z
     PROOFSPEND_ADAPTER_MODE: z.literal("mock"),
     PROOFSPEND_AGENT_MODE: z.literal("openai"),
   })
-  .strict();
+  .passthrough();
 
 const environmentSchema = z.union([mockEnvironmentSchema, openAiEnvironmentSchema]);
 

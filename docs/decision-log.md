@@ -38,9 +38,9 @@ Issue #7 depends on #2/#3/#4 and must approve an ADR before implementation. Sele
 
 Use only approved Phases A–D as recorded in `roadmap.md`; compositions ship only when supported by real domain contracts.
 
-### D-010 — Verification Agent runtime is a backlog gap
+### D-010 — Verification Agent runtime scope is bounded and implemented in Issue #32
 
-After Issue #16, create a dedicated implementation issue unless the live backlog explicitly assigns the work elsewhere. It must cover controlled OpenAI Agents SDK orchestration, structured evidence-service calls, deterministic-policy explanation, human interruption, transaction-proposal preparation, and direct-submission prohibition. Issue #13 does not silently own this runtime.
+Issue #32 delivers the judge-facing, server-only Verification Agent orchestrator for the seeded PawPOVAI flow. It performs one bounded model analysis step, uses strict schema-validated deterministic tools, asks exactly one missing-receipt question, applies one validated founder correction, re-evaluates deterministically, prepares the exact 250 USDC non-authorizing proposal, and stops at `APPROVAL_REQUIRED`. Human approval and typed adapter execution remain outside the model loop. Issue #13 does not silently own this runtime, and Issue #8 still owns ERC-8183 settlement lifecycle behavior.
 
 ### D-011 — Circle execution architecture selected (ADR-001)
 

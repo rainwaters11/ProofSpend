@@ -10,7 +10,7 @@
 
 ProofSpend LaunchVault is an evidence-aware programmable capital platform for founders, solopreneurs, and the people who fund their work. It connects business capital, milestone requirements, receipts, deliverables, LLM-assisted evidence analysis, deterministic policy, human approval, and Arc Testnet settlement into one accountable workflow.
 
-> **Current status:** The technical foundation and Arc-native architecture are complete. The application currently runs in explicit mock mode, and no real funds are being moved. Smart Reserves, evidence workflows, ERC-8004 identity, ERC-8183 settlement, and the premium product interface are in active development.
+> **Current status:** The technical foundation and Arc-native architecture are complete, and Issue #32 ships a bounded server-side Verification Agent orchestrator for the seeded PawPOVAI flow. The app defaults to explicit mock adapter mode, no real funds are being moved, and human approval plus typed adapter execution remain outside the model loop.
 
 ## Why ProofSpend
 
@@ -89,10 +89,10 @@ The merged foundation includes:
 - Next.js App Router application
 - Strict TypeScript configuration
 - Zod-based server environment validation
-- Explicit credential-free mock mode
+- Explicit credential-free mock mode plus explicit live `PROOFSPEND_AGENT_MODE=openai`
 - Typed Circle wallet integration boundary
 - Deterministic `MockWalletProvider`
-- Safe `/api/health` endpoint
+- Safe `/api/health` endpoint with independent agent/adapter mode visibility
 - Repository-wide lint, typecheck, test, and build scripts
 - Frozen dependency installation in GitHub Actions
 - Arc and Circle architecture, dependency, roadmap, and governance documentation
@@ -186,7 +186,7 @@ The active implementation order is maintained in [`docs/roadmap.md`](docs/roadma
 9. Guided founder and backer demo
 10. Security, accessibility, deployment, and submission review
 
-**Separate backlog item:** Complete Verification Agent orchestration requires its own future issue and dependency review unless the live backlog explicitly assigns it elsewhere. It is not part of Issue #9.
+**Implemented bounded runtime:** Issue #32 provides the live, server-only Verification Agent orchestrator for the seeded judge path while keeping approval and value-moving execution outside the agent loop.
 
 ---
 

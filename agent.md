@@ -47,19 +47,17 @@ Issue #8 implements the milestone-job lifecycle after its dependencies are compl
 
 Explicit approval is required for reserve activation, proof visibility, mock-to-Arc switching, ERC-8004 registration, ERC-8183 job creation/funding, provider delivery, evaluator completion/rejection, settlement/refund, and any privileged change.
 
-## Backlog gap: complete Verification Agent runtime
+## Live bounded Verification Agent runtime (Issue #32)
 
-A dedicated future issue must implement the complete orchestration unless the live backlog explicitly assigns it elsewhere. That work includes the controlled OpenAI Agents SDK tool loop, structured evidence-service calls, deterministic-policy explanation, human-interruption request, exact transaction-proposal preparation, agent-run/tool-call persistence, and a hard prohibition on direct submission. It is not silently part of Issue #13 or Issue #8.
+Issue #32 implements a small, server-only Verification Agent orchestrator for the seeded PawPOVAI judge path. The runtime is intentionally narrow:
 
-The minimum submission-ready orchestration should:
+- one model invocation in explicit `PROOFSPEND_AGENT_MODE=openai`;
+- deterministic `mock` provider support for CI and offline development;
+- strict schema validation at model input/output, tool output, activity trace, proposal, and handoff boundaries;
+- deterministic Evidence Engine and Milestone Engine ownership of policy outcomes;
+- one missing-receipt question, one validated founder correction, deterministic re-evaluation, and exact 250 USDC proposal;
+- stop at `APPROVAL_REQUIRED` with human authorization and value-moving execution outside the model loop;
+- sanitized ordered activity trace labels (`AI`, `DETERMINISTIC`, `HUMAN`, `MOCK` or `ARC TESTNET`);
+- no silent fallback from live to mock mode and no fabricated Arc hash/confirmation/explorer output in mock mode.
 
-- receive one seeded milestone and synthetic evidence packet;
-- call a structured evidence-analysis tool;
-- validate the returned candidates before policy evaluation;
-- explain the deterministic result without changing it;
-- identify one highest-priority Proof Recovery question;
-- prepare an exact action proposal;
-- pause for authorized human approval;
-- hand the persisted approval to deterministic server-side execution for revalidation and submission, outside the agent tool loop;
-- record the resulting transaction lifecycle truthfully;
-- never silently fall back from Arc Testnet to mock mode.
+This runtime remains separate from Issue #13 identity governance and Issue #8 ERC-8183 settlement lifecycle ownership.

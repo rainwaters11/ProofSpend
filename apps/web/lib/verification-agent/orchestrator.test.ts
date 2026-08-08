@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeEach, describe, expect, it } from "vitest";
 
 import {
   handoffApprovedProposal,
@@ -61,7 +61,7 @@ describe("runVerificationAgent", () => {
       async analyzeMissingReceipt() {
         return {
           missingGapId: "wrong-gap",
-          question: "Please submit a transfer now",
+          question: "Please add the missing receipt required for this milestone.",
           summary: "bad",
           requestedAction: "ASK_PROOF_RECOVERY_QUESTION",
         };

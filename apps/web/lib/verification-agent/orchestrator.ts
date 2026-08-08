@@ -14,6 +14,7 @@ import {
 } from "./provider";
 import {
   ActivityEventSchema,
+  MissingReceiptModelOutputSchema,
   ReleaseProposalSchema,
   VerificationAgentResultSchema,
   selectSingleMissingReceiptGap,
@@ -121,11 +122,13 @@ export async function runVerificationAgent(
     throw new Error("AGENT_MAX_TURNS_EXCEEDED");
   }
 
-  const modelOutput = await provider.analyzeMissingReceipt({
+  const modelOutput = MissingReceiptModelOutputSchema.parse(
+    await provider.analyzeMissingReceipt({
     runId,
     policyResult: initial.evaluation,
     proofGaps: initial.proofGaps,
-  });
+    }),
+  );
 
   if (modelOutput.missingGapId !== missingGap.id) {
     throw new Error("AGENT_MODEL_GAP_MISMATCH");
