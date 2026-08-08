@@ -43,12 +43,29 @@ describe("ReleaseLifecycleTimeline", () => {
     );
   });
 
-  it("anchors failed further along than rejected, at the approved step", () => {
-    const rejectedMarkup = renderToStaticMarkup(<ReleaseLifecycleTimeline current="REJECTED" />);
+  it("anchors a pre-submission failure at the prepared step", () => {
     const failedMarkup = renderToStaticMarkup(<ReleaseLifecycleTimeline current="FAILED" />);
+    const preparedMarkup = renderToStaticMarkup(<ReleaseLifecycleTimeline current="PREPARED" />);
 
+    expect(countStepsSection(failedMarkup, /lucide-check/g)).toBe(
+      countStepsSection(preparedMarkup, /lucide-check/g),
+    );
+  });
+
+  it("anchors a submitted failure at the submitted step", () => {
+    const failedMarkup = renderToStaticMarkup(
+      <ReleaseLifecycleTimeline current="FAILED" failedAt="SUBMITTED" />,
+    );
+    const submittedMarkup = renderToStaticMarkup(<ReleaseLifecycleTimeline current="SUBMITTED" />);
+    const preSubmissionFailureMarkup = renderToStaticMarkup(
+      <ReleaseLifecycleTimeline current="FAILED" />,
+    );
+
+    expect(countStepsSection(failedMarkup, /lucide-check/g)).toBe(
+      countStepsSection(submittedMarkup, /lucide-check/g),
+    );
     expect(countStepsSection(failedMarkup, /lucide-check/g)).toBeGreaterThan(
-      countStepsSection(rejectedMarkup, /lucide-check/g),
+      countStepsSection(preSubmissionFailureMarkup, /lucide-check/g),
     );
   });
 
