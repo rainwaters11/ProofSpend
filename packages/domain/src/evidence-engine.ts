@@ -136,6 +136,7 @@ function aiMatchesForRequirement(input: EvidenceEngineInput, requirementId: stri
 
 function buildRequirementObservations(input: EvidenceEngineInput): Record<string, RequirementObservation> {
   const observations: Record<string, RequirementObservation> = {};
+  const evidenceById = new Map(input.evidenceItems.map((item) => [item.id, item] as const));
   for (const requirement of input.requirements) {
     const humanMatches = humanMatchesForRequirement(input, requirement.id);
     const aiMatches = aiMatchesForRequirement(input, requirement.id);
@@ -146,9 +147,18 @@ function buildRequirementObservations(input: EvidenceEngineInput): Record<string
       case "DELIVERABLE":
         observations[requirement.id] = { evidenceReferences: humanReferences, deliverableCount: humanReferences.length };
         break;
-      case "EXPENSE_RECORDS":
-        observations[requirement.id] = { evidenceReferences: humanReferences, receiptCount: humanReferences.length };
+      case "EXPENSE_RECORDS": {
+        const acceptedReferences = new Set(humanReferences);
+        const pendingReceiptReview = aiMatches.some((match) =>
+          evidenceById.get(match.evidenceId)?.kind === "RECEIPT" && !acceptedReferences.has(match.evidenceId)
+        );
+        observations[requirement.id] = {
+          evidenceReferences: humanReferences,
+          receiptCount: humanReferences.length,
+          pendingEvidenceReview: pendingReceiptReview || undefined,
+        };
         break;
+      }
       case "FOUNDER_CONFIRMATION":
         observations[requirement.id] = { evidenceReferences: humanReferences, founderConfirmationPresent: suggestionPresent || undefined };
         break;
@@ -446,14 +456,8 @@ export function createPawPovAiEvidenceScenario(): PawPovAiEvidenceScenario {
   const seed = createPawPovAiSeed();
   const authorizedFounder = ActorSchema.parse({ actorId: seed.project.founderId, actorType: "FOUNDER" });
   const authorizedEvaluator = ActorSchema.parse({ actorId: "evaluator:proofspend", actorType: "EVALUATOR" });
-  const selectedSeedRequirements = seed.requirements.filter((requirement) =>
-    requirement.id === "requirement:identity" ||
-    requirement.id === "requirement:expenses" ||
-    requirement.id === "requirement:spend" ||
-    requirement.id === "requirement:confirmation"
-  );
   const requirements = [
-    ...selectedSeedRequirements,
+    ...seed.requirements,
     MilestoneRequirementSchema.parse({ id: "requirement:transaction-match", milestoneId: seed.milestone.id, kind: "TRANSACTION_MATCH", description: "Transaction context matches the milestone" }),
     MilestoneRequirementSchema.parse({ id: "requirement:business-purpose", milestoneId: seed.milestone.id, kind: "BUSINESS_PURPOSE", description: "Business purpose is present" }),
   ];
@@ -461,6 +465,8 @@ export function createPawPovAiEvidenceScenario(): PawPovAiEvidenceScenario {
   const submittedAt = "2026-01-20T00:00:00.000Z";
   const evidence = {
     deliverable: EvidenceItemSchema.parse({ id: "evidence:pawpovai:deliverable", projectId: seed.project.id, kind: "DELIVERABLE", sourceHash: `sha256:${"1".repeat(64)}`, storageRef: "private://pawpovai/deliverable", visibility: "FOUNDER_PRIVATE", submittedAt }),
+    landing: EvidenceItemSchema.parse({ id: "evidence:pawpovai:landing", projectId: seed.project.id, kind: "DELIVERABLE", sourceHash: `sha256:${"8".repeat(64)}`, storageRef: "private://pawpovai/landing-page-screenshot", visibility: "FOUNDER_PRIVATE", submittedAt }),
+    flyer: EvidenceItemSchema.parse({ id: "evidence:pawpovai:flyer", projectId: seed.project.id, kind: "DELIVERABLE", sourceHash: `sha256:${"9".repeat(64)}`, storageRef: "private://pawpovai/promotional-flyer", visibility: "FOUNDER_PRIVATE", submittedAt }),
     receiptOne: EvidenceItemSchema.parse({ id: "evidence:pawpovai:receipt:1", projectId: seed.project.id, kind: "RECEIPT", sourceHash: `sha256:${"2".repeat(64)}`, storageRef: "private://pawpovai/receipt/1", visibility: "FOUNDER_PRIVATE", submittedAt }),
     receiptTwo: EvidenceItemSchema.parse({ id: "evidence:pawpovai:receipt:2", projectId: seed.project.id, kind: "RECEIPT", sourceHash: `sha256:${"3".repeat(64)}`, storageRef: "private://pawpovai/receipt/2", visibility: "FOUNDER_PRIVATE", submittedAt }),
     confirmation: EvidenceItemSchema.parse({ id: "evidence:pawpovai:confirmation", projectId: seed.project.id, kind: "CONFIRMATION", sourceHash: `sha256:${"4".repeat(64)}`, storageRef: "private://pawpovai/confirmation", visibility: "FOUNDER_PRIVATE", submittedAt }),
@@ -480,9 +486,11 @@ export function createPawPovAiEvidenceScenario(): PawPovAiEvidenceScenario {
   const initialInput = EvidenceEngineInputSchema.parse({
     milestone,
     requirements,
-    evidenceItems: [evidence.deliverable, evidence.receiptOne, evidence.confirmation, evidence.transaction, evidence.purpose],
+    evidenceItems: [evidence.deliverable, evidence.landing, evidence.flyer, evidence.receiptOne, evidence.confirmation, evidence.transaction, evidence.purpose],
     evidenceMatches: [
       humanMatch("match:pawpovai:deliverable", evidence.deliverable.id, "requirement:identity", authorizedEvaluator),
+      humanMatch("match:pawpovai:landing", evidence.landing.id, "requirement:landing", authorizedEvaluator),
+      humanMatch("match:pawpovai:flyer", evidence.flyer.id, "requirement:flyer", authorizedEvaluator),
       humanMatch("match:pawpovai:receipt:1", evidence.receiptOne.id, "requirement:expenses", authorizedEvaluator),
       humanMatch("match:pawpovai:confirmation", evidence.confirmation.id, "requirement:confirmation", authorizedFounder),
       humanMatch("match:pawpovai:transaction-context", evidence.transaction.id, "requirement:transaction-match", authorizedEvaluator),
