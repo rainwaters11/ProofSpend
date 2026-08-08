@@ -22,6 +22,7 @@ jobs:
     env:
       CIRCLE_CHAIN: ARC-TESTNET
       PROOFSPEND_ADAPTER_MODE: mock
+      PROOFSPEND_AGENT_MODE: mock
 
     steps:
       - name: Check out repository
