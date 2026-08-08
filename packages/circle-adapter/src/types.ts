@@ -23,6 +23,9 @@ export type PaymentResult = {
   mode: WalletAdapterMode;
   status: "simulated" | "pending" | "confirmed" | "failed";
   transactionId: string | null;
+  transactionHash?: string | null;
+  explorerUrl?: string | null;
+  terminalState?: string | null;
 };
 
 export interface WalletProvider {
