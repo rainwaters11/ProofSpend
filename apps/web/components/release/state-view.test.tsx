@@ -28,7 +28,7 @@ describe("ConfigurationMissingState", () => {
 });
 
 describe("InsufficientBalanceState", () => {
-  it("renders available and required amounts without implying funds are available", () => {
+  it("renders available and required amounts with a truthful shortfall explanation", () => {
     const markup = renderToStaticMarkup(
       <InsufficientBalanceState
         available={{ atomicUnits: "50000000", asset: "USDC" }}
@@ -39,6 +39,7 @@ describe("InsufficientBalanceState", () => {
     expect(markup).toContain('role="status"');
     expect(markup).toContain("Available: 50.00 USDC");
     expect(markup).toContain("Required: 250.00 USDC");
-    expect(markup).toContain("no funds are available to release");
+    expect(markup).toContain("available balance is insufficient for the requested release");
+    expect(markup).not.toContain("no funds are available to release");
   });
 });
