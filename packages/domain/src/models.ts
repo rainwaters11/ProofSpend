@@ -170,7 +170,11 @@ const HumanEvidenceDecisionActorSchema = ActorSchema.refine(
 );
 export const EvidenceMatchSchema = z.discriminatedUnion("source", [
   EvidenceMatchBaseSchema.extend({ source: z.literal("AI_SUGGESTION"), acceptedBy: z.null() }),
-  EvidenceMatchBaseSchema.extend({ source: z.literal("HUMAN_DECISION"), acceptedBy: HumanEvidenceDecisionActorSchema }),
+  EvidenceMatchBaseSchema.extend({
+    source: z.literal("HUMAN_DECISION"),
+    acceptedEvidenceHash: Hash,
+    acceptedBy: HumanEvidenceDecisionActorSchema,
+  }),
 ]);
 export type EvidenceMatch = z.infer<typeof EvidenceMatchSchema>;
 export const ProofGapSchema = z.object({ id: Id, milestoneId: Id, requirementId: Id, reasonCode: z.string().min(1), question: z.string().min(1), priority: z.number().int().nonnegative(), resolvedAt: Time.nullable() });
