@@ -254,6 +254,7 @@ export function applyMissingReceiptRecovery(args: {
     details: {
       proofGapId: gap.id,
       requirementId: gap.requirementId,
+      acceptedMatchId: acceptedMatch.id,
       evidenceId: receipt.id,
       evidenceHash: receipt.sourceHash,
       resolution: "ADDITIONAL_RECEIPT_ACCEPTED",
