@@ -270,6 +270,10 @@ export function resumeVerificationAgentAfterFounderCorrection(args: {
     message: "Run paused at APPROVAL_REQUIRED for explicit founder approval.",
   });
 
+  if (trace.length > MAX_ACTIVITY_EVENTS) {
+    throw new Error("AGENT_MAX_ACTIVITY_EVENTS_EXCEEDED");
+  }
+
   return VerificationAgentResultSchema.parse({
     ...run,
     status: "APPROVAL_REQUIRED",
@@ -279,8 +283,4 @@ export function resumeVerificationAgentAfterFounderCorrection(args: {
       message: redactMessage(event.message),
     })),
   });
-
-  if (trace.length > MAX_ACTIVITY_EVENTS) {
-    throw new Error("AGENT_MAX_ACTIVITY_EVENTS_EXCEEDED");
-  }
 }
