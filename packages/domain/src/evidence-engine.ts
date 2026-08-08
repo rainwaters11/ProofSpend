@@ -304,9 +304,12 @@ export function applyMissingReceiptRecovery(args: {
 }
 
 export const AcceptedEvidenceBindingSchema = z.object({
+  acceptedMatchId: IdReferenceSchema,
   evidenceId: IdReferenceSchema,
   evidenceHash: HashReferenceSchema,
   requirementId: IdReferenceSchema,
+  decisionSource: z.literal("HUMAN_DECISION"),
+  acceptedBy: ActorSchema,
 }).strict();
 export type AcceptedEvidenceBinding = z.infer<typeof AcceptedEvidenceBindingSchema>;
 
@@ -386,20 +389,31 @@ export async function buildMilestoneEvaluationPacket(args: {
       const evidence = evidenceById.get(match.evidenceId);
       if (evidence === undefined) throw new Error("Accepted evidence binding references missing evidence.");
       return AcceptedEvidenceBindingSchema.parse({
+        acceptedMatchId: match.id,
         evidenceId: evidence.id,
         evidenceHash: evidence.sourceHash,
         requirementId: match.requirementId,
+        decisionSource: match.source,
+        acceptedBy: match.acceptedBy,
       });
     })
     .filter((binding) => {
-      const key = JSON.stringify([binding.evidenceId, binding.evidenceHash, binding.requirementId]);
+      const key = JSON.stringify([
+        binding.acceptedMatchId,
+        binding.evidenceId,
+        binding.evidenceHash,
+        binding.requirementId,
+        binding.decisionSource,
+        binding.acceptedBy.actorType,
+        binding.acceptedBy.actorId,
+      ]);
       if (evidenceBindingKeys.has(key)) return false;
       evidenceBindingKeys.add(key);
       return true;
     })
     .sort((left, right) => compareByCodePoint(
-      JSON.stringify([left.evidenceId, left.requirementId, left.evidenceHash]),
-      JSON.stringify([right.evidenceId, right.requirementId, right.evidenceHash]),
+      JSON.stringify([left.requirementId, left.evidenceId, left.acceptedMatchId, left.evidenceHash, left.acceptedBy.actorType, left.acceptedBy.actorId]),
+      JSON.stringify([right.requirementId, right.evidenceId, right.acceptedMatchId, right.evidenceHash, right.acceptedBy.actorType, right.acceptedBy.actorId]),
     ));
   const acceptedEvidenceIdSet = new Set(evidenceBindings.map((binding) => binding.evidenceId));
   const acceptedEvidence = input.evidenceItems.filter((item) => acceptedEvidenceIdSet.has(item.id));
@@ -427,6 +441,7 @@ export async function buildMilestoneEvaluationPacket(args: {
     evaluation.status,
     evaluation.policyVersion,
     evaluation.evaluationTimestamp,
+    evidenceBindings,
     requirementDefinitions,
     requirementOutcomes,
     suppliedUnresolvedGapIds,
