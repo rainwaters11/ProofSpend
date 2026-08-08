@@ -89,14 +89,20 @@ describe("bounded Evidence Engine", () => {
     });
     expect(packet.evidenceBindings).toEqual(expect.arrayContaining([
       {
+        acceptedMatchId: "match:pawpovai:landing",
         evidenceId: "evidence:pawpovai:landing",
         evidenceHash: `sha256:${"8".repeat(64)}`,
         requirementId: "requirement:landing",
+        decisionSource: "HUMAN_DECISION",
+        acceptedBy: { actorType: "EVALUATOR", actorId: "evaluator:proofspend" },
       },
       {
+        acceptedMatchId: "match:pawpovai:flyer",
         evidenceId: "evidence:pawpovai:flyer",
         evidenceHash: `sha256:${"9".repeat(64)}`,
         requirementId: "requirement:flyer",
+        decisionSource: "HUMAN_DECISION",
+        acceptedBy: { actorType: "EVALUATOR", actorId: "evaluator:proofspend" },
       },
     ]));
   });
@@ -530,7 +536,15 @@ describe("bounded Evidence Engine", () => {
     expect(packetA.milestoneId).toBe(scenario.milestone.id);
     expect(packetA.evidenceIds).toEqual([...packetA.evidenceIds].sort());
     expect(packetA.evidenceHashes).toEqual([...packetA.evidenceHashes].sort());
-    expect(packetA.evidenceBindings).toEqual([...packetA.evidenceBindings].sort((left, right) => left.evidenceId.localeCompare(right.evidenceId)));
+    const evidenceBindingSortKeys = packetA.evidenceBindings.map((binding) => JSON.stringify([
+      binding.requirementId,
+      binding.evidenceId,
+      binding.acceptedMatchId,
+      binding.evidenceHash,
+      binding.acceptedBy.actorType,
+      binding.acceptedBy.actorId,
+    ]));
+    expect(evidenceBindingSortKeys).toEqual([...evidenceBindingSortKeys].sort());
     expect(packetA.unresolvedProofGapIds).toEqual([]);
     expect(packetA.recommendedNextAction).toBe("REQUEST_HUMAN_APPROVAL");
   });
@@ -630,6 +644,63 @@ describe("bounded Evidence Engine", () => {
       generatedAt,
     });
     expect(swappedRequirementsPacket.deliverableHashCandidate).not.toBe(baseline.deliverableHashCandidate);
+  });
+
+  it("binds accepted match identity and approving actor into evaluator packet commitments", async () => {
+    const input = recoveredInput();
+    const baselineResult = evaluateEvidenceEngine(input);
+    const baselinePacket = await buildMilestoneEvaluationPacket({
+      input,
+      evaluation: baselineResult.evaluation,
+      proofGaps: baselineResult.proofGaps,
+      generatedAt,
+    });
+
+    const changedMatchInput: EvidenceEngineInput = {
+      ...input,
+      evidenceMatches: input.evidenceMatches.map((match) =>
+        match.id === "match:pawpovai:landing"
+          ? EvidenceMatchSchema.parse({ ...match, id: "match:pawpovai:landing:replacement" })
+          : match
+      ),
+    };
+    const changedMatchResult = evaluateEvidenceEngine(changedMatchInput);
+    expect(changedMatchResult.evaluation).toEqual(baselineResult.evaluation);
+    const changedMatchPacket = await buildMilestoneEvaluationPacket({
+      input: changedMatchInput,
+      evaluation: changedMatchResult.evaluation,
+      proofGaps: changedMatchResult.proofGaps,
+      generatedAt,
+    });
+
+    const alternateEvaluatorId = "evaluator:pawpovai:alternate";
+    const changedActorInput: EvidenceEngineInput = {
+      ...input,
+      expectedAuthorizedEvaluatorId: alternateEvaluatorId,
+      evidenceMatches: input.evidenceMatches.map((match) =>
+        match.source === "HUMAN_DECISION" && match.acceptedBy.actorType === "EVALUATOR"
+          ? EvidenceMatchSchema.parse({
+            ...match,
+            acceptedBy: { actorType: "EVALUATOR", actorId: alternateEvaluatorId },
+          })
+          : match
+      ),
+    };
+    const changedActorResult = evaluateEvidenceEngine(changedActorInput);
+    expect(changedActorResult.evaluation).toEqual(baselineResult.evaluation);
+    const changedActorPacket = await buildMilestoneEvaluationPacket({
+      input: changedActorInput,
+      evaluation: changedActorResult.evaluation,
+      proofGaps: changedActorResult.proofGaps,
+      generatedAt,
+    });
+
+    expect(changedMatchPacket.evidenceBindings).not.toEqual(baselinePacket.evidenceBindings);
+    expect(changedMatchPacket.deliverableHashCandidate).not.toBe(baselinePacket.deliverableHashCandidate);
+    expect(changedMatchPacket.reasonHashCandidate).not.toBe(baselinePacket.reasonHashCandidate);
+    expect(changedActorPacket.evidenceBindings).not.toEqual(baselinePacket.evidenceBindings);
+    expect(changedActorPacket.deliverableHashCandidate).not.toBe(baselinePacket.deliverableHashCandidate);
+    expect(changedActorPacket.reasonHashCandidate).not.toBe(baselinePacket.reasonHashCandidate);
   });
 
   it("binds canonical requirement definitions into both packet commitments", async () => {
