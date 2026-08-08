@@ -241,7 +241,7 @@ describe("bounded Evidence Engine", () => {
 
     const changedInput: EvidenceEngineInput = {
       ...scenario.initialInput,
-      verifiedSpend: { asset: "USDC", atomicUnits: "149000000" },
+      verifiedSpend: { asset: "USDC", atomicUnits: "151000000" },
     };
     await expect(buildMilestoneEvaluationPacket({
       input: changedInput,
