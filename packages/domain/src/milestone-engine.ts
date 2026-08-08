@@ -62,6 +62,7 @@ export type MilestoneNextAction = z.infer<typeof MilestoneNextActionSchema>;
 export const RequirementObservationSchema = z.object({
   evidenceReferences: z.array(ReasonReferenceSchema).optional(),
   hasConflictingEvidence: z.boolean().optional(),
+  pendingEvidenceReview: z.boolean().optional(),
   deliverableCount: z.number().int().min(0).optional(),
   receiptCount: z.number().int().min(0).optional(),
   transactionMatched: z.boolean().optional(),
@@ -351,7 +352,10 @@ const evaluateByKind = (
     }
     case "EXPENSE_RECORDS": {
       const receiptCount = countValidatedEvidenceReferences(requirement, observation, observation.receiptCount, "receiptCount", "RECEIPT", provenance);
-      return receiptCount >= requirement.requiredCount ? { outcome: "PASS", reasonCode: "RECEIPT_COUNT_MET" } : { outcome: "FAIL", reasonCode: "RECEIPT_COUNT_SHORT" };
+      if (receiptCount >= requirement.requiredCount) return { outcome: "PASS", reasonCode: "RECEIPT_COUNT_MET" };
+      return observation.pendingEvidenceReview === true
+        ? { outcome: "REVIEW", reasonCode: "EVIDENCE_MISSING" }
+        : { outcome: "FAIL", reasonCode: "RECEIPT_COUNT_SHORT" };
     }
     case "SPEND_LIMIT": {
       if (input.verifiedSpend === undefined) return { outcome: "FAIL", reasonCode: "EVIDENCE_MISSING" };
@@ -449,6 +453,7 @@ const serializeCanonicalMilestoneEvaluationApprovalSubject = (input: CanonicalMi
         requirementId,
         refs,
         parsed.hasConflictingEvidence ?? null,
+        parsed.pendingEvidenceReview ?? null,
         parsed.deliverableCount ?? null,
         parsed.receiptCount ?? null,
         parsed.transactionMatched ?? null,
