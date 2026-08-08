@@ -208,13 +208,17 @@ const isAllowedDecisionActor = (
 const createProvenanceIndex = (
   input: Pick<
     MilestoneEvaluationInput,
-    "milestone" | "requirements" | "evidenceItems" | "evidenceMatches" | "expectedAuthorizedFounderId" | "expectedAuthorizedEvaluatorId"
+    "milestone" | "requirements" | "evidenceItems" | "evidenceMatches" | "evaluatedAt" |
+    "expectedAuthorizedFounderId" | "expectedAuthorizedEvaluatorId"
   >,
 ): ProvenanceIndex => {
   const requirementIds = new Set(input.requirements.map((requirement) => requirement.id));
   const evidenceById = new Map<string, EvidenceItem>();
   const evidenceIdsBySourceHash = new Map<string, Set<string>>();
   for (const evidence of input.evidenceItems ?? []) {
+    if (Date.parse(evidence.submittedAt) > Date.parse(input.evaluatedAt)) {
+      throw new Error("Milestone Engine rejects evidence submitted after the evaluation timestamp.");
+    }
     if (evidence.projectId !== input.milestone.projectId) continue;
     if (evidenceById.has(evidence.id)) throw new Error("Evidence item IDs must be unique within a milestone evaluation.");
     evidenceById.set(evidence.id, evidence);
