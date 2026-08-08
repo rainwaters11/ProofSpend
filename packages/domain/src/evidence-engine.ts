@@ -1,0 +1,415 @@
+import { z } from "zod";
+import {
+  MilestoneEvaluationResultSchema,
+  MilestoneNextActionSchema,
+  MilestoneReasonCodeSchema,
+  RequirementOutcomeSchema,
+  evaluateMilestone,
+  type MilestoneEvaluationResult,
+  type RequirementObservation,
+} from "./milestone-engine";
+import {
+  ActorSchema,
+  AuditEventSchema,
+  EvidenceItemSchema,
+  EvidenceMatchSchema,
+  MilestoneRequirementSchema,
+  MilestoneSchema,
+  ProofGapSchema,
+  SettlementMoneyAmountSchema,
+  type Actor,
+  type AuditEvent,
+  type EvidenceItem,
+  type EvidenceMatch,
+  type Milestone,
+  type MilestoneRequirement,
+  type ProofGap,
+  type SettlementMoneyAmount,
+} from "./models";
+import { createPawPovAiSeed } from "./seed";
+
+const HashReferenceSchema = z.string().regex(/^sha256:[a-f0-9]{64}$/);
+const IdReferenceSchema = z.string().min(1);
+const TimeSchema = z.string().datetime();
+const compareByCodePoint = (left: string, right: string): number => left === right ? 0 : left < right ? -1 : 1;
+
+async function sha256(value: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
+  return `sha256:${Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
+}
+
+export const MockExtractionSuggestionSchema = z.object({
+  evidenceId: IdReferenceSchema,
+  observedFactCodes: z.array(z.string().regex(/^[A-Z][A-Z0-9_]*$/)),
+  normalizedValues: z.record(z.string(), z.union([z.string(), z.number().finite(), z.boolean(), z.null()])),
+  suggestedRequirementIds: z.array(IdReferenceSchema),
+  confidenceBasisPoints: z.number().int().min(0).max(10_000).nullable(),
+  unresolvedAmbiguityReasonCode: z.string().regex(/^[A-Z][A-Z0-9_]*$/).nullable(),
+}).strict();
+export type MockExtractionSuggestion = z.infer<typeof MockExtractionSuggestionSchema>;
+
+export interface MockEvidenceExtractor {
+  extract(evidence: EvidenceItem): MockExtractionSuggestion;
+}
+
+export function createStaticMockEvidenceExtractor(fixtures: readonly MockExtractionSuggestion[]): MockEvidenceExtractor {
+  const byEvidenceId = new Map<string, MockExtractionSuggestion>();
+  for (const fixture of fixtures) {
+    const parsed = MockExtractionSuggestionSchema.parse(fixture);
+    if (byEvidenceId.has(parsed.evidenceId)) throw new Error("Mock extraction fixture evidence IDs must be unique.");
+    byEvidenceId.set(parsed.evidenceId, parsed);
+  }
+  return {
+    extract(evidence) {
+      const parsedEvidence = EvidenceItemSchema.parse(evidence);
+      const fixture = byEvidenceId.get(parsedEvidence.id);
+      if (fixture === undefined) throw new Error(`No mock extraction fixture exists for evidence ${parsedEvidence.id}.`);
+      return structuredClone(fixture);
+    },
+  };
+}
+
+export const EvidenceEngineInputSchema = z.object({
+  milestone: MilestoneSchema,
+  requirements: z.array(MilestoneRequirementSchema),
+  evidenceItems: z.array(EvidenceItemSchema),
+  evidenceMatches: z.array(EvidenceMatchSchema),
+  verifiedSpend: SettlementMoneyAmountSchema,
+  policyVersion: z.string().min(1),
+  evaluatedAt: TimeSchema,
+  expectedAuthorizedEvaluatorId: IdReferenceSchema,
+  expectedAuthorizedFounderId: IdReferenceSchema,
+}).strict();
+export type EvidenceEngineInput = z.infer<typeof EvidenceEngineInputSchema>;
+
+export const EvidenceEngineResultSchema = z.object({
+  evaluation: MilestoneEvaluationResultSchema,
+  proofGaps: z.array(ProofGapSchema),
+}).strict();
+export type EvidenceEngineResult = z.infer<typeof EvidenceEngineResultSchema>;
+
+function validateEvidenceBoundary(input: EvidenceEngineInput): void {
+  const evidenceIds = new Set<string>();
+  const evidenceHashes = new Set<string>();
+  for (const evidence of input.evidenceItems) {
+    if (evidence.projectId !== input.milestone.projectId) throw new Error("Evidence Engine rejects foreign-project evidence for a milestone evaluation.");
+    if (evidenceIds.has(evidence.id)) throw new Error("Evidence IDs must be unique within the Evidence Engine slice.");
+    if (evidenceHashes.has(evidence.sourceHash)) throw new Error("Canonical evidence hashes must be unique within the Evidence Engine slice.");
+    evidenceIds.add(evidence.id);
+    evidenceHashes.add(evidence.sourceHash);
+  }
+
+  const requirementIds = new Set(input.requirements.map((requirement) => requirement.id));
+  const matchIds = new Set<string>();
+  for (const match of input.evidenceMatches) {
+    if (matchIds.has(match.id)) throw new Error("Evidence match IDs must be unique within the Evidence Engine slice.");
+    if (!evidenceIds.has(match.evidenceId)) throw new Error("Evidence matches must reference evidence in the current milestone slice.");
+    if (!requirementIds.has(match.requirementId)) throw new Error("Evidence matches must reference a requirement in the current milestone slice.");
+    matchIds.add(match.id);
+  }
+}
+
+function humanMatchesForRequirement(input: EvidenceEngineInput, requirementId: string): EvidenceMatch[] {
+  return input.evidenceMatches.filter((match) => match.requirementId === requirementId && match.source === "HUMAN_DECISION");
+}
+
+function aiMatchesForRequirement(input: EvidenceEngineInput, requirementId: string): EvidenceMatch[] {
+  return input.evidenceMatches.filter((match) => match.requirementId === requirementId && match.source === "AI_SUGGESTION");
+}
+
+function buildRequirementObservations(input: EvidenceEngineInput): Record<string, RequirementObservation> {
+  const observations: Record<string, RequirementObservation> = {};
+  for (const requirement of input.requirements) {
+    const humanMatches = humanMatchesForRequirement(input, requirement.id);
+    const aiMatches = aiMatchesForRequirement(input, requirement.id);
+    const humanReferences = humanMatches.map((match) => match.evidenceId).sort(compareByCodePoint);
+    const aiOrHumanSuggestionPresent = humanMatches.length > 0 || aiMatches.length > 0;
+
+    switch (requirement.kind) {
+      case "DELIVERABLE":
+        observations[requirement.id] = { evidenceReferences: humanReferences, deliverableCount: humanReferences.length };
+        break;
+      case "EXPENSE_RECORDS":
+        observations[requirement.id] = { evidenceReferences: humanReferences, receiptCount: humanReferences.length };
+        break;
+      case "FOUNDER_CONFIRMATION":
+        observations[requirement.id] = { evidenceReferences: humanReferences, founderConfirmationPresent: aiOrHumanSuggestionPresent || undefined };
+        break;
+      case "TRANSACTION_MATCH":
+        observations[requirement.id] = { evidenceReferences: humanReferences, transactionMatched: aiOrHumanSuggestionPresent || undefined };
+        break;
+      case "BUSINESS_PURPOSE":
+        observations[requirement.id] = { evidenceReferences: humanReferences, businessPurposePresent: aiOrHumanSuggestionPresent || undefined };
+        break;
+      case "SPEND_LIMIT":
+      case "DUE_DATE":
+      case "HUMAN_APPROVAL":
+        observations[requirement.id] = { evidenceReferences: [] };
+        break;
+    }
+  }
+  return observations;
+}
+
+function detectMissingReceiptGap(input: EvidenceEngineInput, evaluation: MilestoneEvaluationResult): ProofGap[] {
+  const expenseRequirement = input.requirements.find((requirement) => requirement.kind === "EXPENSE_RECORDS" && requirement.required !== false);
+  if (expenseRequirement === undefined) return [];
+  const expenseEvaluation = evaluation.requirementEvaluations.find((item) => item.requirementId === expenseRequirement.id);
+  if (expenseEvaluation === undefined || !expenseEvaluation.reasonCodes.includes("RECEIPT_COUNT_SHORT")) return [];
+  return [ProofGapSchema.parse({
+    id: `proof-gap:${input.milestone.id}:missing-receipt`,
+    milestoneId: input.milestone.id,
+    requirementId: expenseRequirement.id,
+    reasonCode: "RECEIPT_EVIDENCE_MISSING",
+    question: "Please add the missing receipt required for this milestone.",
+    priority: 0,
+    resolvedAt: null,
+  })];
+}
+
+export function evaluateEvidenceEngine(rawInput: EvidenceEngineInput): EvidenceEngineResult {
+  const input = EvidenceEngineInputSchema.parse(rawInput);
+  validateEvidenceBoundary(input);
+  const evaluation = evaluateMilestone({
+    milestone: input.milestone,
+    requirements: input.requirements,
+    observations: buildRequirementObservations(input),
+    evidenceItems: input.evidenceItems,
+    evidenceMatches: input.evidenceMatches,
+    verifiedSpend: input.verifiedSpend,
+    policyVersion: input.policyVersion,
+    evaluatedAt: input.evaluatedAt,
+    approvalRecord: null,
+    expectedAuthorizedEvaluatorId: input.expectedAuthorizedEvaluatorId,
+    expectedAuthorizedFounderId: input.expectedAuthorizedFounderId,
+  });
+  return EvidenceEngineResultSchema.parse({ evaluation, proofGaps: detectMissingReceiptGap(input, evaluation) });
+}
+
+export const ProofRecoveryResultSchema = z.object({
+  input: EvidenceEngineInputSchema,
+  evaluation: MilestoneEvaluationResultSchema,
+  originalGap: ProofGapSchema,
+  resolvedGap: ProofGapSchema,
+  auditEvents: z.array(AuditEventSchema),
+}).strict();
+export type ProofRecoveryResult = z.infer<typeof ProofRecoveryResultSchema>;
+
+export function applyMissingReceiptRecovery(args: {
+  input: EvidenceEngineInput;
+  gap: ProofGap;
+  receipt: EvidenceItem;
+  acceptedMatch: EvidenceMatch;
+  actor: Actor;
+  resolvedAt: string;
+  existingAuditEvents?: readonly AuditEvent[];
+}): ProofRecoveryResult {
+  const input = EvidenceEngineInputSchema.parse(args.input);
+  const gap = ProofGapSchema.parse(args.gap);
+  const receipt = EvidenceItemSchema.parse(args.receipt);
+  const acceptedMatch = EvidenceMatchSchema.parse(args.acceptedMatch);
+  const actor = ActorSchema.parse(args.actor);
+  const resolvedAt = TimeSchema.parse(args.resolvedAt);
+  const existingAuditEvents = (args.existingAuditEvents ?? []).map((event) => AuditEventSchema.parse(event));
+
+  if (gap.resolvedAt !== null || gap.milestoneId !== input.milestone.id) throw new Error("Proof Recovery requires the current unresolved milestone gap.");
+  const requirement = input.requirements.find((candidate) => candidate.id === gap.requirementId);
+  if (requirement?.kind !== "EXPENSE_RECORDS") throw new Error("This bounded Proof Recovery path accepts only the missing-receipt gap.");
+  if (receipt.projectId !== input.milestone.projectId || receipt.kind !== "RECEIPT") throw new Error("Proof Recovery receipt must be a founder-private receipt for the current project.");
+  if (acceptedMatch.source !== "HUMAN_DECISION" || acceptedMatch.evidenceId !== receipt.id || acceptedMatch.requirementId !== gap.requirementId) {
+    throw new Error("Recovered receipt requires an accepted human decision for the exact proof gap requirement.");
+  }
+  if (acceptedMatch.acceptedBy.actorId !== actor.actorId || acceptedMatch.acceptedBy.actorType !== actor.actorType) {
+    throw new Error("Proof Recovery audit actor must be the actor accepting the recovered evidence.");
+  }
+
+  const recoveredInput = EvidenceEngineInputSchema.parse({
+    ...input,
+    evidenceItems: [...input.evidenceItems, receipt],
+    evidenceMatches: [...input.evidenceMatches, acceptedMatch],
+  });
+  const recovered = evaluateEvidenceEngine(recoveredInput);
+  if (recovered.proofGaps.some((candidate) => candidate.id === gap.id)) throw new Error("Recovered receipt did not clear the intended proof gap.");
+
+  const auditEvent = AuditEventSchema.parse({
+    id: `audit:${gap.id}:${receipt.id}`,
+    aggregateType: "PROOF_GAP",
+    aggregateId: gap.id,
+    eventType: "PROOF_RECOVERY_ACCEPTED",
+    actor,
+    idempotencyKey: `recovery:${gap.id}:${receipt.id}`,
+    occurredAt: resolvedAt,
+    details: {
+      proofGapId: gap.id,
+      requirementId: gap.requirementId,
+      evidenceId: receipt.id,
+      evidenceHash: receipt.sourceHash,
+      resolution: "ADDITIONAL_RECEIPT_ACCEPTED",
+    },
+  });
+
+  return ProofRecoveryResultSchema.parse({
+    input: recoveredInput,
+    evaluation: recovered.evaluation,
+    originalGap: gap,
+    resolvedGap: { ...gap, resolvedAt },
+    auditEvents: [...existingAuditEvents, auditEvent],
+  });
+}
+
+export const MilestoneEvaluationPacketSchema = z.object({
+  packetVersion: z.literal(1),
+  milestoneId: IdReferenceSchema,
+  policyVersion: z.string().min(1),
+  evaluationTimestamp: TimeSchema,
+  evidenceIds: z.array(IdReferenceSchema),
+  evidenceHashes: z.array(HashReferenceSchema),
+  requirementOutcomes: z.array(z.object({
+    requirementId: IdReferenceSchema,
+    outcome: RequirementOutcomeSchema,
+    reasonCodes: z.array(MilestoneReasonCodeSchema).min(1),
+  }).strict()),
+  verifiedSpend: SettlementMoneyAmountSchema,
+  unresolvedProofGapIds: z.array(IdReferenceSchema),
+  recommendedNextAction: MilestoneNextActionSchema,
+  deliverableHashCandidate: HashReferenceSchema,
+  reasonHashCandidate: HashReferenceSchema,
+  generatedAt: TimeSchema,
+}).strict();
+export type MilestoneEvaluationPacket = z.infer<typeof MilestoneEvaluationPacketSchema>;
+
+export async function buildMilestoneEvaluationPacket(args: {
+  evaluation: MilestoneEvaluationResult;
+  evidenceItems: readonly EvidenceItem[];
+  verifiedSpend: SettlementMoneyAmount;
+  proofGaps: readonly ProofGap[];
+  generatedAt: string;
+}): Promise<MilestoneEvaluationPacket> {
+  const evaluation = MilestoneEvaluationResultSchema.parse(args.evaluation);
+  const evidenceItems = args.evidenceItems.map((item) => EvidenceItemSchema.parse(item));
+  const verifiedSpend = SettlementMoneyAmountSchema.parse(args.verifiedSpend);
+  const proofGaps = args.proofGaps.map((gap) => ProofGapSchema.parse(gap));
+  const generatedAt = TimeSchema.parse(args.generatedAt);
+
+  const evidenceIds = evidenceItems.map((item) => item.id).sort(compareByCodePoint);
+  const evidenceHashes = evidenceItems.map((item) => item.sourceHash).sort(compareByCodePoint);
+  if (new Set(evidenceIds).size !== evidenceIds.length) throw new Error("Evaluator packet evidence IDs must be unique.");
+  if (new Set(evidenceHashes).size !== evidenceHashes.length) throw new Error("Evaluator packet evidence hashes must be unique.");
+  if (evaluation.erc8183ActionPermitted) throw new Error("Issue #5 evaluator packets cannot authorize an ERC-8183 write.");
+
+  const requirementOutcomes = [...evaluation.requirementEvaluations]
+    .sort((left, right) => compareByCodePoint(left.requirementId, right.requirementId))
+    .map((item) => ({ requirementId: item.requirementId, outcome: item.outcome, reasonCodes: [...item.reasonCodes].sort(compareByCodePoint) }));
+  const unresolvedProofGapIds = proofGaps.filter((gap) => gap.resolvedAt === null).map((gap) => gap.id).sort(compareByCodePoint);
+
+  const deliverableSubject = JSON.stringify([
+    1,
+    evaluation.policyVersion,
+    evaluation.evaluationTimestamp,
+    evidenceIds,
+    evidenceHashes,
+    requirementOutcomes,
+    verifiedSpend.asset,
+    verifiedSpend.atomicUnits,
+  ]);
+  const reasonSubject = JSON.stringify([
+    1,
+    evaluation.policyVersion,
+    evaluation.evaluationTimestamp,
+    requirementOutcomes,
+    unresolvedProofGapIds,
+    evaluation.recommendedNextAction,
+    verifiedSpend.asset,
+    verifiedSpend.atomicUnits,
+  ]);
+
+  return MilestoneEvaluationPacketSchema.parse({
+    packetVersion: 1,
+    milestoneId: evaluation.requirementEvaluations[0]?.requirementId === undefined ? "milestone:unknown" : args.proofGaps[0]?.milestoneId ?? "milestone:launch-ready",
+    policyVersion: evaluation.policyVersion,
+    evaluationTimestamp: evaluation.evaluationTimestamp,
+    evidenceIds,
+    evidenceHashes,
+    requirementOutcomes,
+    verifiedSpend,
+    unresolvedProofGapIds,
+    recommendedNextAction: evaluation.recommendedNextAction,
+    deliverableHashCandidate: await sha256(deliverableSubject),
+    reasonHashCandidate: await sha256(reasonSubject),
+    generatedAt,
+  });
+}
+
+export interface PawPovAiEvidenceScenario {
+  milestone: Milestone;
+  requirements: MilestoneRequirement[];
+  initialInput: EvidenceEngineInput;
+  recoveryReceipt: EvidenceItem;
+  recoveryMatch: EvidenceMatch;
+  authorizedFounder: Actor;
+  authorizedEvaluator: Actor;
+}
+
+export function createPawPovAiEvidenceScenario(): PawPovAiEvidenceScenario {
+  const seed = createPawPovAiSeed();
+  const authorizedFounder = ActorSchema.parse({ actorId: seed.project.founderId, actorType: "FOUNDER" });
+  const authorizedEvaluator = ActorSchema.parse({ actorId: "evaluator:proofspend", actorType: "EVALUATOR" });
+  const selectedSeedRequirements = seed.requirements.filter((requirement) =>
+    requirement.id === "requirement:identity" ||
+    requirement.id === "requirement:expenses" ||
+    requirement.id === "requirement:spend" ||
+    requirement.id === "requirement:confirmation"
+  );
+  const requirements = [
+    ...selectedSeedRequirements,
+    MilestoneRequirementSchema.parse({ id: "requirement:transaction-match", milestoneId: seed.milestone.id, kind: "TRANSACTION_MATCH", description: "Transaction context matches the milestone" }),
+    MilestoneRequirementSchema.parse({ id: "requirement:business-purpose", milestoneId: seed.milestone.id, kind: "BUSINESS_PURPOSE", description: "Business purpose is present" }),
+  ];
+  const milestone = MilestoneSchema.parse({ ...seed.milestone, requirementIds: requirements.map((requirement) => requirement.id) });
+  const submittedAt = "2026-01-20T00:00:00.000Z";
+  const evidence = {
+    deliverable: EvidenceItemSchema.parse({ id: "evidence:pawpovai:deliverable", projectId: seed.project.id, kind: "DELIVERABLE", sourceHash: `sha256:${"1".repeat(64)}`, storageRef: "private://pawpovai/deliverable", visibility: "FOUNDER_PRIVATE", submittedAt }),
+    receiptOne: EvidenceItemSchema.parse({ id: "evidence:pawpovai:receipt:1", projectId: seed.project.id, kind: "RECEIPT", sourceHash: `sha256:${"2".repeat(64)}`, storageRef: "private://pawpovai/receipt/1", visibility: "FOUNDER_PRIVATE", submittedAt }),
+    receiptTwo: EvidenceItemSchema.parse({ id: "evidence:pawpovai:receipt:2", projectId: seed.project.id, kind: "RECEIPT", sourceHash: `sha256:${"3".repeat(64)}`, storageRef: "private://pawpovai/receipt/2", visibility: "FOUNDER_PRIVATE", submittedAt }),
+    confirmation: EvidenceItemSchema.parse({ id: "evidence:pawpovai:confirmation", projectId: seed.project.id, kind: "CONFIRMATION", sourceHash: `sha256:${"4".repeat(64)}`, storageRef: "private://pawpovai/confirmation", visibility: "FOUNDER_PRIVATE", submittedAt }),
+    transaction: EvidenceItemSchema.parse({ id: "evidence:pawpovai:transaction-context", projectId: seed.project.id, kind: "STATEMENT", sourceHash: `sha256:${"5".repeat(64)}`, storageRef: "private://pawpovai/transaction-context", visibility: "FOUNDER_PRIVATE", submittedAt }),
+    purpose: EvidenceItemSchema.parse({ id: "evidence:pawpovai:business-purpose", projectId: seed.project.id, kind: "STATEMENT", sourceHash: `sha256:${"6".repeat(64)}`, storageRef: "private://pawpovai/business-purpose", visibility: "FOUNDER_PRIVATE", submittedAt }),
+  };
+  const humanMatch = (id: string, evidenceId: string, requirementId: string, acceptedBy: Actor): EvidenceMatch => EvidenceMatchSchema.parse({
+    id,
+    evidenceId,
+    requirementId,
+    source: "HUMAN_DECISION",
+    confidenceBasisPoints: null,
+    explanation: "Accepted structured mock evidence.",
+    acceptedBy,
+  });
+
+  const initialInput = EvidenceEngineInputSchema.parse({
+    milestone,
+    requirements,
+    evidenceItems: [evidence.deliverable, evidence.receiptOne, evidence.confirmation, evidence.transaction, evidence.purpose],
+    evidenceMatches: [
+      humanMatch("match:pawpovai:deliverable", evidence.deliverable.id, "requirement:identity", authorizedEvaluator),
+      humanMatch("match:pawpovai:receipt:1", evidence.receiptOne.id, "requirement:expenses", authorizedEvaluator),
+      humanMatch("match:pawpovai:confirmation", evidence.confirmation.id, "requirement:confirmation", authorizedFounder),
+      humanMatch("match:pawpovai:transaction-context", evidence.transaction.id, "requirement:transaction-match", authorizedEvaluator),
+      humanMatch("match:pawpovai:business-purpose", evidence.purpose.id, "requirement:business-purpose", authorizedEvaluator),
+    ],
+    verifiedSpend: SettlementMoneyAmountSchema.parse({ asset: "USDC", atomicUnits: "125000000" }),
+    policyVersion: "policy:pawpovai:v1",
+    evaluatedAt: submittedAt,
+    expectedAuthorizedEvaluatorId: authorizedEvaluator.actorId,
+    expectedAuthorizedFounderId: authorizedFounder.actorId,
+  });
+
+  return {
+    milestone,
+    requirements: structuredClone(requirements),
+    initialInput,
+    recoveryReceipt: evidence.receiptTwo,
+    recoveryMatch: humanMatch("match:pawpovai:receipt:2", evidence.receiptTwo.id, "requirement:expenses", authorizedFounder),
+    authorizedFounder,
+    authorizedEvaluator,
+  };
+}
