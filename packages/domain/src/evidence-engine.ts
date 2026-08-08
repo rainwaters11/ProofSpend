@@ -136,7 +136,6 @@ function aiMatchesForRequirement(input: EvidenceEngineInput, requirementId: stri
 
 function buildRequirementObservations(input: EvidenceEngineInput): Record<string, RequirementObservation> {
   const observations: Record<string, RequirementObservation> = {};
-  const evidenceById = new Map(input.evidenceItems.map((item) => [item.id, item] as const));
   for (const requirement of input.requirements) {
     const humanMatches = humanMatchesForRequirement(input, requirement.id);
     const aiMatches = aiMatchesForRequirement(input, requirement.id);
@@ -147,18 +146,9 @@ function buildRequirementObservations(input: EvidenceEngineInput): Record<string
       case "DELIVERABLE":
         observations[requirement.id] = { evidenceReferences: humanReferences, deliverableCount: humanReferences.length };
         break;
-      case "EXPENSE_RECORDS": {
-        const acceptedReferences = new Set(humanReferences);
-        const pendingReceiptReview = aiMatches.some((match) =>
-          evidenceById.get(match.evidenceId)?.kind === "RECEIPT" && !acceptedReferences.has(match.evidenceId)
-        );
-        observations[requirement.id] = {
-          evidenceReferences: humanReferences,
-          receiptCount: humanReferences.length,
-          pendingEvidenceReview: pendingReceiptReview || undefined,
-        };
+      case "EXPENSE_RECORDS":
+        observations[requirement.id] = { evidenceReferences: humanReferences, receiptCount: humanReferences.length };
         break;
-      }
       case "FOUNDER_CONFIRMATION":
         observations[requirement.id] = { evidenceReferences: humanReferences, founderConfirmationPresent: suggestionPresent || undefined };
         break;
@@ -316,6 +306,7 @@ export type AcceptedEvidenceBinding = z.infer<typeof AcceptedEvidenceBindingSche
 export const MilestoneEvaluationPacketSchema = z.object({
   packetVersion: z.literal(1),
   milestoneId: IdReferenceSchema,
+  milestoneDefinition: MilestoneSchema,
   policyVersion: z.string().min(1),
   evaluationTimestamp: TimeSchema,
   evidenceIds: z.array(IdReferenceSchema),
@@ -365,6 +356,10 @@ export async function buildMilestoneEvaluationPacket(args: {
   }
   if (evaluation.erc8183ActionPermitted) throw new Error("Issue #5 evaluator packets cannot authorize an ERC-8183 write.");
 
+  const milestoneDefinition = MilestoneSchema.parse({
+    ...input.milestone,
+    requirementIds: [...input.milestone.requirementIds].sort(compareByCodePoint),
+  });
   const requirementDefinitions = input.requirements
     .map((requirement) => MilestoneRequirementSchema.parse(requirement))
     .sort((left, right) => compareByCodePoint(left.id, right.id));
@@ -401,7 +396,7 @@ export async function buildMilestoneEvaluationPacket(args: {
 
   const deliverableSubject = JSON.stringify([
     1,
-    input.milestone.id,
+    milestoneDefinition,
     evaluation.policyVersion,
     evaluation.evaluationTimestamp,
     evidenceBindings,
@@ -412,7 +407,7 @@ export async function buildMilestoneEvaluationPacket(args: {
   ]);
   const reasonSubject = JSON.stringify([
     1,
-    input.milestone.id,
+    milestoneDefinition,
     evaluation.policyVersion,
     evaluation.evaluationTimestamp,
     requirementDefinitions,
@@ -426,6 +421,7 @@ export async function buildMilestoneEvaluationPacket(args: {
   return MilestoneEvaluationPacketSchema.parse({
     packetVersion: 1,
     milestoneId: input.milestone.id,
+    milestoneDefinition,
     policyVersion: evaluation.policyVersion,
     evaluationTimestamp: evaluation.evaluationTimestamp,
     evidenceIds,
