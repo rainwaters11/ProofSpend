@@ -126,6 +126,67 @@ describe("bounded Evidence Engine", () => {
     })).toThrow(/idempotency key|audit event ID/i);
   });
 
+  it("allows an exact recovery retry after later unrelated append-only audit history", () => {
+    const scenario = createPawPovAiEvidenceScenario();
+    const first = evaluateEvidenceEngine(scenario.initialInput);
+    const recovered = applyMissingReceiptRecovery({
+      input: scenario.initialInput,
+      gap: first.proofGaps[0],
+      receipt: scenario.recoveryReceipt,
+      acceptedMatch: scenario.recoveryMatch,
+      actor: scenario.authorizedFounder,
+      resolvedAt,
+    });
+    const laterAudit = AuditEventSchema.parse({
+      id: "audit:later-unrelated",
+      aggregateType: "MILESTONE",
+      aggregateId: scenario.milestone.id,
+      eventType: "LATER_UNRELATED_EVENT",
+      actor: scenario.authorizedFounder,
+      idempotencyKey: null,
+      occurredAt: "2026-01-20T00:06:00.000Z",
+      details: { scope: "UNRELATED" },
+    });
+    const retried = applyMissingReceiptRecovery({
+      input: scenario.initialInput,
+      gap: first.proofGaps[0],
+      receipt: scenario.recoveryReceipt,
+      acceptedMatch: scenario.recoveryMatch,
+      actor: scenario.authorizedFounder,
+      resolvedAt,
+      existingAuditEvents: [...recovered.auditEvents, laterAudit],
+    });
+
+    expect(retried.auditEvents).toEqual([...recovered.auditEvents, laterAudit]);
+  });
+
+  it("rejects any conflicting recovery collision even after an exact retry event", () => {
+    const scenario = createPawPovAiEvidenceScenario();
+    const first = evaluateEvidenceEngine(scenario.initialInput);
+    const recovered = applyMissingReceiptRecovery({
+      input: scenario.initialInput,
+      gap: first.proofGaps[0],
+      receipt: scenario.recoveryReceipt,
+      acceptedMatch: scenario.recoveryMatch,
+      actor: scenario.authorizedFounder,
+      resolvedAt,
+    });
+    const conflicting = AuditEventSchema.parse({
+      ...recovered.auditEvents[0],
+      details: { ...recovered.auditEvents[0].details, resolution: "CONFLICTING_RECOVERY" },
+    });
+
+    expect(() => applyMissingReceiptRecovery({
+      input: scenario.initialInput,
+      gap: first.proofGaps[0],
+      receipt: scenario.recoveryReceipt,
+      acceptedMatch: scenario.recoveryMatch,
+      actor: scenario.authorizedFounder,
+      resolvedAt,
+      existingAuditEvents: [recovered.auditEvents[0], conflicting],
+    })).toThrow(/idempotency key|audit event ID/i);
+  });
+
   it("rejects recovery timestamps that predate the evaluated evidence state", () => {
     const scenario = createPawPovAiEvidenceScenario();
     const first = evaluateEvidenceEngine(scenario.initialInput);
@@ -138,6 +199,23 @@ describe("bounded Evidence Engine", () => {
       actor: scenario.authorizedFounder,
       resolvedAt: "2026-01-19T23:59:59.000Z",
     })).toThrow(/time must not precede/i);
+  });
+
+  it("deduplicates repeated accepted evidence references under distinct match IDs", () => {
+    const scenario = createPawPovAiEvidenceScenario();
+    const baseline = evaluateEvidenceEngine(scenario.initialInput);
+    const originalMatch = scenario.initialInput.evidenceMatches.find((match) => match.id === "match:pawpovai:receipt:1");
+    expect(originalMatch).toBeDefined();
+    const retriedMatch = EvidenceMatchSchema.parse({
+      ...originalMatch!,
+      id: "match:pawpovai:receipt:1:retry",
+    });
+    const retried = evaluateEvidenceEngine({
+      ...scenario.initialInput,
+      evidenceMatches: [...scenario.initialInput.evidenceMatches, retriedMatch],
+    });
+
+    expect(retried).toEqual(baseline);
   });
 
   it("keeps AI suggestions separate from accepted HUMAN_DECISION provenance", () => {
@@ -183,6 +261,19 @@ describe("bounded Evidence Engine", () => {
 
     expect(confirmation?.outcome).not.toBe("PASS");
     expect(result.evaluation.status).not.toBe("ELIGIBLE");
+  });
+
+  it("rejects evidence submitted after the evaluation timestamp", () => {
+    const scenario = createPawPovAiEvidenceScenario();
+    const futureEvidence = EvidenceItemSchema.parse({
+      ...scenario.initialInput.evidenceItems[0],
+      submittedAt: "2026-01-20T00:00:01.000Z",
+    });
+
+    expect(() => evaluateEvidenceEngine({
+      ...scenario.initialInput,
+      evidenceItems: [futureEvidence, ...scenario.initialInput.evidenceItems.slice(1)],
+    })).toThrow(/submitted after the evaluation timestamp/i);
   });
 
   it("fails closed on duplicate evidence IDs and duplicate canonical hashes", () => {
@@ -398,6 +489,37 @@ describe("bounded Evidence Engine", () => {
       generatedAt,
     });
     expect(swappedRequirementsPacket.deliverableHashCandidate).not.toBe(baseline.deliverableHashCandidate);
+  });
+
+  it("binds canonical requirement definitions into both packet commitments", async () => {
+    const input = recoveredInput();
+    const baselineResult = evaluateEvidenceEngine(input);
+    const baselinePacket = await buildMilestoneEvaluationPacket({
+      input,
+      evaluation: baselineResult.evaluation,
+      proofGaps: baselineResult.proofGaps,
+      generatedAt,
+    });
+    const changedInput: EvidenceEngineInput = {
+      ...input,
+      requirements: input.requirements.map((requirement) =>
+        requirement.kind === "EXPENSE_RECORDS"
+          ? { ...requirement, requiredCount: 1 }
+          : requirement
+      ),
+    };
+    const changedResult = evaluateEvidenceEngine(changedInput);
+    expect(changedResult.evaluation).toEqual(baselineResult.evaluation);
+    const changedPacket = await buildMilestoneEvaluationPacket({
+      input: changedInput,
+      evaluation: changedResult.evaluation,
+      proofGaps: changedResult.proofGaps,
+      generatedAt,
+    });
+
+    expect(changedPacket.requirementDefinitions).not.toEqual(baselinePacket.requirementDefinitions);
+    expect(changedPacket.deliverableHashCandidate).not.toBe(baselinePacket.deliverableHashCandidate);
+    expect(changedPacket.reasonHashCandidate).not.toBe(baselinePacket.reasonHashCandidate);
   });
 
   it("binds packet hashes and fields to the exact evaluated evidence input", async () => {
