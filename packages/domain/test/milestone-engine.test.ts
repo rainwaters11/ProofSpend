@@ -529,6 +529,34 @@ describe("milestone engine", () => {
     });
   });
 
+  it("rejects future-dated AI evidence before deriving pending review provenance", () => {
+    const oneAcceptedReceipt = baseEvidenceMatches().filter((match) => match.id !== "match:receipt:2");
+    const aiSuggestedReceipt = EvidenceMatchSchema.parse({
+      id: "match:receipt:2:ai:future",
+      source: "AI_SUGGESTION",
+      evidenceId: "evidence:receipt:2",
+      requirementId: "req:expenses",
+      confidenceBasisPoints: 9200,
+      explanation: "AI suggests a future-dated receipt for review.",
+      acceptedBy: null,
+    });
+    const futureEvidenceItems = baseEvidenceItems().map((item) =>
+      item.id === "evidence:receipt:2"
+        ? EvidenceItemSchema.parse({ ...item, submittedAt: "2026-01-20T00:00:01.000Z" })
+        : item
+    );
+
+    expect(() => evaluateMilestone(approvalInput({
+      evidenceItems: futureEvidenceItems,
+      evidenceMatches: [...oneAcceptedReceipt, aiSuggestedReceipt],
+      observations: {
+        ...baseObservations(),
+        "req:expenses": { evidenceReferences: ["evidence:receipt:1"], receiptCount: 1 },
+      },
+      approvalRecord: null,
+    }))).toThrow(/evidence submitted after the evaluation timestamp/i);
+  });
+
   it("requires authorized evaluator/founder identities for accepted HUMAN_DECISION provenance", () => {
     const unauthorizedDeliverableAndReceipt = approvalInput({
       evidenceMatches: baseEvidenceMatches().map((match) => (
