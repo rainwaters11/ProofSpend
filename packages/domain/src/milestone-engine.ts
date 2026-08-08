@@ -216,10 +216,10 @@ const createProvenanceIndex = (
   const evidenceById = new Map<string, EvidenceItem>();
   const evidenceIdsBySourceHash = new Map<string, Set<string>>();
   for (const evidence of input.evidenceItems ?? []) {
+    if (evidence.projectId !== input.milestone.projectId) continue;
     if (Date.parse(evidence.submittedAt) > Date.parse(input.evaluatedAt)) {
       throw new Error("Milestone Engine rejects evidence submitted after the evaluation timestamp.");
     }
-    if (evidence.projectId !== input.milestone.projectId) continue;
     if (evidenceById.has(evidence.id)) throw new Error("Evidence item IDs must be unique within a milestone evaluation.");
     evidenceById.set(evidence.id, evidence);
     const ids = evidenceIdsBySourceHash.get(evidence.sourceHash) ?? new Set<string>();
