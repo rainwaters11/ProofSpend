@@ -10,14 +10,31 @@ test.describe("reduced motion", () => {
     await page.goto("/app/overview");
 
     const trigger = page.getByRole("button", { name: "Open navigation menu" });
-    const start = Date.now();
     await trigger.click();
-    await expect(page.getByRole("dialog")).toBeVisible();
-    const elapsed = Date.now() - start;
 
-    // The global prefers-reduced-motion CSS override zeroes animation and
-    // transition durations, so the drawer should be visible well under the
-    // Sheet's normal (non-reduced) slide-in duration.
-    expect(elapsed).toBeLessThan(500);
+    const dialog = page.getByRole("dialog");
+    await expect(dialog).toBeVisible();
+
+    const durations = await dialog.evaluate((element) => {
+      const styles = window.getComputedStyle(element);
+      return {
+        animation: styles.animationDuration,
+        transition: styles.transitionDuration,
+      };
+    });
+
+    const maximumDurationMs = (value: string) =>
+      Math.max(
+        ...value.split(",").map((duration) => {
+          const normalized = duration.trim();
+          const amount = Number.parseFloat(normalized);
+          return normalized.endsWith("ms") ? amount : amount * 1_000;
+        }),
+      );
+
+    // Assert the actual CSS durations. Visibility alone only proves that the
+    // dialog mounted; it does not prove the slide transition was removed.
+    expect(maximumDurationMs(durations.animation)).toBeLessThanOrEqual(1);
+    expect(maximumDurationMs(durations.transition)).toBeLessThanOrEqual(1);
   });
 });
