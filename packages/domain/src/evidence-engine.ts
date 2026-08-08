@@ -260,11 +260,16 @@ export function applyMissingReceiptRecovery(args: {
     },
   });
   const collidingRecoveryEvents = existingAuditEvents.filter((event) =>
+    (
+      event.aggregateType === "PROOF_GAP" &&
+      event.aggregateId === gap.id &&
+      event.eventType === "PROOF_RECOVERY_ACCEPTED"
+    ) ||
     event.id === auditEvent.id ||
     (auditEvent.idempotencyKey !== null && event.idempotencyKey === auditEvent.idempotencyKey)
   );
   if (collidingRecoveryEvents.some((event) => JSON.stringify(event) !== JSON.stringify(auditEvent))) {
-    throw new Error("Proof Recovery idempotency key or audit event ID is already bound to a conflicting recovery event.");
+    throw new Error("Proof Recovery gap, idempotency key, or audit event ID is already bound to a conflicting recovery event.");
   }
   const isExactRetry = collidingRecoveryEvents.length > 0;
   const resolvedAtMillis = Date.parse(resolvedAt);
