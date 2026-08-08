@@ -251,6 +251,7 @@ const createProvenanceIndex = (
       requirement.aiSuggestedEvidenceByKind[evidence.kind] = suggestedEvidence;
       continue;
     }
+    if (match.acceptedEvidenceHash !== evidence.sourceHash) continue;
     if (!isAllowedDecisionActor(match.acceptedBy, input.expectedAuthorizedFounderId, input.expectedAuthorizedEvaluatorId)) continue;
     requirement.hasAcceptedHumanDecision = true;
     const acceptedEvidence = requirement.acceptedEvidenceByKind[evidence.kind] ?? new Set<string>();
@@ -492,7 +493,7 @@ const serializeCanonicalMilestoneEvaluationApprovalSubject = (input: CanonicalMi
       compareByCodePoint(left.requirementId, right.requirementId) ||
       compareByCodePoint(left.evidenceId, right.evidenceId) ||
       compareByCodePoint(left.id, right.id))
-    .map((match) => [match.id, match.evidenceId, match.requirementId, match.source, match.acceptedBy.actorType, match.acceptedBy.actorId]);
+    .map((match) => [match.id, match.evidenceId, match.acceptedEvidenceHash, match.requirementId, match.source, match.acceptedBy.actorType, match.acceptedBy.actorId]);
   return JSON.stringify([
     1,
     "MILESTONE_EVALUATION",
