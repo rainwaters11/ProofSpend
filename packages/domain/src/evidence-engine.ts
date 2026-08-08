@@ -1,6 +1,7 @@
 import { z } from "zod";
 import {
   MilestoneEvaluationResultSchema,
+  MilestoneEvaluationStatusSchema,
   MilestoneNextActionSchema,
   MilestoneReasonCodeSchema,
   RequirementOutcomeSchema,
@@ -309,10 +310,14 @@ export const AcceptedEvidenceBindingSchema = z.object({
 }).strict();
 export type AcceptedEvidenceBinding = z.infer<typeof AcceptedEvidenceBindingSchema>;
 
+export const MilestonePolicyDefinitionSchema = MilestoneSchema.omit({ status: true }).strict();
+export type MilestonePolicyDefinition = z.infer<typeof MilestonePolicyDefinitionSchema>;
+
 export const MilestoneEvaluationPacketSchema = z.object({
   packetVersion: z.literal(1),
   milestoneId: IdReferenceSchema,
-  milestoneDefinition: MilestoneSchema,
+  milestoneDefinition: MilestonePolicyDefinitionSchema,
+  evaluationStatus: MilestoneEvaluationStatusSchema,
   policyVersion: z.string().min(1),
   evaluationTimestamp: TimeSchema,
   evidenceIds: z.array(IdReferenceSchema),
@@ -362,12 +367,16 @@ export async function buildMilestoneEvaluationPacket(args: {
   }
   if (evaluation.erc8183ActionPermitted) throw new Error("Issue #5 evaluator packets cannot authorize an ERC-8183 write.");
 
-  const milestoneDefinition = MilestoneSchema.parse({
-    ...input.milestone,
+  const milestoneDefinition = MilestonePolicyDefinitionSchema.parse({
+    id: input.milestone.id,
+    projectId: input.milestone.projectId,
+    title: input.milestone.title,
+    proposedAmount: input.milestone.proposedAmount,
     requirementIds: [...input.milestone.requirementIds].sort(compareByCodePoint),
+    dueAt: input.milestone.dueAt,
   });
   const requirementDefinitions = input.requirements
-    .map((requirement) => MilestoneRequirementSchema.parse(requirement))
+    .map((requirement) => MilestoneRequirementSchema.parse({ ...requirement, required: requirement.required ?? true }))
     .sort((left, right) => compareByCodePoint(left.id, right.id));
   const evidenceById = new Map(input.evidenceItems.map((item) => [item.id, item] as const));
   const evidenceBindingKeys = new Set<string>();
@@ -403,6 +412,7 @@ export async function buildMilestoneEvaluationPacket(args: {
   const deliverableSubject = JSON.stringify([
     1,
     milestoneDefinition,
+    evaluation.status,
     evaluation.policyVersion,
     evaluation.evaluationTimestamp,
     evidenceBindings,
@@ -414,6 +424,7 @@ export async function buildMilestoneEvaluationPacket(args: {
   const reasonSubject = JSON.stringify([
     1,
     milestoneDefinition,
+    evaluation.status,
     evaluation.policyVersion,
     evaluation.evaluationTimestamp,
     requirementDefinitions,
@@ -428,6 +439,7 @@ export async function buildMilestoneEvaluationPacket(args: {
     packetVersion: 1,
     milestoneId: input.milestone.id,
     milestoneDefinition,
+    evaluationStatus: evaluation.status,
     policyVersion: evaluation.policyVersion,
     evaluationTimestamp: evaluation.evaluationTimestamp,
     evidenceIds,
