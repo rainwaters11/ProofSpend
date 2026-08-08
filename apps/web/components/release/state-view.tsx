@@ -155,7 +155,7 @@ interface InsufficientBalanceStateProps {
 export function InsufficientBalanceState({
   available,
   required,
-  description = "This mock scenario shows an insufficient balance — no funds are available to release.",
+  description = "The available balance is insufficient for the requested release.",
 }: InsufficientBalanceStateProps) {
   return (
     <div
