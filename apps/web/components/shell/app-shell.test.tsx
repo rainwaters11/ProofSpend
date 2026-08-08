@@ -72,6 +72,22 @@ describe("AppShell", () => {
     expect(markup).toMatch(/<a[^>]*href="#main-content"[^>]*>\s*Skip to main content/);
   });
 
+  it("makes the skip link's target programmatically focusable", () => {
+    const markup = renderToStaticMarkup(
+      <AppShell mode="mock" role="founder">
+        <p>Page content</p>
+      </AppShell>,
+    );
+
+    // A plain <main id="main-content"> is not focusable by default, so the
+    // skip link would move the URL hash without actually moving keyboard
+    // focus. tabIndex={-1} makes it a valid focus target while keeping it
+    // out of the normal Tab order.
+    const mainMatch = markup.match(/<main[^>]*>/);
+    expect(mainMatch).not.toBeNull();
+    expect(mainMatch?.[0]).toContain('tabindex="-1"');
+  });
+
   it("never applies the legacy landing-page class to the app shell main region", () => {
     const markup = renderToStaticMarkup(
       <AppShell mode="mock" role="founder">

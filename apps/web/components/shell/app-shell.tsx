@@ -26,7 +26,7 @@ export function AppShell({ children, mode, role }: AppShellProps) {
       <div className="flex min-w-0 flex-1 flex-col">
         <TopHeader mode={mode} role={role} />
 
-        <main id="main-content" className="flex-1 px-4 pb-24 pt-6 md:pb-6">
+        <main id="main-content" tabIndex={-1} className="flex-1 px-4 pb-24 pt-6 md:pb-6 focus:outline-none">
           {children}
         </main>
       </div>
