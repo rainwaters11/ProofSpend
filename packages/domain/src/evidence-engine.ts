@@ -91,6 +91,7 @@ function validateEvidenceBoundary(input: EvidenceEngineInput): void {
   const evidenceIds = new Set<string>();
   const evidenceHashes = new Set<string>();
   for (const evidence of input.evidenceItems) {
+    if (Date.parse(evidence.submittedAt) > Date.parse(input.evaluatedAt)) throw new Error("Evidence Engine rejects evidence submitted after the evaluation timestamp.");
     if (evidence.projectId !== input.milestone.projectId) throw new Error("Evidence Engine rejects foreign-project evidence for a milestone evaluation.");
     if (evidenceIds.has(evidence.id)) throw new Error("Evidence IDs must be unique within the Evidence Engine slice.");
     if (evidenceHashes.has(evidence.sourceHash)) throw new Error("Canonical evidence hashes must be unique within the Evidence Engine slice.");
@@ -138,7 +139,7 @@ function buildRequirementObservations(input: EvidenceEngineInput): Record<string
   for (const requirement of input.requirements) {
     const humanMatches = humanMatchesForRequirement(input, requirement.id);
     const aiMatches = aiMatchesForRequirement(input, requirement.id);
-    const humanReferences = humanMatches.map((match) => match.evidenceId).sort(compareByCodePoint);
+    const humanReferences = [...new Set(humanMatches.map((match) => match.evidenceId))].sort(compareByCodePoint);
     const suggestionPresent = humanMatches.length > 0 || aiMatches.length > 0;
 
     switch (requirement.kind) {
@@ -242,24 +243,6 @@ export function applyMissingReceiptRecovery(args: {
   if (acceptedMatch.acceptedBy.actorId !== actor.actorId || acceptedMatch.acceptedBy.actorType !== actor.actorType) {
     throw new Error("Proof Recovery audit actor must be the actor accepting the recovered evidence.");
   }
-  const resolvedAtMillis = Date.parse(resolvedAt);
-  if (
-    resolvedAtMillis < Date.parse(input.evaluatedAt) ||
-    resolvedAtMillis < Date.parse(receipt.submittedAt) ||
-    existingAuditEvents.some((event) => Date.parse(event.occurredAt) > resolvedAtMillis)
-  ) {
-    throw new Error("Proof Recovery time must not precede the prior evaluation, recovered receipt, or existing audit history.");
-  }
-
-  const recoveredInput = EvidenceEngineInputSchema.parse({
-    ...input,
-    evidenceItems: [...input.evidenceItems, receipt],
-    evidenceMatches: [...input.evidenceMatches, acceptedMatch],
-    evaluatedAt: resolvedAt,
-  });
-  const recovered = evaluateEvidenceEngine(recoveredInput);
-  if (recovered.proofGaps.some((candidate) => candidate.id === gap.id)) throw new Error("Recovered receipt did not clear the intended proof gap.");
-
   const auditEvent = AuditEventSchema.parse({
     id: `audit:${gap.id}:${receipt.id}`,
     aggregateType: "PROOF_GAP",
@@ -276,14 +259,33 @@ export function applyMissingReceiptRecovery(args: {
       resolution: "ADDITIONAL_RECEIPT_ACCEPTED",
     },
   });
-  const existingRecoveryEvent = existingAuditEvents.find((event) =>
+  const collidingRecoveryEvents = existingAuditEvents.filter((event) =>
     event.id === auditEvent.id ||
     (auditEvent.idempotencyKey !== null && event.idempotencyKey === auditEvent.idempotencyKey)
   );
-  if (existingRecoveryEvent !== undefined && JSON.stringify(existingRecoveryEvent) !== JSON.stringify(auditEvent)) {
+  if (collidingRecoveryEvents.some((event) => JSON.stringify(event) !== JSON.stringify(auditEvent))) {
     throw new Error("Proof Recovery idempotency key or audit event ID is already bound to a conflicting recovery event.");
   }
-  const auditEvents = existingRecoveryEvent === undefined ? [...existingAuditEvents, auditEvent] : existingAuditEvents;
+  const isExactRetry = collidingRecoveryEvents.length > 0;
+  const resolvedAtMillis = Date.parse(resolvedAt);
+  if (
+    resolvedAtMillis < Date.parse(input.evaluatedAt) ||
+    resolvedAtMillis < Date.parse(receipt.submittedAt) ||
+    (!isExactRetry && existingAuditEvents.some((event) => Date.parse(event.occurredAt) > resolvedAtMillis))
+  ) {
+    throw new Error("Proof Recovery time must not precede the prior evaluation, recovered receipt, or existing audit history.");
+  }
+
+  const recoveredInput = EvidenceEngineInputSchema.parse({
+    ...input,
+    evidenceItems: [...input.evidenceItems, receipt],
+    evidenceMatches: [...input.evidenceMatches, acceptedMatch],
+    evaluatedAt: resolvedAt,
+  });
+  const recovered = evaluateEvidenceEngine(recoveredInput);
+  if (recovered.proofGaps.some((candidate) => candidate.id === gap.id)) throw new Error("Recovered receipt did not clear the intended proof gap.");
+
+  const auditEvents = isExactRetry ? existingAuditEvents : [...existingAuditEvents, auditEvent];
 
   return ProofRecoveryResultSchema.parse({
     input: recoveredInput,
@@ -309,6 +311,7 @@ export const MilestoneEvaluationPacketSchema = z.object({
   evidenceIds: z.array(IdReferenceSchema),
   evidenceHashes: z.array(HashReferenceSchema),
   evidenceBindings: z.array(AcceptedEvidenceBindingSchema),
+  requirementDefinitions: z.array(MilestoneRequirementSchema),
   requirementOutcomes: z.array(z.object({
     requirementId: IdReferenceSchema,
     outcome: RequirementOutcomeSchema,
@@ -352,6 +355,9 @@ export async function buildMilestoneEvaluationPacket(args: {
   }
   if (evaluation.erc8183ActionPermitted) throw new Error("Issue #5 evaluator packets cannot authorize an ERC-8183 write.");
 
+  const requirementDefinitions = input.requirements
+    .map((requirement) => MilestoneRequirementSchema.parse(requirement))
+    .sort((left, right) => compareByCodePoint(left.id, right.id));
   const evidenceById = new Map(input.evidenceItems.map((item) => [item.id, item] as const));
   const evidenceBindingKeys = new Set<string>();
   const evidenceBindings = input.evidenceMatches
@@ -389,6 +395,7 @@ export async function buildMilestoneEvaluationPacket(args: {
     evaluation.policyVersion,
     evaluation.evaluationTimestamp,
     evidenceBindings,
+    requirementDefinitions,
     requirementOutcomes,
     input.verifiedSpend.asset,
     input.verifiedSpend.atomicUnits,
@@ -398,6 +405,7 @@ export async function buildMilestoneEvaluationPacket(args: {
     input.milestone.id,
     evaluation.policyVersion,
     evaluation.evaluationTimestamp,
+    requirementDefinitions,
     requirementOutcomes,
     suppliedUnresolvedGapIds,
     evaluation.recommendedNextAction,
@@ -413,6 +421,7 @@ export async function buildMilestoneEvaluationPacket(args: {
     evidenceIds,
     evidenceHashes,
     evidenceBindings,
+    requirementDefinitions,
     requirementOutcomes,
     verifiedSpend: input.verifiedSpend,
     unresolvedProofGapIds: suppliedUnresolvedGapIds,
