@@ -108,8 +108,25 @@ function validateEvidenceBoundary(input: EvidenceEngineInput): void {
   }
 }
 
+function isAuthorizedHumanDecision(input: EvidenceEngineInput, match: EvidenceMatch): boolean {
+  if (match.source !== "HUMAN_DECISION") return false;
+  const requirement = input.requirements.find((candidate) => candidate.id === match.requirementId);
+  if (requirement === undefined) return false;
+  if (requirement.kind === "FOUNDER_CONFIRMATION") {
+    return match.acceptedBy.actorType === "FOUNDER" && match.acceptedBy.actorId === input.expectedAuthorizedFounderId;
+  }
+  return (
+    (match.acceptedBy.actorType === "FOUNDER" && match.acceptedBy.actorId === input.expectedAuthorizedFounderId) ||
+    (match.acceptedBy.actorType === "EVALUATOR" && match.acceptedBy.actorId === input.expectedAuthorizedEvaluatorId)
+  );
+}
+
+function policyEvidenceMatches(input: EvidenceEngineInput): EvidenceMatch[] {
+  return input.evidenceMatches.filter((match) => match.source === "AI_SUGGESTION" || isAuthorizedHumanDecision(input, match));
+}
+
 function humanMatchesForRequirement(input: EvidenceEngineInput, requirementId: string): EvidenceMatch[] {
-  return input.evidenceMatches.filter((match) => match.requirementId === requirementId && match.source === "HUMAN_DECISION");
+  return input.evidenceMatches.filter((match) => match.requirementId === requirementId && isAuthorizedHumanDecision(input, match));
 }
 
 function aiMatchesForRequirement(input: EvidenceEngineInput, requirementId: string): EvidenceMatch[] {
@@ -174,7 +191,7 @@ export function evaluateEvidenceEngine(rawInput: EvidenceEngineInput): EvidenceE
     requirements: input.requirements,
     observations: buildRequirementObservations(input),
     evidenceItems: input.evidenceItems,
-    evidenceMatches: input.evidenceMatches,
+    evidenceMatches: policyEvidenceMatches(input),
     verifiedSpend: input.verifiedSpend,
     policyVersion: input.policyVersion,
     evaluatedAt: input.evaluatedAt,
@@ -225,11 +242,20 @@ export function applyMissingReceiptRecovery(args: {
   if (acceptedMatch.acceptedBy.actorId !== actor.actorId || acceptedMatch.acceptedBy.actorType !== actor.actorType) {
     throw new Error("Proof Recovery audit actor must be the actor accepting the recovered evidence.");
   }
+  const resolvedAtMillis = Date.parse(resolvedAt);
+  if (
+    resolvedAtMillis < Date.parse(input.evaluatedAt) ||
+    resolvedAtMillis < Date.parse(receipt.submittedAt) ||
+    existingAuditEvents.some((event) => Date.parse(event.occurredAt) > resolvedAtMillis)
+  ) {
+    throw new Error("Proof Recovery time must not precede the prior evaluation, recovered receipt, or existing audit history.");
+  }
 
   const recoveredInput = EvidenceEngineInputSchema.parse({
     ...input,
     evidenceItems: [...input.evidenceItems, receipt],
     evidenceMatches: [...input.evidenceMatches, acceptedMatch],
+    evaluatedAt: resolvedAt,
   });
   const recovered = evaluateEvidenceEngine(recoveredInput);
   if (recovered.proofGaps.some((candidate) => candidate.id === gap.id)) throw new Error("Recovered receipt did not clear the intended proof gap.");
@@ -307,8 +333,14 @@ export async function buildMilestoneEvaluationPacket(args: {
   }
   if (evaluation.erc8183ActionPermitted) throw new Error("Issue #5 evaluator packets cannot authorize an ERC-8183 write.");
 
-  const evidenceIds = input.evidenceItems.map((item) => item.id).sort(compareByCodePoint);
-  const evidenceHashes = input.evidenceItems.map((item) => item.sourceHash).sort(compareByCodePoint);
+  const acceptedEvidenceIdSet = new Set(
+    input.evidenceMatches
+      .filter((match) => isAuthorizedHumanDecision(input, match))
+      .map((match) => match.evidenceId),
+  );
+  const acceptedEvidence = input.evidenceItems.filter((item) => acceptedEvidenceIdSet.has(item.id));
+  const evidenceIds = acceptedEvidence.map((item) => item.id).sort(compareByCodePoint);
+  const evidenceHashes = acceptedEvidence.map((item) => item.sourceHash).sort(compareByCodePoint);
   const requirementOutcomes = [...evaluation.requirementEvaluations]
     .sort((left, right) => compareByCodePoint(left.requirementId, right.requirementId))
     .map((item) => ({ requirementId: item.requirementId, outcome: item.outcome, reasonCodes: [...item.reasonCodes].sort(compareByCodePoint) }));
