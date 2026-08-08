@@ -211,7 +211,11 @@ export function applyMissingReceiptRecovery(args: {
   const resolvedAt = TimeSchema.parse(args.resolvedAt);
   const existingAuditEvents = (args.existingAuditEvents ?? []).map((event) => AuditEventSchema.parse(event));
 
-  if (gap.resolvedAt !== null || gap.milestoneId !== input.milestone.id) throw new Error("Proof Recovery requires the current unresolved milestone gap.");
+  const current = evaluateEvidenceEngine(input);
+  const currentGap = current.proofGaps.find((candidate) => candidate.id === gap.id);
+  if (gap.resolvedAt !== null || currentGap === undefined || JSON.stringify(currentGap) !== JSON.stringify(gap)) {
+    throw new Error("Proof Recovery requires the exact current unresolved proof gap.");
+  }
   const requirement = input.requirements.find((candidate) => candidate.id === gap.requirementId);
   if (requirement?.kind !== "EXPENSE_RECORDS") throw new Error("This bounded Proof Recovery path accepts only the missing-receipt gap.");
   if (receipt.projectId !== input.milestone.projectId || receipt.kind !== "RECEIPT") throw new Error("Proof Recovery receipt must be a founder-private receipt for the current project.");
