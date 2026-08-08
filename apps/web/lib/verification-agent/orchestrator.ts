@@ -184,6 +184,10 @@ export async function runVerificationAgent(
     message: "Run paused pending a separately authenticated founder receipt correction.",
   });
 
+  if (trace.length > MAX_ACTIVITY_EVENTS) {
+    throw new Error("AGENT_MAX_ACTIVITY_EVENTS_EXCEEDED");
+  }
+
   return VerificationAgentResultSchema.parse({
     runId,
     status: "CORRECTION_REQUIRED",

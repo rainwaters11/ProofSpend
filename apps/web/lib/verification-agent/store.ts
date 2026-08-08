@@ -13,6 +13,7 @@ interface StoredVerificationRun {
   authorizedActorId: string;
   run: VerificationAgentResult;
   handoff: { approval: ApprovalDecision; result: HandoffResult } | null;
+  handoffAttempts: Array<{ approval: ApprovalDecision; result: HandoffResult }>;
 }
 
 const runs = new Map<string, StoredVerificationRun>();
@@ -26,6 +27,7 @@ export function saveVerificationAgentRun(args: {
     authorizedActorId: args.authorizedActorId,
     run: VerificationAgentResultSchema.parse(structuredClone(args.run)),
     handoff: null,
+    handoffAttempts: [],
   });
 }
 
@@ -59,12 +61,33 @@ export function persistApprovedHandoff(args: {
   ) {
     return false;
   }
-  stored.handoff = {
+  const handoff = parseHandoffAttempt(args);
+  stored.handoff = handoff;
+  stored.handoffAttempts.push(handoff);
+  consumedProposalKeys.add(stored.run.proposal.idempotencyKey);
+  return true;
+}
+
+export function recordRejectedHandoff(args: {
+  runId: string;
+  approval: ApprovalDecision;
+  result: HandoffResult;
+}): void {
+  const stored = runs.get(args.runId);
+  if (stored === undefined) {
+    throw new Error("VERIFICATION_RUN_NOT_FOUND");
+  }
+  stored.handoffAttempts.push(parseHandoffAttempt(args));
+}
+
+function parseHandoffAttempt(args: {
+  approval: ApprovalDecision;
+  result: HandoffResult;
+}) {
+  return {
     approval: ApprovalDecisionSchema.parse(structuredClone(args.approval)),
     result: HandoffResultSchema.parse(structuredClone(args.result)),
   };
-  consumedProposalKeys.add(stored.run.proposal.idempotencyKey);
-  return true;
 }
 
 export function resetVerificationAgentStoreForTest(): void {

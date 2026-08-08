@@ -9,6 +9,7 @@ import {
   handoffApprovedProposal,
   loadVerificationAgentRun,
   persistApprovedHandoff,
+  recordRejectedHandoff,
 } from "@/lib/verification-agent";
 import { z } from "zod";
 
@@ -35,6 +36,11 @@ export async function POST(request: Request) {
       }),
     );
     if (result.status !== "HANDOFF_READY") {
+      recordRejectedHandoff({
+        runId: stored.run.runId,
+        approval: parsedBody.approval,
+        result,
+      });
       return NextResponse.json({ error: "HANDOFF_REJECTED" }, { status: 422 });
     }
     if (
