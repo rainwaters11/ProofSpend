@@ -139,8 +139,8 @@ docs/                      Architecture, roadmap, decisions, and upstream audits
 
 ### Requirements
 
-- Node.js 20.18.2 or newer
-- Bun 1.2.14 or newer
+- Node.js 22.6.0 through 22.x (22.23.2 is pinned in `.nvmrc` and CI)
+- Bun 1.2.14
 
 ```bash
 bun install --frozen-lockfile
