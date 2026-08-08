@@ -24,7 +24,6 @@ import {
   type Milestone,
   type MilestoneRequirement,
   type ProofGap,
-  type SettlementMoneyAmount,
 } from "./models";
 import { createPawPovAiSeed } from "./seed";
 
@@ -279,65 +278,70 @@ export const MilestoneEvaluationPacketSchema = z.object({
 export type MilestoneEvaluationPacket = z.infer<typeof MilestoneEvaluationPacketSchema>;
 
 export async function buildMilestoneEvaluationPacket(args: {
-  milestoneId: string;
+  input: EvidenceEngineInput;
   evaluation: MilestoneEvaluationResult;
-  evidenceItems: readonly EvidenceItem[];
-  verifiedSpend: SettlementMoneyAmount;
   proofGaps: readonly ProofGap[];
   generatedAt: string;
 }): Promise<MilestoneEvaluationPacket> {
-  const milestoneId = IdReferenceSchema.parse(args.milestoneId);
+  const input = EvidenceEngineInputSchema.parse(args.input);
   const evaluation = MilestoneEvaluationResultSchema.parse(args.evaluation);
-  const evidenceItems = args.evidenceItems.map((item) => EvidenceItemSchema.parse(item));
-  const verifiedSpend = SettlementMoneyAmountSchema.parse(args.verifiedSpend);
   const proofGaps = args.proofGaps.map((gap) => ProofGapSchema.parse(gap));
   const generatedAt = TimeSchema.parse(args.generatedAt);
+  validateEvidenceBoundary(input);
 
-  if (proofGaps.some((gap) => gap.milestoneId !== milestoneId)) throw new Error("Evaluator packet proof gaps must belong to the exact milestone.");
-  const evidenceIds = evidenceItems.map((item) => item.id).sort(compareByCodePoint);
-  const evidenceHashes = evidenceItems.map((item) => item.sourceHash).sort(compareByCodePoint);
-  if (new Set(evidenceIds).size !== evidenceIds.length) throw new Error("Evaluator packet evidence IDs must be unique.");
-  if (new Set(evidenceHashes).size !== evidenceHashes.length) throw new Error("Evaluator packet evidence hashes must be unique.");
+  const recomputed = evaluateEvidenceEngine(input);
+  if (JSON.stringify(recomputed.evaluation) !== JSON.stringify(evaluation)) {
+    throw new Error("Evaluator packet evaluation must match the exact current Evidence Engine input.");
+  }
+  if (proofGaps.some((gap) => gap.milestoneId !== input.milestone.id || !input.milestone.requirementIds.includes(gap.requirementId))) {
+    throw new Error("Evaluator packet proof gaps must belong to the exact milestone and requirement set.");
+  }
+  const suppliedUnresolvedGapIds = proofGaps.filter((gap) => gap.resolvedAt === null).map((gap) => gap.id).sort(compareByCodePoint);
+  const currentUnresolvedGapIds = recomputed.proofGaps.map((gap) => gap.id).sort(compareByCodePoint);
+  if (JSON.stringify(suppliedUnresolvedGapIds) !== JSON.stringify(currentUnresolvedGapIds)) {
+    throw new Error("Evaluator packet unresolved proof gaps must match the current Evidence Engine result.");
+  }
   if (evaluation.erc8183ActionPermitted) throw new Error("Issue #5 evaluator packets cannot authorize an ERC-8183 write.");
 
+  const evidenceIds = input.evidenceItems.map((item) => item.id).sort(compareByCodePoint);
+  const evidenceHashes = input.evidenceItems.map((item) => item.sourceHash).sort(compareByCodePoint);
   const requirementOutcomes = [...evaluation.requirementEvaluations]
     .sort((left, right) => compareByCodePoint(left.requirementId, right.requirementId))
     .map((item) => ({ requirementId: item.requirementId, outcome: item.outcome, reasonCodes: [...item.reasonCodes].sort(compareByCodePoint) }));
-  const unresolvedProofGapIds = proofGaps.filter((gap) => gap.resolvedAt === null).map((gap) => gap.id).sort(compareByCodePoint);
 
   const deliverableSubject = JSON.stringify([
     1,
-    milestoneId,
+    input.milestone.id,
     evaluation.policyVersion,
     evaluation.evaluationTimestamp,
     evidenceIds,
     evidenceHashes,
     requirementOutcomes,
-    verifiedSpend.asset,
-    verifiedSpend.atomicUnits,
+    input.verifiedSpend.asset,
+    input.verifiedSpend.atomicUnits,
   ]);
   const reasonSubject = JSON.stringify([
     1,
-    milestoneId,
+    input.milestone.id,
     evaluation.policyVersion,
     evaluation.evaluationTimestamp,
     requirementOutcomes,
-    unresolvedProofGapIds,
+    suppliedUnresolvedGapIds,
     evaluation.recommendedNextAction,
-    verifiedSpend.asset,
-    verifiedSpend.atomicUnits,
+    input.verifiedSpend.asset,
+    input.verifiedSpend.atomicUnits,
   ]);
 
   return MilestoneEvaluationPacketSchema.parse({
     packetVersion: 1,
-    milestoneId,
+    milestoneId: input.milestone.id,
     policyVersion: evaluation.policyVersion,
     evaluationTimestamp: evaluation.evaluationTimestamp,
     evidenceIds,
     evidenceHashes,
     requirementOutcomes,
-    verifiedSpend,
-    unresolvedProofGapIds,
+    verifiedSpend: input.verifiedSpend,
+    unresolvedProofGapIds: suppliedUnresolvedGapIds,
     recommendedNextAction: evaluation.recommendedNextAction,
     deliverableHashCandidate: await sha256(deliverableSubject),
     reasonHashCandidate: await sha256(reasonSubject),
