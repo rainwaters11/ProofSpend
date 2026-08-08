@@ -481,6 +481,54 @@ describe("milestone engine", () => {
     expect(noAuthorizedConfirmationResult.requirementEvaluations.find((item) => item.requirementId === "req:confirmation")?.outcome).not.toBe("PASS");
   });
 
+  it("derives pending receipt review only from validated AI provenance", () => {
+    const oneAcceptedReceipt = baseEvidenceMatches().filter((match) => match.id !== "match:receipt:2");
+    const forgedFlagInput = approvalInput({
+      observations: {
+        ...baseObservations(),
+        "req:expenses": {
+          evidenceReferences: ["evidence:receipt:1"],
+          receiptCount: 1,
+          pendingEvidenceReview: true,
+        },
+      },
+      evidenceMatches: oneAcceptedReceipt,
+    });
+    const forgedFlagResult = evaluateMilestone({ ...forgedFlagInput, approvalRecord: null });
+
+    expect(forgedFlagResult.status).toBe("INCOMPLETE");
+    expect(forgedFlagResult.recommendedNextAction).toBe("PROVIDE_EVIDENCE");
+    expect(forgedFlagResult.requirementEvaluations.find((item) => item.requirementId === "req:expenses")).toMatchObject({
+      outcome: "FAIL",
+      reasonCodes: ["RECEIPT_COUNT_SHORT"],
+    });
+
+    const aiSuggestedReceipt = EvidenceMatchSchema.parse({
+      id: "match:receipt:2:ai",
+      source: "AI_SUGGESTION",
+      evidenceId: "evidence:receipt:2",
+      requirementId: "req:expenses",
+      confidenceBasisPoints: 9200,
+      explanation: "AI suggests the second uploaded receipt for review.",
+      acceptedBy: null,
+    });
+    const corroboratedInput = approvalInput({
+      observations: {
+        ...baseObservations(),
+        "req:expenses": { evidenceReferences: ["evidence:receipt:1"], receiptCount: 1 },
+      },
+      evidenceMatches: [...oneAcceptedReceipt, aiSuggestedReceipt],
+    });
+    const corroboratedResult = evaluateMilestone({ ...corroboratedInput, approvalRecord: null });
+
+    expect(corroboratedResult.status).toBe("NEEDS_REVIEW");
+    expect(corroboratedResult.recommendedNextAction).toBe("REQUEST_HUMAN_REVIEW");
+    expect(corroboratedResult.requirementEvaluations.find((item) => item.requirementId === "req:expenses")).toMatchObject({
+      outcome: "REVIEW",
+      reasonCodes: ["EVIDENCE_MISSING"],
+    });
+  });
+
   it("requires authorized evaluator/founder identities for accepted HUMAN_DECISION provenance", () => {
     const unauthorizedDeliverableAndReceipt = approvalInput({
       evidenceMatches: baseEvidenceMatches().map((match) => (
