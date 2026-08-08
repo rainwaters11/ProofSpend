@@ -39,7 +39,10 @@ export function replaceVerificationAgentRun(args: {
   if (stored === undefined || stored.authorizedActorId !== args.authorizedActorId) {
     throw new Error("VERIFICATION_RUN_NOT_FOUND");
   }
-  saveVerificationAgentRun(args);
+  runs.set(args.run.runId, {
+    ...stored,
+    run: VerificationAgentResultSchema.parse(structuredClone(args.run)),
+  });
 }
 
 export function loadVerificationAgentRun(runId: string): StoredVerificationRun | null {
