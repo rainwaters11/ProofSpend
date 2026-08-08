@@ -112,6 +112,8 @@ function validateEvidenceBoundary(input: EvidenceEngineInput): void {
 
 function isAuthorizedHumanDecision(input: EvidenceEngineInput, match: EvidenceMatch): boolean {
   if (match.source !== "HUMAN_DECISION") return false;
+  const evidence = input.evidenceItems.find((candidate) => candidate.id === match.evidenceId);
+  if (evidence === undefined || match.acceptedEvidenceHash !== evidence.sourceHash) return false;
   const requirement = input.requirements.find((candidate) => candidate.id === match.requirementId);
   if (requirement === undefined) return false;
   if (requirement.kind === "FOUNDER_CONFIRMATION") {
@@ -243,6 +245,9 @@ export function applyMissingReceiptRecovery(args: {
   }
   if (acceptedMatch.acceptedBy.actorId !== actor.actorId || acceptedMatch.acceptedBy.actorType !== actor.actorType) {
     throw new Error("Proof Recovery audit actor must be the actor accepting the recovered evidence.");
+  }
+  if (acceptedMatch.acceptedEvidenceHash !== receipt.sourceHash) {
+    throw new Error("Proof Recovery decision must bind the exact accepted receipt content hash.");
   }
   const auditEvent = AuditEventSchema.parse({
     id: `audit:${gap.id}:${receipt.id}`,
@@ -502,11 +507,12 @@ export function createPawPovAiEvidenceScenario(): PawPovAiEvidenceScenario {
     transaction: EvidenceItemSchema.parse({ id: "evidence:pawpovai:transaction-context", projectId: seed.project.id, kind: "STATEMENT", sourceHash: `sha256:${"5".repeat(64)}`, storageRef: "private://pawpovai/transaction-context", visibility: "FOUNDER_PRIVATE", submittedAt }),
     purpose: EvidenceItemSchema.parse({ id: "evidence:pawpovai:business-purpose", projectId: seed.project.id, kind: "STATEMENT", sourceHash: `sha256:${"6".repeat(64)}`, storageRef: "private://pawpovai/business-purpose", visibility: "FOUNDER_PRIVATE", submittedAt }),
   };
-  const humanMatch = (id: string, evidenceId: string, requirementId: string, acceptedBy: Actor): EvidenceMatch => EvidenceMatchSchema.parse({
+  const humanMatch = (id: string, acceptedEvidence: EvidenceItem, requirementId: string, acceptedBy: Actor): EvidenceMatch => EvidenceMatchSchema.parse({
     id,
-    evidenceId,
+    evidenceId: acceptedEvidence.id,
     requirementId,
     source: "HUMAN_DECISION",
+    acceptedEvidenceHash: acceptedEvidence.sourceHash,
     confidenceBasisPoints: null,
     explanation: "Accepted structured mock evidence.",
     acceptedBy,
@@ -517,13 +523,13 @@ export function createPawPovAiEvidenceScenario(): PawPovAiEvidenceScenario {
     requirements,
     evidenceItems: [evidence.deliverable, evidence.landing, evidence.flyer, evidence.receiptOne, evidence.confirmation, evidence.transaction, evidence.purpose],
     evidenceMatches: [
-      humanMatch("match:pawpovai:deliverable", evidence.deliverable.id, "requirement:identity", authorizedEvaluator),
-      humanMatch("match:pawpovai:landing", evidence.landing.id, "requirement:landing", authorizedEvaluator),
-      humanMatch("match:pawpovai:flyer", evidence.flyer.id, "requirement:flyer", authorizedEvaluator),
-      humanMatch("match:pawpovai:receipt:1", evidence.receiptOne.id, "requirement:expenses", authorizedEvaluator),
-      humanMatch("match:pawpovai:confirmation", evidence.confirmation.id, "requirement:confirmation", authorizedFounder),
-      humanMatch("match:pawpovai:transaction-context", evidence.transaction.id, "requirement:transaction-match", authorizedEvaluator),
-      humanMatch("match:pawpovai:business-purpose", evidence.purpose.id, "requirement:business-purpose", authorizedEvaluator),
+      humanMatch("match:pawpovai:deliverable", evidence.deliverable, "requirement:identity", authorizedEvaluator),
+      humanMatch("match:pawpovai:landing", evidence.landing, "requirement:landing", authorizedEvaluator),
+      humanMatch("match:pawpovai:flyer", evidence.flyer, "requirement:flyer", authorizedEvaluator),
+      humanMatch("match:pawpovai:receipt:1", evidence.receiptOne, "requirement:expenses", authorizedEvaluator),
+      humanMatch("match:pawpovai:confirmation", evidence.confirmation, "requirement:confirmation", authorizedFounder),
+      humanMatch("match:pawpovai:transaction-context", evidence.transaction, "requirement:transaction-match", authorizedEvaluator),
+      humanMatch("match:pawpovai:business-purpose", evidence.purpose, "requirement:business-purpose", authorizedEvaluator),
     ],
     verifiedSpend: SettlementMoneyAmountSchema.parse({ asset: "USDC", atomicUnits: "125000000" }),
     policyVersion: "policy:pawpovai:v1",
@@ -537,7 +543,7 @@ export function createPawPovAiEvidenceScenario(): PawPovAiEvidenceScenario {
     requirements: structuredClone(requirements),
     initialInput,
     recoveryReceipt: evidence.receiptTwo,
-    recoveryMatch: humanMatch("match:pawpovai:receipt:2", evidence.receiptTwo.id, "requirement:expenses", authorizedFounder),
+    recoveryMatch: humanMatch("match:pawpovai:receipt:2", evidence.receiptTwo, "requirement:expenses", authorizedFounder),
     authorizedFounder,
     authorizedEvaluator,
   };
