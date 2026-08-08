@@ -34,15 +34,17 @@ export async function POST(request: Request) {
         authenticatedActorId: authorizedActorId,
       }),
     );
+    if (result.status !== "HANDOFF_READY") {
+      return NextResponse.json({ error: "HANDOFF_REJECTED" }, { status: 422 });
+    }
     if (
-      result.status !== "HANDOFF_READY" ||
       !persistApprovedHandoff({
         runId: stored.run.runId,
         approval: parsedBody.approval,
         result,
       })
     ) {
-      return NextResponse.json({ error: "HANDOFF_DUPLICATE_OR_REJECTED" }, { status: 409 });
+      return NextResponse.json({ error: "HANDOFF_DUPLICATE" }, { status: 409 });
     }
     return NextResponse.json(result);
   } catch (error) {

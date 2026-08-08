@@ -33,7 +33,8 @@ export function replaceVerificationAgentRun(args: {
   authorizedActorId: string;
   run: VerificationAgentResult;
 }): void {
-  if (!runs.has(args.run.runId)) {
+  const stored = runs.get(args.run.runId);
+  if (stored === undefined || stored.authorizedActorId !== args.authorizedActorId) {
     throw new Error("VERIFICATION_RUN_NOT_FOUND");
   }
   saveVerificationAgentRun(args);
