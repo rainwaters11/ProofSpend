@@ -3,16 +3,23 @@ import { NextResponse } from "next/server";
 import {
   ApprovalDecisionSchema,
   HandoffResultSchema,
+  VerificationAgentResultSchema,
   handoffApprovedProposal,
-  runVerificationAgent,
 } from "@/lib/verification-agent";
+import { z } from "zod";
+
+const HandoffRequestSchema = z
+  .object({
+    run: VerificationAgentResultSchema,
+    approval: ApprovalDecisionSchema,
+  })
+  .strict();
 
 export async function POST(request: Request) {
   try {
-    const parsedBody = ApprovalDecisionSchema.parse(await request.json());
-    const run = await runVerificationAgent();
+    const parsedBody = HandoffRequestSchema.parse(await request.json());
     const result = HandoffResultSchema.parse(
-      handoffApprovedProposal({ run, approval: parsedBody }),
+      handoffApprovedProposal({ run: parsedBody.run, approval: parsedBody.approval }),
     );
     return NextResponse.json(result);
   } catch (error) {

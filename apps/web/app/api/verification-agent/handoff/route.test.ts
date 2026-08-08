@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { runVerificationAgent } from "@/lib/verification-agent";
+
 import { POST } from "./route";
 
 const original = {
@@ -25,18 +27,22 @@ describe("POST /api/verification-agent/handoff", () => {
   });
 
   it("accepts valid approval handoff and keeps mock execution truthful", async () => {
+    const run = await runVerificationAgent({ now: "2026-01-21T00:00:00.000Z" });
     const request = new Request("http://localhost/api/verification-agent/handoff", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        approvalId: "approval:test",
-        intentId: "intent:release:pawpovai:milestone-launch-ready",
-        authorizedActorRole: "FOUNDER",
-        authorizedActorId: "founder:fictional",
-        decision: "APPROVED",
-        decidedAt: "2026-01-21T00:00:00.000Z",
-        expiresAt: "2027-02-01T00:00:00.000Z",
-        idempotencyKey: "approval:test:key",
+        run,
+        approval: {
+          approvalId: "approval:test",
+          intentId: "intent:release:pawpovai:milestone-launch-ready",
+          authorizedActorRole: "FOUNDER",
+          authorizedActorId: "founder:fictional",
+          decision: "APPROVED",
+          decidedAt: "2026-01-21T00:00:00.000Z",
+          expiresAt: "2027-02-01T00:00:00.000Z",
+          idempotencyKey: "approval:test:key",
+        },
       }),
     });
 

@@ -33,7 +33,7 @@ export default async function ActivityPage() {
       </section>
 
       <section className="rounded-lg border border-border bg-surface p-4 md:p-6">
-        <h2 className="text-lg font-semibold text-foreground">Agent Activity trace</h2>
+        <h2 className="text-lg font-semibold text-foreground">Agent Activity Trace</h2>
         <ol className="mt-4 space-y-3" aria-label="Agent activity trace">
           {run.activityTrace.map((event) => (
             <li key={event.id} className="rounded-md border border-border bg-background p-3">

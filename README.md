@@ -165,6 +165,7 @@ http://localhost:3000/api/health
 - The current application is a mock-mode and Arc Testnet prototype.
 - No real funds are moved by the current foundation.
 - Mock behavior must never fabricate a transaction hash.
+- The current handoff duplicate-protection cache is process-local demo guardrail and not production persistence.
 - Raw receipts and founder-private evidence remain offchain.
 - LLM extractions, recommendations, and explanations are not deterministic policy decisions or approvals.
 - PASS does not mean approved; approved does not mean submitted; submitted does not mean confirmed.

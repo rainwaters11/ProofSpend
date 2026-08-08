@@ -28,8 +28,14 @@ export function handoffApprovedProposal(args: {
   const run = args.run;
   const approval = ApprovalDecisionSchema.parse(args.approval);
   const now = args.now ?? new Date().toISOString();
+  const hasPersistentIdempotencyStore =
+    process.env.PROOFSPEND_IDEMPOTENCY_STORE === "persistent";
 
   const trace: ActivityEvent[] = [];
+
+  if (run.adapterMode !== "mock" && !hasPersistentIdempotencyStore) {
+    throw new Error("HANDOFF_PERSISTENT_IDEMPOTENCY_REQUIRED");
+  }
 
   appendActivity(trace, {
     id: `${run.runId}:handoff:approval`,

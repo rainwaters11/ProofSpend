@@ -23,8 +23,7 @@ import {
   type VerificationAgentResult,
 } from "./schemas";
 
-const MAX_TURNS = 6;
-const RELEASE_EXPIRY = "2026-02-01T00:00:00.000Z";
+const MAX_ACTIVITY_EVENTS = 10;
 const PROPOSAL_INTENT_ID = "intent:release:pawpovai:milestone-launch-ready";
 const PROPOSAL_IDEMPOTENCY_KEY = "release:pawpovai:milestone-launch-ready:250usdc";
 const PROPOSAL_DESTINATION = "mock:destination:pawpovai-operating-wallet";
@@ -59,7 +58,11 @@ function redactMessage(message: string): string {
     .replaceAll(/sk-[A-Za-z0-9_-]+/g, "[REDACTED_SECRET]");
 }
 
-function buildProposal(reason: string) {
+function proposalExpiryFor(now: string): string {
+  return new Date(Date.parse(now) + 7 * 24 * 60 * 60 * 1000).toISOString();
+}
+
+function buildProposal(reason: string, expiresAt: string) {
   return ReleaseProposalSchema.parse({
     action: "PREPARE_RELEASE_PROPOSAL",
     state: "APPROVAL_REQUIRED",
@@ -70,7 +73,7 @@ function buildProposal(reason: string) {
     chain: "ARC_TESTNET",
     destination: PROPOSAL_DESTINATION,
     authorizedRole: "FOUNDER",
-    expiresAt: RELEASE_EXPIRY,
+    expiresAt,
     reason,
   });
 }
@@ -117,10 +120,6 @@ export async function runVerificationAgent(
     code: "PROOF_GAP_FOUND",
     message: "Exactly one missing receipt proof gap was identified.",
   });
-
-  if (trace.length > MAX_TURNS) {
-    throw new Error("AGENT_MAX_TURNS_EXCEEDED");
-  }
 
   const modelOutput = MissingReceiptModelOutputSchema.parse(
     await provider.analyzeMissingReceipt({
@@ -177,6 +176,7 @@ export async function runVerificationAgent(
 
   const proposal = buildProposal(
     "Seeded deterministic evaluation passed after one founder receipt correction.",
+    proposalExpiryFor(now),
   );
 
   appendEvent(trace, {
@@ -221,6 +221,10 @@ export async function runVerificationAgent(
       message: redactMessage(event.message),
     })),
   });
+
+  if (result.activityTrace.length > MAX_ACTIVITY_EVENTS) {
+    throw new Error("AGENT_MAX_TURNS_EXCEEDED");
+  }
 
   return result;
 }
