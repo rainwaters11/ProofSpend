@@ -64,7 +64,7 @@ export function MobileNav() {
       </Sheet>
 
       <nav
-        aria-label="Primary (mobile bottom bar)"
+        aria-label="Quick navigation"
         className="fixed inset-x-0 bottom-0 z-40 flex border-t border-border bg-surface md:hidden"
       >
         {PRIMARY_MOBILE_ITEMS.map((item) => (

@@ -6,6 +6,7 @@ import {
   Radio,
   ShieldCheck,
   ShieldQuestion,
+  ShieldX,
   Wrench,
   XCircle,
 } from "lucide-react";
@@ -29,7 +30,7 @@ const STATE_CONFIG: Record<
   SUBMITTED: { label: "Submitted", icon: Clock, variant: "warning" },
   CONFIRMED: { label: "Confirmed", icon: CheckCircle2, variant: "success" },
   RECONCILED: { label: "Reconciled", icon: CheckCircle2, variant: "success" },
-  REJECTED: { label: "Rejected", icon: XCircle, variant: "destructive" },
+  REJECTED: { label: "Rejected", icon: ShieldX, variant: "destructive" },
   FAILED: { label: "Failed", icon: XCircle, variant: "destructive" },
 };
 

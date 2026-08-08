@@ -47,4 +47,62 @@ describe("MilestoneDetailPage", () => {
     expect(markup).not.toContain("Awaiting founder decision");
     expect(markup).not.toContain("Approve exact release");
   });
+
+  it("renders a rejected release without implying it reached submission", async () => {
+    const markup = renderToStaticMarkup(
+      await MilestoneDetailPage({
+        params: Promise.resolve({ milestoneId: scenario.milestone.id }),
+        searchParams: Promise.resolve({ state: "REJECTED" }),
+      }),
+    );
+
+    expect(markup).toContain("Lifecycle ended at founder approval: Rejected");
+    expect(markup).not.toContain("Lifecycle ended: Failed");
+  });
+
+  it("renders the offline resilience view via ?view=offline, bypassing the lifecycle panels", async () => {
+    const markup = renderToStaticMarkup(
+      await MilestoneDetailPage({
+        params: Promise.resolve({ milestoneId: scenario.milestone.id }),
+        searchParams: Promise.resolve({ view: "offline" }),
+      }),
+    );
+
+    expect(markup).toContain("You&#x27;re offline");
+    expect(markup).not.toContain("Preview a lifecycle state");
+  });
+
+  it("renders the configuration-missing resilience view via ?view=config-missing", async () => {
+    const markup = renderToStaticMarkup(
+      await MilestoneDetailPage({
+        params: Promise.resolve({ milestoneId: scenario.milestone.id }),
+        searchParams: Promise.resolve({ view: "config-missing" }),
+      }),
+    );
+
+    expect(markup).toContain("Configuration needed");
+  });
+
+  it("renders the insufficient-balance resilience view via ?view=insufficient-balance", async () => {
+    const markup = renderToStaticMarkup(
+      await MilestoneDetailPage({
+        params: Promise.resolve({ milestoneId: scenario.milestone.id }),
+        searchParams: Promise.resolve({ view: "insufficient-balance" }),
+      }),
+    );
+
+    expect(markup).toContain("Insufficient balance");
+    expect(markup).toContain("Available: 50.00 USDC");
+  });
+
+  it("ignores an unrecognized ?view= value and falls back to the lifecycle panels", async () => {
+    const markup = renderToStaticMarkup(
+      await MilestoneDetailPage({
+        params: Promise.resolve({ milestoneId: scenario.milestone.id }),
+        searchParams: Promise.resolve({ view: "not-a-real-view" }),
+      }),
+    );
+
+    expect(markup).toContain("Preview a lifecycle state");
+  });
 });

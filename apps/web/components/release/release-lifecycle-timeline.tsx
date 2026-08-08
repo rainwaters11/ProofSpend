@@ -1,4 +1,4 @@
-import { Check, X } from "lucide-react";
+import { AlertOctagon, Check, ShieldX } from "lucide-react";
 
 import type { ReleaseLifecycleState } from "@/lib/release-scenario";
 import { cn } from "@/lib/utils";
@@ -35,10 +35,20 @@ interface ReleaseLifecycleTimelineProps {
  * distinct terminal branch rather than a step on the happy path, so a
  * failure can never be read as "further along" a linear progress bar
  * (design.md motion rules: no implying money moved before confirmation).
+ *
+ * Rejected and failed are kept visually and semantically separate: a
+ * rejection is a human decision made at the approval gate (the release
+ * never had a prepared/submitted transaction), while a failure means a
+ * transaction was attempted and did not confirm. Conflating the two would
+ * misrepresent how far the release actually got.
  */
 export function ReleaseLifecycleTimeline({ current }: ReleaseLifecycleTimelineProps) {
-  const isTerminalFailure = current === "REJECTED" || current === "FAILED";
-  const currentIndex = HAPPY_PATH.indexOf(isTerminalFailure ? "APPROVED" : current);
+  const isRejected = current === "REJECTED";
+  const isFailed = current === "FAILED";
+  const isTerminalFailure = isRejected || isFailed;
+  const anchorStep = isRejected ? "APPROVAL_PENDING" : isFailed ? "APPROVED" : current;
+  const currentIndex = HAPPY_PATH.indexOf(anchorStep);
+  const FailureIcon = isRejected ? ShieldX : AlertOctagon;
 
   return (
     <div className="w-full">
@@ -47,9 +57,10 @@ export function ReleaseLifecycleTimeline({ current }: ReleaseLifecycleTimelinePr
         aria-label="Release lifecycle progress"
       >
         {HAPPY_PATH.map((step, index) => {
-          const isComplete = !isTerminalFailure && index < currentIndex;
+          const isComplete = index < currentIndex;
           const isCurrent = !isTerminalFailure && index === currentIndex;
-          const isUpcoming = isTerminalFailure ? index > currentIndex : index > currentIndex;
+          const isHalted = isTerminalFailure && index === currentIndex;
+          const isUpcoming = index > currentIndex;
 
           return (
             <li key={step} className="flex flex-1 items-start gap-2 sm:flex-col sm:items-center sm:gap-2">
@@ -58,7 +69,7 @@ export function ReleaseLifecycleTimeline({ current }: ReleaseLifecycleTimelinePr
                   <div
                     className={cn(
                       "hidden h-px flex-1 sm:block",
-                      isComplete || isCurrent ? "bg-primary" : "bg-border",
+                      isComplete || isCurrent || isHalted ? "bg-primary" : "bg-border",
                     )}
                     aria-hidden="true"
                   />
@@ -68,11 +79,14 @@ export function ReleaseLifecycleTimeline({ current }: ReleaseLifecycleTimelinePr
                     "flex size-8 shrink-0 items-center justify-center rounded-full border-2 text-xs font-semibold",
                     isComplete && "border-primary bg-primary text-primary-foreground",
                     isCurrent && "border-primary bg-background text-primary",
+                    isHalted && "border-destructive bg-destructive/10 text-destructive",
                     isUpcoming && "border-border bg-background text-muted-foreground",
                   )}
-                  aria-current={isCurrent ? "step" : undefined}
+                  aria-current={isCurrent || isHalted ? "step" : undefined}
                 >
-                  {isComplete ? <Check aria-hidden="true" className="size-4" /> : index + 1}
+                  {isComplete && <Check aria-hidden="true" className="size-4" />}
+                  {isHalted && <FailureIcon aria-hidden="true" className="size-4" />}
+                  {!isComplete && !isHalted && index + 1}
                 </span>
                 {index < HAPPY_PATH.length - 1 && (
                   <div
@@ -87,7 +101,7 @@ export function ReleaseLifecycleTimeline({ current }: ReleaseLifecycleTimelinePr
               <span
                 className={cn(
                   "text-xs font-medium sm:text-center",
-                  isCurrent ? "text-foreground" : "text-muted-foreground",
+                  isCurrent || isHalted ? "text-foreground" : "text-muted-foreground",
                 )}
               >
                 {STEP_LABEL[step]}
@@ -97,13 +111,23 @@ export function ReleaseLifecycleTimeline({ current }: ReleaseLifecycleTimelinePr
         })}
       </ol>
 
-      {isTerminalFailure && (
+      {isRejected && (
         <div
           className="mt-4 flex items-center gap-2 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm font-medium text-destructive"
           role="status"
         >
-          <X aria-hidden="true" className="size-4 shrink-0" />
-          Lifecycle ended: {STEP_LABEL[current]}
+          <ShieldX aria-hidden="true" className="size-4 shrink-0" />
+          Lifecycle ended at founder approval: Rejected
+        </div>
+      )}
+
+      {isFailed && (
+        <div
+          className="mt-4 flex items-center gap-2 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm font-medium text-destructive"
+          role="status"
+        >
+          <AlertOctagon aria-hidden="true" className="size-4 shrink-0" />
+          Lifecycle ended: Failed
         </div>
       )}
     </div>
