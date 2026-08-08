@@ -663,6 +663,65 @@ describe("bounded Evidence Engine", () => {
     expect(changedPacket.reasonHashCandidate).not.toBe(baselinePacket.reasonHashCandidate);
   });
 
+  it("canonicalizes the default required flag before committing requirement definitions", async () => {
+    const implicitInput = recoveredInput();
+    const explicitInput: EvidenceEngineInput = {
+      ...implicitInput,
+      requirements: implicitInput.requirements.map((requirement) => ({
+        ...requirement,
+        required: requirement.required ?? true,
+      })),
+    };
+    const implicitResult = evaluateEvidenceEngine(implicitInput);
+    const explicitResult = evaluateEvidenceEngine(explicitInput);
+
+    const implicitPacket = await buildMilestoneEvaluationPacket({
+      input: implicitInput,
+      evaluation: implicitResult.evaluation,
+      proofGaps: implicitResult.proofGaps,
+      generatedAt,
+    });
+    const explicitPacket = await buildMilestoneEvaluationPacket({
+      input: explicitInput,
+      evaluation: explicitResult.evaluation,
+      proofGaps: explicitResult.proofGaps,
+      generatedAt,
+    });
+
+    expect(implicitPacket.requirementDefinitions.every((requirement) => requirement.required === true)).toBe(true);
+    expect(implicitPacket.requirementDefinitions).toEqual(explicitPacket.requirementDefinitions);
+    expect(implicitPacket.deliverableHashCandidate).toBe(explicitPacket.deliverableHashCandidate);
+    expect(implicitPacket.reasonHashCandidate).toBe(explicitPacket.reasonHashCandidate);
+  });
+
+  it("reports the computed status and excludes mutable milestone status from packet commitments", async () => {
+    const input = recoveredInput();
+    const result = evaluateEvidenceEngine(input);
+    const packet = await buildMilestoneEvaluationPacket({
+      input,
+      evaluation: result.evaluation,
+      proofGaps: result.proofGaps,
+      generatedAt,
+    });
+    const changedStatusInput: EvidenceEngineInput = {
+      ...input,
+      milestone: { ...input.milestone, status: "NEEDS_REVIEW" },
+    };
+    const changedStatusResult = evaluateEvidenceEngine(changedStatusInput);
+    const changedStatusPacket = await buildMilestoneEvaluationPacket({
+      input: changedStatusInput,
+      evaluation: changedStatusResult.evaluation,
+      proofGaps: changedStatusResult.proofGaps,
+      generatedAt,
+    });
+
+    expect(packet.evaluationStatus).toBe("ELIGIBLE");
+    expect(packet.milestoneDefinition).not.toHaveProperty("status");
+    expect(changedStatusPacket.evaluationStatus).toBe(packet.evaluationStatus);
+    expect(changedStatusPacket.deliverableHashCandidate).toBe(packet.deliverableHashCandidate);
+    expect(changedStatusPacket.reasonHashCandidate).toBe(packet.reasonHashCandidate);
+  });
+
   it("binds canonical milestone fields including dueAt into both packet commitments", async () => {
     const input = recoveredInput();
     const dueDateRequirement = MilestoneRequirementSchema.parse({
