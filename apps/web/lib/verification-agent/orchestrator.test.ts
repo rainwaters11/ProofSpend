@@ -1,8 +1,9 @@
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 
 import {
+  consumeProposalIdempotencyKey,
   handoffApprovedProposal,
-  resetApprovalHandoffStateForTest,
+  resetVerificationAgentStoreForTest,
   runVerificationAgent,
   type AgentModelProvider,
   type MissingReceiptModelOutput,
@@ -20,7 +21,7 @@ beforeEach(() => {
   process.env.PROOFSPEND_AGENT_MODE = "mock";
   delete process.env.OPENAI_API_KEY;
   delete process.env.LLM_MODEL;
-  resetApprovalHandoffStateForTest();
+  resetVerificationAgentStoreForTest();
 });
 
 afterAll(() => {
@@ -152,8 +153,10 @@ describe("handoffApprovedProposal", () => {
         decision: "APPROVED",
         decidedAt: "2026-01-21T00:00:00.000Z",
         expiresAt: "2026-01-21T00:00:01.000Z",
-        idempotencyKey: "approval:key:1",
+        idempotencyKey: run.proposal.idempotencyKey,
       },
+      authenticatedActorId: "founder:fictional",
+      consumeProposalKey: consumeProposalIdempotencyKey,
       now: "2026-01-21T00:00:02.000Z",
     });
 
@@ -173,18 +176,48 @@ describe("handoffApprovedProposal", () => {
       authorizedActorId: "founder:fictional",
       decision: "APPROVED" as const,
       decidedAt: "2026-01-21T00:00:00.000Z",
-      expiresAt: "2026-01-22T00:00:00.000Z",
-      idempotencyKey: "approval:key:repeat",
+      expiresAt: run.proposal.expiresAt,
+      idempotencyKey: run.proposal.idempotencyKey,
     };
 
-    const first = handoffApprovedProposal({ run, approval, now: "2026-01-21T00:00:01.000Z" });
-    const duplicate = handoffApprovedProposal({
+    const first = handoffApprovedProposal({
       run,
       approval,
+      authenticatedActorId: "founder:fictional",
+      consumeProposalKey: consumeProposalIdempotencyKey,
+      now: "2026-01-21T00:00:01.000Z",
+    });
+    const duplicate = handoffApprovedProposal({
+      run,
+      approval: { ...approval, approvalId: "approval:changed" },
+      authenticatedActorId: "founder:fictional",
+      consumeProposalKey: consumeProposalIdempotencyKey,
       now: "2026-01-21T00:00:02.000Z",
     });
 
     expect(first.status).toBe("HANDOFF_READY");
     expect(duplicate.status).toBe("HANDOFF_REJECTED");
+  });
+
+  it("rejects an approval that attempts to extend an expired proposal", async () => {
+    const run = await runVerificationAgent({ now: "2026-01-21T00:00:00.000Z" });
+    const result = handoffApprovedProposal({
+      run,
+      approval: {
+        approvalId: "approval:late",
+        intentId: run.proposal.intentId,
+        authorizedActorRole: "FOUNDER",
+        authorizedActorId: "founder:fictional",
+        decision: "APPROVED",
+        decidedAt: "2026-01-21T00:16:00.000Z",
+        expiresAt: "2026-01-21T01:00:00.000Z",
+        idempotencyKey: run.proposal.idempotencyKey,
+      },
+      authenticatedActorId: "founder:fictional",
+      consumeProposalKey: consumeProposalIdempotencyKey,
+      now: "2026-01-21T00:16:00.000Z",
+    });
+
+    expect(result.status).toBe("HANDOFF_REJECTED");
   });
 });

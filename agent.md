@@ -58,7 +58,10 @@ Issue #32 implements a small, server-only Verification Agent orchestrator for th
 - one missing-receipt question, one validated founder correction, deterministic re-evaluation, and exact 250 USDC proposal;
 - stop at `APPROVAL_REQUIRED` with human authorization and value-moving execution outside the model loop;
 - sanitized ordered activity trace labels (`AI`, `DETERMINISTIC`, `HUMAN`, `MOCK` or `ARC TESTNET`);
-- no silent fallback from live to mock mode, no stored OpenAI response, and no fabricated Arc hash/confirmation/explorer output in mock mode.
+- no silent fallback from live to mock mode, no stored OpenAI response, and no fabricated Arc hash/confirmation/explorer output in mock mode;
+- authenticated API access, unique live invocation keys, and a bounded per-actor live request rate;
+- server-owned run lookup, authenticated actor binding, proposal-expiry enforcement, and proposal-key deduplication before mock handoff;
+- a hard block on non-mock handoff until durable atomic persistence and the Issue #7 adapter are available.
 
 This runtime remains separate from Issue #13 identity governance and Issue #8 ERC-8183 settlement lifecycle ownership.
 

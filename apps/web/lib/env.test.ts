@@ -104,12 +104,14 @@ describe("environment validation", () => {
         PROOFSPEND_AGENT_MODE: "openai",
         OPENAI_API_KEY: "sk-test",
         LLM_MODEL: "gpt-5-mini",
+        PROOFSPEND_AGENT_API_TOKEN: "test-agent-api-token-that-is-at-least-32-chars",
       }),
     ).toMatchObject({
       PROOFSPEND_ADAPTER_MODE: "mock",
       PROOFSPEND_AGENT_MODE: "openai",
       OPENAI_API_KEY: "sk-test",
       LLM_MODEL: "gpt-5-mini",
+      PROOFSPEND_AGENT_API_TOKEN: "test-agent-api-token-that-is-at-least-32-chars",
     });
   });
 });

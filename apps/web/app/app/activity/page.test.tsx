@@ -36,5 +36,6 @@ describe("ActivityPage", () => {
     expect(markup).toContain("DETERMINISTIC");
     expect(markup).toContain("HUMAN");
     expect(markup).toContain("MOCK");
+    expect(markup).toContain("Live runs require the authenticated API boundary");
   });
 });

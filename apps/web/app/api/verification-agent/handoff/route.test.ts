@@ -1,22 +1,32 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { runVerificationAgent } from "@/lib/verification-agent";
+import {
+  resetAgentApiAccessForTest,
+  resetVerificationAgentStoreForTest,
+} from "@/lib/verification-agent";
 
 import { POST } from "./route";
+import { POST as runAgent } from "../run/route";
+
+const API_TOKEN = "test-agent-api-token-that-is-at-least-32-chars";
 
 const original = {
   PROOFSPEND_ADAPTER_MODE: process.env.PROOFSPEND_ADAPTER_MODE,
   PROOFSPEND_AGENT_MODE: process.env.PROOFSPEND_AGENT_MODE,
   OPENAI_API_KEY: process.env.OPENAI_API_KEY,
   LLM_MODEL: process.env.LLM_MODEL,
+  PROOFSPEND_AGENT_API_TOKEN: process.env.PROOFSPEND_AGENT_API_TOKEN,
 };
 
 describe("POST /api/verification-agent/handoff", () => {
   beforeEach(() => {
     process.env.PROOFSPEND_ADAPTER_MODE = "mock";
     process.env.PROOFSPEND_AGENT_MODE = "mock";
+    process.env.PROOFSPEND_AGENT_API_TOKEN = API_TOKEN;
     delete process.env.OPENAI_API_KEY;
     delete process.env.LLM_MODEL;
+    resetAgentApiAccessForTest();
+    resetVerificationAgentStoreForTest();
   });
 
   afterEach(() => {
@@ -24,16 +34,26 @@ describe("POST /api/verification-agent/handoff", () => {
     process.env.PROOFSPEND_AGENT_MODE = original.PROOFSPEND_AGENT_MODE;
     process.env.OPENAI_API_KEY = original.OPENAI_API_KEY;
     process.env.LLM_MODEL = original.LLM_MODEL;
+    process.env.PROOFSPEND_AGENT_API_TOKEN = original.PROOFSPEND_AGENT_API_TOKEN;
   });
 
   it("accepts valid approval handoff and keeps mock execution truthful", async () => {
+    const runResponse = await runAgent(
+      new Request("http://localhost/api/verification-agent/run", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${API_TOKEN}` },
+      }),
+    );
+    const run = await runResponse.json();
     const decidedAt = new Date().toISOString();
-    const run = await runVerificationAgent({ now: decidedAt });
     const request = new Request("http://localhost/api/verification-agent/handoff", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        Authorization: `Bearer ${API_TOKEN}`,
+        "Content-Type": "application/json",
+      },
       body: JSON.stringify({
-        run,
+        runId: run.runId,
         approval: {
           approvalId: "approval:test",
           intentId: "intent:release:pawpovai:milestone-launch-ready",
@@ -42,7 +62,7 @@ describe("POST /api/verification-agent/handoff", () => {
           decision: "APPROVED",
           decidedAt,
           expiresAt: run.proposal.expiresAt,
-          idempotencyKey: "approval:test:key",
+          idempotencyKey: run.proposal.idempotencyKey,
         },
       }),
     });
@@ -55,5 +75,46 @@ describe("POST /api/verification-agent/handoff", () => {
     expect(json.execution.transactionHash).toBeNull();
     expect(json.execution.confirmation).toBeNull();
     expect(json.execution.explorerUrl).toBeNull();
+  });
+
+  it("does not accept client-supplied run state", async () => {
+    const runResponse = await runAgent(
+      new Request("http://localhost/api/verification-agent/run", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${API_TOKEN}` },
+      }),
+    );
+    const run = await runResponse.json();
+    const decidedAt = new Date().toISOString();
+    const request = new Request("http://localhost/api/verification-agent/handoff", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${API_TOKEN}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        run: {
+          ...run,
+          proposal: {
+            ...run.proposal,
+            amount: { asset: "USDC", atomicUnits: "999999999" },
+          },
+        },
+        runId: run.runId,
+        approval: {
+          approvalId: "approval:forged-run",
+          intentId: run.proposal.intentId,
+          authorizedActorRole: "FOUNDER",
+          authorizedActorId: "founder:fictional",
+          decision: "APPROVED",
+          decidedAt,
+          expiresAt: run.proposal.expiresAt,
+          idempotencyKey: run.proposal.idempotencyKey,
+        },
+      }),
+    });
+
+    const response = await POST(request);
+    expect(response.status).toBe(400);
   });
 });

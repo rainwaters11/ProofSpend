@@ -9,7 +9,7 @@ function adapterBadgeMode(adapterMode: "mock" | "arc-testnet") {
 }
 
 export default async function ActivityPage() {
-  const run = await runVerificationAgent();
+  const run = await runVerificationAgent({ agentMode: "mock" });
 
   return (
     <div className="flex max-w-5xl flex-col gap-6">
@@ -20,6 +20,9 @@ export default async function ActivityPage() {
         </div>
         <p className="text-sm text-muted-foreground">
           Agent mode: <strong className="font-semibold text-foreground">{run.agentMode.toUpperCase()}</strong>
+        </p>
+        <p className="text-sm text-muted-foreground">
+          This public activity preview is deterministic mock data. Live runs require the authenticated API boundary.
         </p>
       </div>
 

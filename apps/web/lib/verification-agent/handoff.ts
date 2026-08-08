@@ -10,30 +10,23 @@ import {
   type VerificationAgentResult,
 } from "./schemas";
 
-const consumedApprovalKeys = new Set<string>();
-
 function appendActivity(trace: ActivityEvent[], event: ActivityEvent) {
   trace.push(ActivityEventSchema.parse(event));
-}
-
-export function resetApprovalHandoffStateForTest(): void {
-  consumedApprovalKeys.clear();
 }
 
 export function handoffApprovedProposal(args: {
   run: VerificationAgentResult;
   approval: ApprovalDecision;
+  authenticatedActorId: string;
+  consumeProposalKey: (key: string) => boolean;
   now?: string;
 }): HandoffResult {
   const run = args.run;
   const approval = ApprovalDecisionSchema.parse(args.approval);
   const now = args.now ?? new Date().toISOString();
-  const hasPersistentIdempotencyStore =
-    process.env.PROOFSPEND_IDEMPOTENCY_STORE === "persistent";
-
   const trace: ActivityEvent[] = [];
 
-  if (run.adapterMode !== "mock" && !hasPersistentIdempotencyStore) {
+  if (run.adapterMode !== "mock") {
     throw new Error("HANDOFF_PERSISTENT_IDEMPOTENCY_REQUIRED");
   }
 
@@ -87,9 +80,45 @@ export function handoffApprovedProposal(args: {
     });
   }
 
-  const expiresAt = Date.parse(approval.expiresAt);
+  if (
+    approval.authorizedActorId !== args.authenticatedActorId ||
+    approval.authorizedActorRole !== run.proposal.authorizedRole
+  ) {
+    appendActivity(trace, {
+      id: `${run.runId}:handoff:reject:actor`,
+      at: now,
+      layer: "DETERMINISTIC",
+      code: "HANDOFF_REJECTED",
+      message: "Handoff rejected because the authenticated actor does not own this approval.",
+    });
+    return HandoffResultSchema.parse({
+      status: "HANDOFF_REJECTED",
+      adapterMode: run.adapterMode,
+      execution: {
+        state: "SKIPPED_MOCK",
+        transactionHash: null,
+        confirmation: null,
+        explorerUrl: null,
+      },
+      activityTrace: trace,
+    });
+  }
+
+  const approvalExpiresAt = Date.parse(approval.expiresAt);
+  const proposalExpiresAt = Date.parse(run.proposal.expiresAt);
+  const decidedAt = Date.parse(approval.decidedAt);
   const nowMs = Date.parse(now);
-  if (!Number.isFinite(expiresAt) || !Number.isFinite(nowMs) || nowMs >= expiresAt) {
+  if (
+    !Number.isFinite(approvalExpiresAt) ||
+    !Number.isFinite(proposalExpiresAt) ||
+    !Number.isFinite(decidedAt) ||
+    !Number.isFinite(nowMs) ||
+    decidedAt > nowMs ||
+    decidedAt >= proposalExpiresAt ||
+    nowMs >= approvalExpiresAt ||
+    nowMs >= proposalExpiresAt ||
+    approvalExpiresAt > proposalExpiresAt
+  ) {
     appendActivity(trace, {
       id: `${run.runId}:handoff:reject:expiry`,
       at: now,
@@ -110,14 +139,13 @@ export function handoffApprovedProposal(args: {
     });
   }
 
-  const dedupeKey = `${approval.approvalId}:${approval.idempotencyKey}`;
-  if (consumedApprovalKeys.has(dedupeKey)) {
+  if (approval.idempotencyKey !== run.proposal.idempotencyKey) {
     appendActivity(trace, {
-      id: `${run.runId}:handoff:reject:duplicate`,
+      id: `${run.runId}:handoff:reject:key`,
       at: now,
       layer: "DETERMINISTIC",
       code: "HANDOFF_REJECTED",
-      message: "Handoff rejected because approval idempotency key was already consumed.",
+      message: "Handoff rejected because the approval does not bind the exact proposal key.",
     });
     return HandoffResultSchema.parse({
       status: "HANDOFF_REJECTED",
@@ -131,8 +159,27 @@ export function handoffApprovedProposal(args: {
       activityTrace: trace,
     });
   }
-  consumedApprovalKeys.add(dedupeKey);
 
+  if (!args.consumeProposalKey(run.proposal.idempotencyKey)) {
+    appendActivity(trace, {
+      id: `${run.runId}:handoff:reject:duplicate`,
+      at: now,
+      layer: "DETERMINISTIC",
+      code: "HANDOFF_REJECTED",
+      message: "Handoff rejected because the proposal idempotency key was already consumed.",
+    });
+    return HandoffResultSchema.parse({
+      status: "HANDOFF_REJECTED",
+      adapterMode: run.adapterMode,
+      execution: {
+        state: "SKIPPED_MOCK",
+        transactionHash: null,
+        confirmation: null,
+        explorerUrl: null,
+      },
+      activityTrace: trace,
+    });
+  }
   if (run.adapterMode === "mock") {
     appendActivity(trace, {
       id: `${run.runId}:handoff:mock`,

@@ -157,7 +157,7 @@ bun --filter @proofspend/web dev
 
 Open `http://localhost:3000`.
 
-Set `PROOFSPEND_AGENT_MODE=mock` for deterministic offline development. To run the one-call live path, set `PROOFSPEND_AGENT_MODE=openai` together with a server-only `OPENAI_API_KEY` and `LLM_MODEL`. Live mode fails closed and never falls back to mock mode.
+Set `PROOFSPEND_AGENT_MODE=mock` for deterministic offline development. The agent API endpoints also require a server-only `PROOFSPEND_AGENT_API_TOKEN` of at least 32 characters. To run the one-call live path, set `PROOFSPEND_AGENT_MODE=openai` together with `OPENAI_API_KEY`, `LLM_MODEL`, and the API token. Live invocation additionally requires a unique `Idempotency-Key`, is rate limited, fails closed, and never falls back to mock mode.
 
 The safe health endpoint is available at:
 
@@ -170,7 +170,7 @@ http://localhost:3000/api/health
 - The current application is a mock-mode and Arc Testnet prototype.
 - No real funds are moved by the current foundation.
 - Mock behavior must never fabricate a transaction hash.
-- The current handoff duplicate-protection cache is process-local demo guardrail and not production persistence.
+- The current server-owned run and proposal-key stores are process-local, mock-only demo guardrails. Non-mock handoff is blocked until Issue #7 supplies durable atomic persistence and the typed adapter boundary.
 - Raw receipts and founder-private evidence remain offchain.
 - LLM extractions, recommendations, and explanations are not deterministic policy decisions or approvals.
 - PASS does not mean approved; approved does not mean submitted; submitted does not mean confirmed.
