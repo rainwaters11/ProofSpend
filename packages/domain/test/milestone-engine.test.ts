@@ -42,6 +42,7 @@ const policyVersion = "policy:v1";
 const approvalIntentId = "intent:exact";
 const authorizedEvaluatorId = "evaluator:1";
 const authorizedFounderId = "founder:1";
+const evidenceHash = (character: string) => `sha256:${character.repeat(64)}`;
 const baseEvidenceItems = () => ([
   EvidenceItemSchema.parse({ id: "evidence:deliverable", projectId: milestone.projectId, kind: "DELIVERABLE", sourceHash: `sha256:${"1".repeat(64)}`, storageRef: "private://deliverable", visibility: "FOUNDER_PRIVATE", submittedAt: evaluatedAt }),
   EvidenceItemSchema.parse({ id: "evidence:receipt:1", projectId: milestone.projectId, kind: "RECEIPT", sourceHash: `sha256:${"2".repeat(64)}`, storageRef: "private://receipt:1", visibility: "FOUNDER_PRIVATE", submittedAt: evaluatedAt }),
@@ -52,12 +53,12 @@ const baseEvidenceItems = () => ([
   EvidenceItemSchema.parse({ id: "evidence:due", projectId: milestone.projectId, kind: "INVOICE", sourceHash: `sha256:${"7".repeat(64)}`, storageRef: "private://due", visibility: "FOUNDER_PRIVATE", submittedAt: evaluatedAt }),
 ]);
 const baseEvidenceMatches = () => ([
-  EvidenceMatchSchema.parse({ id: "match:deliverable", source: "HUMAN_DECISION", evidenceId: "evidence:deliverable", requirementId: "req:deliverable", confidenceBasisPoints: null, explanation: "accepted deliverable", acceptedBy: { actorType: "EVALUATOR", actorId: authorizedEvaluatorId } }),
-  EvidenceMatchSchema.parse({ id: "match:receipt:1", source: "HUMAN_DECISION", evidenceId: "evidence:receipt:1", requirementId: "req:expenses", confidenceBasisPoints: null, explanation: "accepted receipt", acceptedBy: { actorType: "EVALUATOR", actorId: authorizedEvaluatorId } }),
-  EvidenceMatchSchema.parse({ id: "match:receipt:2", source: "HUMAN_DECISION", evidenceId: "evidence:receipt:2", requirementId: "req:expenses", confidenceBasisPoints: null, explanation: "accepted receipt", acceptedBy: { actorType: "EVALUATOR", actorId: authorizedEvaluatorId } }),
-  EvidenceMatchSchema.parse({ id: "match:confirmation", source: "HUMAN_DECISION", evidenceId: "evidence:confirmation", requirementId: "req:confirmation", confidenceBasisPoints: null, explanation: "accepted confirmation", acceptedBy: { actorType: "FOUNDER", actorId: authorizedFounderId } }),
-  EvidenceMatchSchema.parse({ id: "match:tx", source: "HUMAN_DECISION", evidenceId: "evidence:tx:match", requirementId: "req:tx", confidenceBasisPoints: null, explanation: "accepted tx match", acceptedBy: { actorType: "EVALUATOR", actorId: authorizedEvaluatorId } }),
-  EvidenceMatchSchema.parse({ id: "match:purpose", source: "HUMAN_DECISION", evidenceId: "evidence:purpose", requirementId: "req:purpose", confidenceBasisPoints: null, explanation: "accepted purpose", acceptedBy: { actorType: "EVALUATOR", actorId: authorizedEvaluatorId } }),
+  EvidenceMatchSchema.parse({ id: "match:deliverable", source: "HUMAN_DECISION", evidenceId: "evidence:deliverable", acceptedEvidenceHash: evidenceHash("1"), requirementId: "req:deliverable", confidenceBasisPoints: null, explanation: "accepted deliverable", acceptedBy: { actorType: "EVALUATOR", actorId: authorizedEvaluatorId } }),
+  EvidenceMatchSchema.parse({ id: "match:receipt:1", source: "HUMAN_DECISION", evidenceId: "evidence:receipt:1", acceptedEvidenceHash: evidenceHash("2"), requirementId: "req:expenses", confidenceBasisPoints: null, explanation: "accepted receipt", acceptedBy: { actorType: "EVALUATOR", actorId: authorizedEvaluatorId } }),
+  EvidenceMatchSchema.parse({ id: "match:receipt:2", source: "HUMAN_DECISION", evidenceId: "evidence:receipt:2", acceptedEvidenceHash: evidenceHash("3"), requirementId: "req:expenses", confidenceBasisPoints: null, explanation: "accepted receipt", acceptedBy: { actorType: "EVALUATOR", actorId: authorizedEvaluatorId } }),
+  EvidenceMatchSchema.parse({ id: "match:confirmation", source: "HUMAN_DECISION", evidenceId: "evidence:confirmation", acceptedEvidenceHash: evidenceHash("4"), requirementId: "req:confirmation", confidenceBasisPoints: null, explanation: "accepted confirmation", acceptedBy: { actorType: "FOUNDER", actorId: authorizedFounderId } }),
+  EvidenceMatchSchema.parse({ id: "match:tx", source: "HUMAN_DECISION", evidenceId: "evidence:tx:match", acceptedEvidenceHash: evidenceHash("5"), requirementId: "req:tx", confidenceBasisPoints: null, explanation: "accepted tx match", acceptedBy: { actorType: "EVALUATOR", actorId: authorizedEvaluatorId } }),
+  EvidenceMatchSchema.parse({ id: "match:purpose", source: "HUMAN_DECISION", evidenceId: "evidence:purpose", acceptedEvidenceHash: evidenceHash("6"), requirementId: "req:purpose", confidenceBasisPoints: null, explanation: "accepted purpose", acceptedBy: { actorType: "EVALUATOR", actorId: authorizedEvaluatorId } }),
 ]);
 
 function baseObservations() {
@@ -166,8 +167,8 @@ describe("milestone engine", () => {
         EvidenceItemSchema.parse({ id: "evidence:deliverable", projectId: milestone.projectId, kind: "DELIVERABLE", sourceHash: `sha256:${"9".repeat(64)}`, storageRef: "private://deliverable-a", visibility: "FOUNDER_PRIVATE", submittedAt: evaluatedAt }),
       ],
       evidenceMatches: [
-        EvidenceMatchSchema.parse({ id: "match:tx:ä", source: "HUMAN_DECISION", evidenceId: "evidence:tx", requirementId: "req:ä", confidenceBasisPoints: null, explanation: "accepted", acceptedBy: { actorType: "EVALUATOR", actorId: authorizedEvaluatorId } }),
-        EvidenceMatchSchema.parse({ id: "match:deliverable:a", source: "HUMAN_DECISION", evidenceId: "evidence:deliverable", requirementId: "req:a", confidenceBasisPoints: null, explanation: "accepted", acceptedBy: { actorType: "EVALUATOR", actorId: authorizedEvaluatorId } }),
+        EvidenceMatchSchema.parse({ id: "match:tx:ä", source: "HUMAN_DECISION", evidenceId: "evidence:tx", acceptedEvidenceHash: evidenceHash("8"), requirementId: "req:ä", confidenceBasisPoints: null, explanation: "accepted", acceptedBy: { actorType: "EVALUATOR", actorId: authorizedEvaluatorId } }),
+        EvidenceMatchSchema.parse({ id: "match:deliverable:a", source: "HUMAN_DECISION", evidenceId: "evidence:deliverable", acceptedEvidenceHash: evidenceHash("9"), requirementId: "req:a", confidenceBasisPoints: null, explanation: "accepted", acceptedBy: { actorType: "EVALUATOR", actorId: authorizedEvaluatorId } }),
       ],
       verifiedSpend: usdc("1"),
     });
@@ -602,6 +603,20 @@ describe("milestone engine", () => {
     const unauthorizedNonCountResult = evaluateMilestone({ ...unauthorizedNonCount, approvalRecord: null });
     expect(unauthorizedNonCountResult.requirementEvaluations.find((item) => item.requirementId === "req:tx")?.outcome).not.toBe("PASS");
     expect(unauthorizedNonCountResult.requirementEvaluations.find((item) => item.requirementId === "req:purpose")?.outcome).not.toBe("PASS");
+  });
+
+  it("does not accept a human decision after evidence content changes under the same ID", () => {
+    const replacedTransaction = baseEvidenceItems().map((item) => item.id === "evidence:tx:match"
+      ? EvidenceItemSchema.parse({ ...item, sourceHash: evidenceHash("a") })
+      : item);
+    const result = evaluateMilestone(approvalInput({
+      evidenceItems: replacedTransaction,
+      approvalRecord: null,
+    }));
+
+    expect(result.requirementEvaluations.find((item) => item.requirementId === "req:tx")?.outcome).not.toBe("PASS");
+    expect(result.status).not.toBe("ELIGIBLE");
+    expect(result.erc8183ActionPermitted).toBe(false);
   });
 
   it("fails closed for count-based requirements unless references exactly bind accepted evidence", () => {
