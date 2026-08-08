@@ -31,42 +31,48 @@ export default async function ActivityPage() {
           <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Run state</p>
           <p className="text-sm text-foreground">{run.status}</p>
           <p className="text-sm text-foreground">Question: {run.missingReceiptQuestion}</p>
-          <dl className="grid gap-3 border-t border-border pt-4 text-sm sm:grid-cols-2">
-            <div>
-              <dt className="text-muted-foreground">Action</dt>
-              <dd className="font-medium text-foreground">Prepare release proposal</dd>
-            </div>
-            <div>
-              <dt className="text-muted-foreground">Amount</dt>
-              <dd className="font-medium text-foreground">{formatMoney(run.proposal.amount)}</dd>
-            </div>
-            <div>
-              <dt className="text-muted-foreground">Asset and chain</dt>
-              <dd className="font-medium text-foreground">
-                {run.proposal.asset} on {run.proposal.chain}
-              </dd>
-            </div>
-            <div>
-              <dt className="text-muted-foreground">Authorized role</dt>
-              <dd className="font-medium text-foreground">{run.proposal.authorizedRole}</dd>
-            </div>
-            <div className="sm:col-span-2">
-              <dt className="text-muted-foreground">Destination</dt>
-              <dd className="break-all font-mono text-xs text-foreground">
-                {run.proposal.destination}
-              </dd>
-            </div>
-            <div>
-              <dt className="text-muted-foreground">Expires</dt>
-              <dd className="font-medium text-foreground">{run.proposal.expiresAt}</dd>
-            </div>
-            <div>
-              <dt className="text-muted-foreground">Idempotency reference</dt>
-              <dd className="break-all font-mono text-xs text-foreground">
-                {run.proposal.idempotencyKey}
-              </dd>
-            </div>
-          </dl>
+          {run.proposal === null ? (
+            <p className="border-t border-border pt-4 text-sm text-muted-foreground">
+              A proposal cannot be prepared until the founder submits a validated receipt correction.
+            </p>
+          ) : (
+            <dl className="grid gap-3 border-t border-border pt-4 text-sm sm:grid-cols-2">
+              <div>
+                <dt className="text-muted-foreground">Action</dt>
+                <dd className="font-medium text-foreground">Prepare release proposal</dd>
+              </div>
+              <div>
+                <dt className="text-muted-foreground">Amount</dt>
+                <dd className="font-medium text-foreground">{formatMoney(run.proposal.amount)}</dd>
+              </div>
+              <div>
+                <dt className="text-muted-foreground">Asset and chain</dt>
+                <dd className="font-medium text-foreground">
+                  {run.proposal.asset} on {run.proposal.chain}
+                </dd>
+              </div>
+              <div>
+                <dt className="text-muted-foreground">Authorized role</dt>
+                <dd className="font-medium text-foreground">{run.proposal.authorizedRole}</dd>
+              </div>
+              <div className="sm:col-span-2">
+                <dt className="text-muted-foreground">Destination</dt>
+                <dd className="break-all font-mono text-xs text-foreground">
+                  {run.proposal.destination}
+                </dd>
+              </div>
+              <div>
+                <dt className="text-muted-foreground">Expires</dt>
+                <dd className="font-medium text-foreground">{run.proposal.expiresAt}</dd>
+              </div>
+              <div>
+                <dt className="text-muted-foreground">Idempotency reference</dt>
+                <dd className="break-all font-mono text-xs text-foreground">
+                  {run.proposal.idempotencyKey}
+                </dd>
+              </div>
+            </dl>
+          )}
         </div>
       </section>
 

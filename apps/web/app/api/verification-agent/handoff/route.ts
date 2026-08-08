@@ -6,9 +6,9 @@ import {
   ApprovalDecisionSchema,
   HandoffResultSchema,
   authorizeAgentApiRequest,
-  consumeProposalIdempotencyKey,
   handoffApprovedProposal,
   loadVerificationAgentRun,
+  persistApprovedHandoff,
 } from "@/lib/verification-agent";
 import { z } from "zod";
 
@@ -32,9 +32,18 @@ export async function POST(request: Request) {
         run: stored.run,
         approval: parsedBody.approval,
         authenticatedActorId: authorizedActorId,
-        consumeProposalKey: consumeProposalIdempotencyKey,
       }),
     );
+    if (
+      result.status !== "HANDOFF_READY" ||
+      !persistApprovedHandoff({
+        runId: stored.run.runId,
+        approval: parsedBody.approval,
+        result,
+      })
+    ) {
+      return NextResponse.json({ error: "HANDOFF_DUPLICATE_OR_REJECTED" }, { status: 409 });
+    }
     return NextResponse.json(result);
   } catch (error) {
     if (error instanceof AgentApiAccessError) {

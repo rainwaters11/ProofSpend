@@ -1,10 +1,13 @@
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 
+import { createPawPovAiEvidenceScenario } from "@proofspend/domain";
 import {
-  consumeProposalIdempotencyKey,
   handoffApprovedProposal,
+  persistApprovedHandoff,
   resetVerificationAgentStoreForTest,
+  resumeVerificationAgentAfterFounderCorrection,
   runVerificationAgent,
+  saveVerificationAgentRun,
   type AgentModelProvider,
   type MissingReceiptModelOutput,
 } from "./index";
@@ -32,15 +35,15 @@ afterAll(() => {
 });
 
 describe("runVerificationAgent", () => {
-  it("runs the seeded happy path and stops at APPROVAL_REQUIRED", async () => {
+  it("pauses for a separately authenticated founder correction", async () => {
     const result = await runVerificationAgent({
       now: "2026-01-21T00:00:00.000Z",
     });
 
-    expect(result.status).toBe("APPROVAL_REQUIRED");
+    expect(result.status).toBe("CORRECTION_REQUIRED");
     expect(result.agentMode).toBe("mock");
     expect(result.adapterMode).toBe("mock");
-    expect(result.proposal.amount.atomicUnits).toBe("250000000");
+    expect(result.proposal).toBeNull();
     expect(result.missingReceiptQuestion).toContain("receipt");
 
     const codes = result.activityTrace.map((event) => event.code);
@@ -50,13 +53,25 @@ describe("runVerificationAgent", () => {
       "PROOF_GAP_FOUND",
       "EVIDENCE_ANALYZED",
       "RECOVERY_QUESTION_ASKED",
-      "FOUNDER_CORRECTION_ACCEPTED",
-      "MILESTONE_REEVALUATED",
-      "PROPOSAL_PREPARED",
-      "APPROVAL_REQUIRED",
+      "FOUNDER_CORRECTION_REQUIRED",
     ]);
-    expect(Date.parse(result.proposal.expiresAt)).toBeGreaterThan(
-      Date.parse("2026-01-21T00:00:00.000Z"),
+  });
+
+  it("accepts a validated founder correction before preparing a proposal", async () => {
+    const initial = await runVerificationAgent({ now: "2026-01-21T00:00:00.000Z" });
+    const scenario = createPawPovAiEvidenceScenario();
+    const result = resumeVerificationAgentAfterFounderCorrection({
+      run: initial,
+      authenticatedActorId: "founder:fictional",
+      receipt: scenario.recoveryReceipt,
+      acceptedMatch: scenario.recoveryMatch,
+      now: "2026-01-21T00:01:00.000Z",
+    });
+
+    expect(result.status).toBe("APPROVAL_REQUIRED");
+    expect(result.proposal?.amount.atomicUnits).toBe("250000000");
+    expect(result.activityTrace.map((event) => event.code)).toContain(
+      "FOUNDER_CORRECTION_ACCEPTED",
     );
   });
 
@@ -139,24 +154,21 @@ describe("runVerificationAgent", () => {
 
 describe("handoffApprovedProposal", () => {
   it("rejects missing or stale approval handoff", async () => {
-    const run = await runVerificationAgent({
-      now: "2026-01-21T00:00:00.000Z",
-    });
+    const run = await createApprovalRun();
 
     const result = handoffApprovedProposal({
       run,
       approval: {
         approvalId: "approval:1",
-        intentId: run.proposal.intentId,
+        intentId: run.proposal!.intentId,
         authorizedActorRole: "FOUNDER",
         authorizedActorId: "founder:fictional",
         decision: "APPROVED",
         decidedAt: "2026-01-21T00:00:00.000Z",
         expiresAt: "2026-01-21T00:00:01.000Z",
-        idempotencyKey: run.proposal.idempotencyKey,
+        idempotencyKey: run.proposal!.idempotencyKey,
       },
       authenticatedActorId: "founder:fictional",
-      consumeProposalKey: consumeProposalIdempotencyKey,
       now: "2026-01-21T00:00:02.000Z",
     });
 
@@ -165,59 +177,74 @@ describe("handoffApprovedProposal", () => {
   });
 
   it("applies idempotency duplicate protection for repeated approvals", async () => {
-    const run = await runVerificationAgent({
-      now: "2026-01-21T00:00:00.000Z",
-    });
+    const run = await createApprovalRun();
 
     const approval = {
       approvalId: "approval:repeat",
-      intentId: run.proposal.intentId,
+      intentId: run.proposal!.intentId,
       authorizedActorRole: "FOUNDER" as const,
       authorizedActorId: "founder:fictional",
       decision: "APPROVED" as const,
       decidedAt: "2026-01-21T00:00:00.000Z",
-      expiresAt: run.proposal.expiresAt,
-      idempotencyKey: run.proposal.idempotencyKey,
+      expiresAt: run.proposal!.expiresAt,
+      idempotencyKey: run.proposal!.idempotencyKey,
     };
 
+    saveVerificationAgentRun({ authorizedActorId: "founder:fictional", run });
     const first = handoffApprovedProposal({
       run,
       approval,
       authenticatedActorId: "founder:fictional",
-      consumeProposalKey: consumeProposalIdempotencyKey,
       now: "2026-01-21T00:00:01.000Z",
-    });
-    const duplicate = handoffApprovedProposal({
-      run,
-      approval: { ...approval, approvalId: "approval:changed" },
-      authenticatedActorId: "founder:fictional",
-      consumeProposalKey: consumeProposalIdempotencyKey,
-      now: "2026-01-21T00:00:02.000Z",
     });
 
     expect(first.status).toBe("HANDOFF_READY");
-    expect(duplicate.status).toBe("HANDOFF_REJECTED");
+    expect(
+      persistApprovedHandoff({
+        runId: run.runId,
+        approval,
+        result: first,
+      }),
+    ).toBe(true);
+    expect(
+      persistApprovedHandoff({
+        runId: run.runId,
+        approval: { ...approval, approvalId: "approval:changed" },
+        result: first,
+      }),
+    ).toBe(false);
   });
 
   it("rejects an approval that attempts to extend an expired proposal", async () => {
-    const run = await runVerificationAgent({ now: "2026-01-21T00:00:00.000Z" });
+    const run = await createApprovalRun();
     const result = handoffApprovedProposal({
       run,
       approval: {
         approvalId: "approval:late",
-        intentId: run.proposal.intentId,
+        intentId: run.proposal!.intentId,
         authorizedActorRole: "FOUNDER",
         authorizedActorId: "founder:fictional",
         decision: "APPROVED",
         decidedAt: "2026-01-21T00:16:00.000Z",
         expiresAt: "2026-01-21T01:00:00.000Z",
-        idempotencyKey: run.proposal.idempotencyKey,
+        idempotencyKey: run.proposal!.idempotencyKey,
       },
       authenticatedActorId: "founder:fictional",
-      consumeProposalKey: consumeProposalIdempotencyKey,
       now: "2026-01-21T00:16:00.000Z",
     });
 
     expect(result.status).toBe("HANDOFF_REJECTED");
   });
 });
+
+async function createApprovalRun() {
+  const initial = await runVerificationAgent({ now: "2026-01-21T00:00:00.000Z" });
+  const scenario = createPawPovAiEvidenceScenario();
+  return resumeVerificationAgentAfterFounderCorrection({
+    run: initial,
+    authenticatedActorId: "founder:fictional",
+    receipt: scenario.recoveryReceipt,
+    acceptedMatch: scenario.recoveryMatch,
+    now: "2026-01-21T00:01:00.000Z",
+  });
+}

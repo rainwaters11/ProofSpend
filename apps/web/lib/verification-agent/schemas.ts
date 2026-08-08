@@ -22,6 +22,7 @@ export const ActivityCodeSchema = z.enum([
   "MILESTONE_EVALUATED",
   "PROOF_GAP_FOUND",
   "RECOVERY_QUESTION_ASKED",
+  "FOUNDER_CORRECTION_REQUIRED",
   "FOUNDER_CORRECTION_ACCEPTED",
   "MILESTONE_REEVALUATED",
   "PROPOSAL_PREPARED",
@@ -117,12 +118,12 @@ export type ReleaseProposal = z.infer<typeof ReleaseProposalSchema>;
 export const VerificationAgentResultSchema = z
   .object({
     runId: z.string().min(1),
-    status: z.literal("APPROVAL_REQUIRED"),
+    status: z.enum(["CORRECTION_REQUIRED", "APPROVAL_REQUIRED"]),
     agentMode: VerificationAgentModeSchema,
     adapterMode: AdapterModeSchema,
     missingReceiptQuestion: z.string().min(1),
     modelSummary: z.string().min(1),
-    proposal: ReleaseProposalSchema,
+    proposal: ReleaseProposalSchema.nullable(),
     missingGapId: z.string().min(1),
     activityTrace: z.array(ActivityEventSchema).min(1),
   })

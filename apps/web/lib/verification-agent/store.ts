@@ -1,13 +1,18 @@
 import "server-only";
 
 import {
+  ApprovalDecisionSchema,
+  HandoffResultSchema,
   VerificationAgentResultSchema,
+  type ApprovalDecision,
+  type HandoffResult,
   type VerificationAgentResult,
 } from "./schemas";
 
 interface StoredVerificationRun {
   authorizedActorId: string;
   run: VerificationAgentResult;
+  handoff: { approval: ApprovalDecision; result: HandoffResult } | null;
 }
 
 const runs = new Map<string, StoredVerificationRun>();
@@ -20,7 +25,18 @@ export function saveVerificationAgentRun(args: {
   runs.set(args.run.runId, {
     authorizedActorId: args.authorizedActorId,
     run: VerificationAgentResultSchema.parse(structuredClone(args.run)),
+    handoff: null,
   });
+}
+
+export function replaceVerificationAgentRun(args: {
+  authorizedActorId: string;
+  run: VerificationAgentResult;
+}): void {
+  if (!runs.has(args.run.runId)) {
+    throw new Error("VERIFICATION_RUN_NOT_FOUND");
+  }
+  saveVerificationAgentRun(args);
 }
 
 export function loadVerificationAgentRun(runId: string): StoredVerificationRun | null {
@@ -28,11 +44,25 @@ export function loadVerificationAgentRun(runId: string): StoredVerificationRun |
   return stored === undefined ? null : structuredClone(stored);
 }
 
-export function consumeProposalIdempotencyKey(key: string): boolean {
-  if (consumedProposalKeys.has(key)) {
+export function persistApprovedHandoff(args: {
+  runId: string;
+  approval: ApprovalDecision;
+  result: HandoffResult;
+}): boolean {
+  const stored = runs.get(args.runId);
+  if (
+    stored === undefined ||
+    stored.handoff !== null ||
+    stored.run.proposal === null ||
+    consumedProposalKeys.has(stored.run.proposal.idempotencyKey)
+  ) {
     return false;
   }
-  consumedProposalKeys.add(key);
+  stored.handoff = {
+    approval: ApprovalDecisionSchema.parse(structuredClone(args.approval)),
+    result: HandoffResultSchema.parse(structuredClone(args.result)),
+  };
+  consumedProposalKeys.add(stored.run.proposal.idempotencyKey);
   return true;
 }
 

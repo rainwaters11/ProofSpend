@@ -36,7 +36,7 @@ describe("POST /api/verification-agent/run", () => {
     process.env.PROOFSPEND_AGENT_API_TOKEN = original.PROOFSPEND_AGENT_API_TOKEN;
   });
 
-  it("returns sanitized approval-required run output", async () => {
+  it("returns sanitized correction-required run output", async () => {
     const response = await POST(
       new Request("http://localhost/api/verification-agent/run", {
         method: "POST",
@@ -47,8 +47,8 @@ describe("POST /api/verification-agent/run", () => {
     expect(response.status).toBe(200);
     const json = await response.json();
 
-    expect(json.status).toBe("APPROVAL_REQUIRED");
-    expect(json.proposal.amount.atomicUnits).toBe("250000000");
+    expect(json.status).toBe("CORRECTION_REQUIRED");
+    expect(json.proposal).toBeNull();
     expect(Array.isArray(json.activityTrace)).toBe(true);
   });
 

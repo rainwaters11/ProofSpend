@@ -1,12 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { createPawPovAiEvidenceScenario } from "@proofspend/domain";
+
 import {
+  loadVerificationAgentRun,
   resetAgentApiAccessForTest,
   resetVerificationAgentStoreForTest,
 } from "@/lib/verification-agent";
 
 import { POST } from "./route";
 import { POST as runAgent } from "../run/route";
+import { POST as submitCorrection } from "../correction/route";
 
 const API_TOKEN = "test-agent-api-token-that-is-at-least-32-chars";
 
@@ -44,7 +48,8 @@ describe("POST /api/verification-agent/handoff", () => {
         headers: { Authorization: `Bearer ${API_TOKEN}` },
       }),
     );
-    const run = await runResponse.json();
+    const initialRun = await runResponse.json();
+    const run = await submitFounderCorrection(initialRun);
     const decidedAt = new Date().toISOString();
     const request = new Request("http://localhost/api/verification-agent/handoff", {
       method: "POST",
@@ -75,6 +80,10 @@ describe("POST /api/verification-agent/handoff", () => {
     expect(json.execution.transactionHash).toBeNull();
     expect(json.execution.confirmation).toBeNull();
     expect(json.execution.explorerUrl).toBeNull();
+    expect(loadVerificationAgentRun(run.runId)?.handoff).toMatchObject({
+      approval: { approvalId: "approval:test" },
+      result: { status: "HANDOFF_READY" },
+    });
   });
 
   it("does not accept client-supplied run state", async () => {
@@ -84,7 +93,8 @@ describe("POST /api/verification-agent/handoff", () => {
         headers: { Authorization: `Bearer ${API_TOKEN}` },
       }),
     );
-    const run = await runResponse.json();
+    const initialRun = await runResponse.json();
+    const run = await submitFounderCorrection(initialRun);
     const decidedAt = new Date().toISOString();
     const request = new Request("http://localhost/api/verification-agent/handoff", {
       method: "POST",
@@ -118,3 +128,23 @@ describe("POST /api/verification-agent/handoff", () => {
     expect(response.status).toBe(400);
   });
 });
+
+async function submitFounderCorrection(run: { runId: string }) {
+  const scenario = createPawPovAiEvidenceScenario();
+  const response = await submitCorrection(
+    new Request("http://localhost/api/verification-agent/correction", {
+      method: "POST",
+      headers: new Headers({
+        Authorization: "Bearer " + API_TOKEN,
+        "Content-Type": "application/json",
+      }),
+      body: JSON.stringify({
+        runId: run.runId,
+        receipt: scenario.recoveryReceipt,
+        acceptedMatch: scenario.recoveryMatch,
+      }),
+    }),
+  );
+  expect(response.status).toBe(200);
+  return response.json();
+}

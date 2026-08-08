@@ -25,13 +25,13 @@ describe("ActivityPage", () => {
     process.env.LLM_MODEL = original.LLM_MODEL;
   });
 
-  it("renders ordered, labeled activity for the approval-required run", async () => {
+  it("renders ordered, labeled activity for the correction-required run", async () => {
     const markup = renderToStaticMarkup(await ActivityPage());
 
     expect(markup).toContain("Verification Agent Activity");
     expect(markup).toContain("Agent mode:");
-    expect(markup).toContain("APPROVAL_REQUIRED");
-    expect(markup).toContain("250.00 USDC");
+    expect(markup).toContain("CORRECTION_REQUIRED");
+    expect(markup).toContain("founder submits a validated receipt correction");
     expect(markup).toContain("AI");
     expect(markup).toContain("DETERMINISTIC");
     expect(markup).toContain("HUMAN");

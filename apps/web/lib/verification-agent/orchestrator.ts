@@ -4,6 +4,8 @@ import {
   applyMissingReceiptRecovery,
   createPawPovAiEvidenceScenario,
   evaluateEvidenceEngine,
+  type EvidenceItem,
+  type EvidenceMatch,
 } from "@proofspend/domain";
 
 import { getEnvironment } from "../env";
@@ -25,7 +27,7 @@ import {
 } from "./schemas";
 
 const MAX_MODEL_CALLS = 1;
-const MAX_ACTIVITY_EVENTS = 9;
+const MAX_ACTIVITY_EVENTS = 10;
 const RELEASE_TTL_MS = 15 * 60 * 1000;
 const PROPOSAL_INTENT_ID = "intent:release:pawpovai:milestone-launch-ready";
 const PROPOSAL_IDEMPOTENCY_KEY = "release:pawpovai:milestone-launch-ready:250usdc";
@@ -174,17 +176,65 @@ export async function runVerificationAgent(
     message: redactMessage(modelOutput.question),
   });
 
+  appendEvent(trace, {
+    id: `${runId}:correction:required`,
+    at: now,
+    layer: "HUMAN",
+    code: "FOUNDER_CORRECTION_REQUIRED",
+    message: "Run paused pending a separately authenticated founder receipt correction.",
+  });
+
+  return VerificationAgentResultSchema.parse({
+    runId,
+    status: "CORRECTION_REQUIRED",
+    agentMode: options.agentMode ?? environment.PROOFSPEND_AGENT_MODE,
+    adapterMode: environment.PROOFSPEND_ADAPTER_MODE,
+    missingReceiptQuestion: redactMessage(modelOutput.question),
+    modelSummary: redactMessage(modelOutput.summary),
+    proposal: null,
+    missingGapId: missingGap.id,
+    activityTrace: trace.map((event) => ({
+      ...event,
+      message: redactMessage(event.message),
+    })),
+  });
+}
+
+export function resumeVerificationAgentAfterFounderCorrection(args: {
+  run: VerificationAgentResult;
+  authenticatedActorId: string;
+  receipt: EvidenceItem;
+  acceptedMatch: EvidenceMatch;
+  now?: string;
+}): VerificationAgentResult {
+  const run = VerificationAgentResultSchema.parse(args.run);
+  if (run.status !== "CORRECTION_REQUIRED" || run.proposal !== null) {
+    throw new Error("AGENT_CORRECTION_NOT_REQUIRED");
+  }
+
+  const now = args.now ?? new Date().toISOString();
+  const scenario = createPawPovAiEvidenceScenario();
+  if (scenario.authorizedFounder.actorId !== args.authenticatedActorId) {
+    throw new Error("AGENT_FOUNDER_CORRECTION_UNAUTHORIZED");
+  }
+  const missingGap = selectSingleMissingReceiptGap(
+    evaluateEvidenceEngine(scenario.initialInput).proofGaps,
+  );
+  if (run.missingGapId !== missingGap.id) {
+    throw new Error("AGENT_CORRECTION_GAP_MISMATCH");
+  }
+  const trace = structuredClone(run.activityTrace);
   const recovered = applyMissingReceiptRecovery({
     input: scenario.initialInput,
     gap: missingGap,
-    receipt: scenario.recoveryReceipt,
-    acceptedMatch: scenario.recoveryMatch,
+    receipt: args.receipt,
+    acceptedMatch: args.acceptedMatch,
     actor: scenario.authorizedFounder,
     resolvedAt: now,
   });
 
   appendEvent(trace, {
-    id: `${runId}:correction`,
+    id: `${run.runId}:correction`,
     at: now,
     layer: "HUMAN",
     code: "FOUNDER_CORRECTION_ACCEPTED",
@@ -192,7 +242,7 @@ export async function runVerificationAgent(
   });
 
   appendEvent(trace, {
-    id: `${runId}:evaluate:recovery`,
+    id: `${run.runId}:evaluate:recovery`,
     at: now,
     layer: "DETERMINISTIC",
     code: "MILESTONE_REEVALUATED",
@@ -205,7 +255,7 @@ export async function runVerificationAgent(
   );
 
   appendEvent(trace, {
-    id: `${runId}:proposal`,
+    id: `${run.runId}:proposal`,
     at: now,
     layer: "DETERMINISTIC",
     code: "PROPOSAL_PREPARED",
@@ -213,31 +263,24 @@ export async function runVerificationAgent(
   });
 
   appendEvent(trace, {
-    id: `${runId}:approval`,
+    id: `${run.runId}:approval`,
     at: now,
     layer: "HUMAN",
     code: "APPROVAL_REQUIRED",
     message: "Run paused at APPROVAL_REQUIRED for explicit founder approval.",
   });
 
-  const result = VerificationAgentResultSchema.parse({
-    runId,
+  return VerificationAgentResultSchema.parse({
+    ...run,
     status: "APPROVAL_REQUIRED",
-    agentMode: options.agentMode ?? environment.PROOFSPEND_AGENT_MODE,
-    adapterMode: environment.PROOFSPEND_ADAPTER_MODE,
-    missingReceiptQuestion: redactMessage(modelOutput.question),
-    modelSummary: redactMessage(modelOutput.summary),
     proposal,
-    missingGapId: missingGap.id,
     activityTrace: trace.map((event) => ({
       ...event,
       message: redactMessage(event.message),
     })),
   });
 
-  if (result.activityTrace.length > MAX_ACTIVITY_EVENTS) {
+  if (trace.length > MAX_ACTIVITY_EVENTS) {
     throw new Error("AGENT_MAX_ACTIVITY_EVENTS_EXCEEDED");
   }
-
-  return result;
 }

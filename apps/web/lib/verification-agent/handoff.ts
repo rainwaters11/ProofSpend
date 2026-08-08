@@ -18,7 +18,6 @@ export function handoffApprovedProposal(args: {
   run: VerificationAgentResult;
   approval: ApprovalDecision;
   authenticatedActorId: string;
-  consumeProposalKey: (key: string) => boolean;
   now?: string;
 }): HandoffResult {
   const run = args.run;
@@ -38,7 +37,7 @@ export function handoffApprovedProposal(args: {
     message: "Human approval submitted for deterministic server revalidation.",
   });
 
-  if (run.status !== "APPROVAL_REQUIRED") {
+  if (run.status !== "APPROVAL_REQUIRED" || run.proposal === null) {
     appendActivity(trace, {
       id: `${run.runId}:handoff:reject:state`,
       at: now,
@@ -160,26 +159,6 @@ export function handoffApprovedProposal(args: {
     });
   }
 
-  if (!args.consumeProposalKey(run.proposal.idempotencyKey)) {
-    appendActivity(trace, {
-      id: `${run.runId}:handoff:reject:duplicate`,
-      at: now,
-      layer: "DETERMINISTIC",
-      code: "HANDOFF_REJECTED",
-      message: "Handoff rejected because the proposal idempotency key was already consumed.",
-    });
-    return HandoffResultSchema.parse({
-      status: "HANDOFF_REJECTED",
-      adapterMode: run.adapterMode,
-      execution: {
-        state: "SKIPPED_MOCK",
-        transactionHash: null,
-        confirmation: null,
-        explorerUrl: null,
-      },
-      activityTrace: trace,
-    });
-  }
   if (run.adapterMode === "mock") {
     appendActivity(trace, {
       id: `${run.runId}:handoff:mock`,
