@@ -175,6 +175,7 @@ describe("bounded Evidence Engine", () => {
       resolvedAt,
     });
     const packet = await buildMilestoneEvaluationPacket({
+      milestoneId: scenario.milestone.id,
       evaluation: recovered.evaluation,
       evidenceItems: recovered.input.evidenceItems,
       verifiedSpend: recovered.input.verifiedSpend,
@@ -200,6 +201,7 @@ describe("bounded Evidence Engine", () => {
     });
 
     const packetA = await buildMilestoneEvaluationPacket({
+      milestoneId: scenario.milestone.id,
       evaluation: recovered.evaluation,
       evidenceItems: [...recovered.input.evidenceItems].reverse(),
       verifiedSpend: recovered.input.verifiedSpend,
@@ -207,6 +209,7 @@ describe("bounded Evidence Engine", () => {
       generatedAt,
     });
     const packetB = await buildMilestoneEvaluationPacket({
+      milestoneId: scenario.milestone.id,
       evaluation: recovered.evaluation,
       evidenceItems: recovered.input.evidenceItems,
       verifiedSpend: recovered.input.verifiedSpend,
@@ -215,16 +218,18 @@ describe("bounded Evidence Engine", () => {
     });
 
     expect(JSON.stringify(packetA)).toBe(JSON.stringify(packetB));
+    expect(packetA.milestoneId).toBe(scenario.milestone.id);
     expect(packetA.evidenceIds).toEqual([...packetA.evidenceIds].sort());
     expect(packetA.evidenceHashes).toEqual([...packetA.evidenceHashes].sort());
     expect(packetA.unresolvedProofGapIds).toEqual([]);
     expect(packetA.recommendedNextAction).toBe("REQUEST_HUMAN_APPROVAL");
   });
 
-  it("changes packet hash candidates when canonical evidence or proof-gap inputs change", async () => {
+  it("changes packet hash candidates when canonical evidence, milestone, or proof-gap inputs change", async () => {
     const scenario = createPawPovAiEvidenceScenario();
     const first = evaluateEvidenceEngine(scenario.initialInput);
     const initialPacket = await buildMilestoneEvaluationPacket({
+      milestoneId: scenario.milestone.id,
       evaluation: first.evaluation,
       evidenceItems: scenario.initialInput.evidenceItems,
       verifiedSpend: scenario.initialInput.verifiedSpend,
@@ -235,14 +240,25 @@ describe("bounded Evidence Engine", () => {
       ? EvidenceItemSchema.parse({ ...item, sourceHash: `sha256:${"c".repeat(64)}` })
       : item);
     const changedEvidencePacket = await buildMilestoneEvaluationPacket({
+      milestoneId: scenario.milestone.id,
       evaluation: first.evaluation,
       evidenceItems: changedEvidence,
       verifiedSpend: scenario.initialInput.verifiedSpend,
       proofGaps: first.proofGaps,
       generatedAt,
     });
-
     expect(changedEvidencePacket.deliverableHashCandidate).not.toBe(initialPacket.deliverableHashCandidate);
+
+    const otherMilestonePacket = await buildMilestoneEvaluationPacket({
+      milestoneId: "milestone:other",
+      evaluation: first.evaluation,
+      evidenceItems: scenario.initialInput.evidenceItems,
+      verifiedSpend: scenario.initialInput.verifiedSpend,
+      proofGaps: [],
+      generatedAt,
+    });
+    expect(otherMilestonePacket.deliverableHashCandidate).not.toBe(initialPacket.deliverableHashCandidate);
+    expect(otherMilestonePacket.reasonHashCandidate).not.toBe(initialPacket.reasonHashCandidate);
 
     const recovered = applyMissingReceiptRecovery({
       input: scenario.initialInput,
@@ -253,6 +269,7 @@ describe("bounded Evidence Engine", () => {
       resolvedAt,
     });
     const recoveredPacket = await buildMilestoneEvaluationPacket({
+      milestoneId: scenario.milestone.id,
       evaluation: recovered.evaluation,
       evidenceItems: recovered.input.evidenceItems,
       verifiedSpend: recovered.input.verifiedSpend,
@@ -260,6 +277,19 @@ describe("bounded Evidence Engine", () => {
       generatedAt,
     });
     expect(recoveredPacket.reasonHashCandidate).not.toBe(initialPacket.reasonHashCandidate);
+  });
+
+  it("rejects proof gaps that do not belong to the packet milestone", async () => {
+    const scenario = createPawPovAiEvidenceScenario();
+    const first = evaluateEvidenceEngine(scenario.initialInput);
+    await expect(buildMilestoneEvaluationPacket({
+      milestoneId: "milestone:other",
+      evaluation: first.evaluation,
+      evidenceItems: scenario.initialInput.evidenceItems,
+      verifiedSpend: scenario.initialInput.verifiedSpend,
+      proofGaps: first.proofGaps,
+      generatedAt,
+    })).rejects.toThrow(/proof gaps must belong to the exact milestone/i);
   });
 
   it("treats verified spend as an upstream atomic-USDC fact that mock extraction cannot override", () => {
