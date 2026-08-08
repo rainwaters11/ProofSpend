@@ -7,7 +7,7 @@ import {
   evaluateEvidenceEngine,
   type EvidenceEngineInput,
 } from "../src/evidence-engine";
-import { AuditEventSchema, EvidenceItemSchema, EvidenceMatchSchema } from "../src/models";
+import { AuditEventSchema, EvidenceItemSchema, EvidenceMatchSchema, MilestoneRequirementSchema } from "../src/models";
 
 const resolvedAt = "2026-01-20T00:05:00.000Z";
 const generatedAt = "2026-01-20T00:10:00.000Z";
@@ -600,6 +600,48 @@ describe("bounded Evidence Engine", () => {
     expect(changedPacket.requirementDefinitions).not.toEqual(baselinePacket.requirementDefinitions);
     expect(changedPacket.deliverableHashCandidate).not.toBe(baselinePacket.deliverableHashCandidate);
     expect(changedPacket.reasonHashCandidate).not.toBe(baselinePacket.reasonHashCandidate);
+  });
+
+  it("binds canonical milestone fields including dueAt into both packet commitments", async () => {
+    const input = recoveredInput();
+    const dueDateRequirement = MilestoneRequirementSchema.parse({
+      id: "requirement:due-date",
+      milestoneId: input.milestone.id,
+      kind: "DUE_DATE",
+      description: "Launch evidence must be evaluated before the deadline.",
+    });
+    const withDueAt = (dueAt: string): EvidenceEngineInput => ({
+      ...input,
+      milestone: {
+        ...input.milestone,
+        dueAt,
+        requirementIds: [...input.milestone.requirementIds, dueDateRequirement.id],
+      },
+      requirements: [...input.requirements, dueDateRequirement],
+    });
+    const earlierDeadlineInput = withDueAt("2026-02-01T00:00:00.000Z");
+    const laterDeadlineInput = withDueAt("2026-02-15T00:00:00.000Z");
+    const earlierResult = evaluateEvidenceEngine(earlierDeadlineInput);
+    const laterResult = evaluateEvidenceEngine(laterDeadlineInput);
+
+    expect(laterResult.evaluation).toEqual(earlierResult.evaluation);
+    const earlierPacket = await buildMilestoneEvaluationPacket({
+      input: earlierDeadlineInput,
+      evaluation: earlierResult.evaluation,
+      proofGaps: earlierResult.proofGaps,
+      generatedAt,
+    });
+    const laterPacket = await buildMilestoneEvaluationPacket({
+      input: laterDeadlineInput,
+      evaluation: laterResult.evaluation,
+      proofGaps: laterResult.proofGaps,
+      generatedAt,
+    });
+
+    expect(earlierPacket.milestoneDefinition.dueAt).toBe(earlierDeadlineInput.milestone.dueAt);
+    expect(laterPacket.milestoneDefinition.dueAt).toBe(laterDeadlineInput.milestone.dueAt);
+    expect(laterPacket.deliverableHashCandidate).not.toBe(earlierPacket.deliverableHashCandidate);
+    expect(laterPacket.reasonHashCandidate).not.toBe(earlierPacket.reasonHashCandidate);
   });
 
   it("binds packet hashes and fields to the exact evaluated evidence input", async () => {
