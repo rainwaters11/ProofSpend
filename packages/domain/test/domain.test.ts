@@ -211,6 +211,36 @@ describe("separate state machines", () => {
   it.each(["AI", "SYSTEM", "BACKER", "PROVIDER", "ADAPTER"] as const)("rejects %s approval without emitting a successful result", (actorType: "AI" | "SYSTEM" | "BACKER" | "PROVIDER" | "ADAPTER") => {
     expect(() => transitionApplication("APPROVAL_PENDING", "APPROVED", { ...context, actor: { actorId: "forbidden", actorType }, authorizedApproverId: "forbidden" })).toThrow(InvalidTransitionError);
   });
+  it("rejects duplicate and out-of-order approval transitions after approval advances state", () => {
+    const approvalDecision = ApprovalRecordSchema.parse({
+      id: "approval:state-machine",
+      aggregateId: context.aggregateId,
+      intentId: "intent:state-machine",
+      actionKind: "RELEASE_APPROVAL",
+      authorizedActorType: "FOUNDER",
+      authorizedActorId: "founder:state-machine",
+      exactIntentHash: `sha256:${"a".repeat(64)}`,
+      idempotencyKey: "approval:state-machine:key",
+      decision: "APPROVED",
+      approver: { actorId: "founder:state-machine", actorType: "FOUNDER" },
+      expiresAt: "2027-01-01T00:00:00.000Z",
+      decidedAt: context.occurredAt,
+    });
+    const approvalContext = {
+      ...context,
+      aggregateType: "release",
+      actor: { actorId: "founder:state-machine", actorType: "FOUNDER" as const },
+      authorizedApproverId: "founder:state-machine",
+      approvalDecision,
+      expectedApprovalId: approvalDecision.id,
+      expectedIntentId: approvalDecision.intentId,
+      expectedExactIntentHash: approvalDecision.exactIntentHash,
+    };
+    const approved = transitionApplication("APPROVAL_PENDING", "APPROVED", approvalContext);
+    expect(approved.state).toBe("APPROVED");
+    expect(() => transitionApplication(approved.state, "APPROVED", { ...approvalContext, eventId: "event:duplicate-approval" })).toThrow(InvalidTransitionError);
+    expect(() => transitionApplication("ELIGIBLE", "APPROVED", { ...approvalContext, eventId: "event:out-of-order-approval" })).toThrow(InvalidTransitionError);
+  });
   it("requires persisted approval and exact canonical intent evidence to submit", async () => {
     const transaction = TransactionRecordSchema.parse({ id: "transaction:submission", projectId: "project:1", releaseRequestId: "release:1", intentId: "intent:1", destinationReference: "mock:recipient", approvalId: "approval:1", approvalBindingId: "binding:submission", reconciliationId: null, idempotencyKey: "transaction:key", amount: usdc("1"), operationState: "SUBMITTED", arcTransaction: mockTransaction("SUBMITTED"), createdAt: context.occurredAt, updatedAt: context.occurredAt });
     const executionIntent = CanonicalExecutionIntentSchema.parse({ version: 1, actionKind: "RELEASE_APPROVAL", projectId: transaction.projectId, releaseRequestId: transaction.releaseRequestId, transactionRecordId: transaction.id, intentId: transaction.intentId, asset: "USDC", atomicAmount: "1", operationType: "SETTLEMENT", protocolTarget: { kind: "DESTINATION", destination: transaction.destinationReference, network: "ARC_TESTNET", chainId: "synthetic:chain", isMock: true } });

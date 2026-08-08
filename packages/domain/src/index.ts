@@ -1,5 +1,6 @@
 export * from "./disclosure";
 export * from "./integrity";
+export * from "./milestone-engine";
 export * from "./money";
 export * from "./models";
 export * from "./mocks";
