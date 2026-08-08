@@ -7,12 +7,27 @@ const optionalNonEmptyString = z.preprocess(
   z.string().trim().min(1).optional(),
 );
 
-const environmentSchema = z.object({
-  OPENAI_API_KEY: optionalNonEmptyString,
-  LLM_MODEL: optionalNonEmptyString,
-  CIRCLE_CHAIN: z.literal("ARC-TESTNET").optional(),
-  PROOFSPEND_ADAPTER_MODE: z.literal("mock"),
-});
+const mockEnvironmentSchema = z
+  .object({
+    OPENAI_API_KEY: optionalNonEmptyString,
+    LLM_MODEL: optionalNonEmptyString,
+    CIRCLE_CHAIN: z.literal("ARC-TESTNET").optional(),
+    PROOFSPEND_ADAPTER_MODE: z.literal("mock"),
+    PROOFSPEND_AGENT_MODE: z.literal("mock"),
+  })
+  .strict();
+
+const openAiEnvironmentSchema = z
+  .object({
+    OPENAI_API_KEY: z.string().trim().min(1),
+    LLM_MODEL: z.string().trim().min(1),
+    CIRCLE_CHAIN: z.literal("ARC-TESTNET").optional(),
+    PROOFSPEND_ADAPTER_MODE: z.literal("mock"),
+    PROOFSPEND_AGENT_MODE: z.literal("openai"),
+  })
+  .strict();
+
+const environmentSchema = z.union([mockEnvironmentSchema, openAiEnvironmentSchema]);
 
 export type ServerEnvironment = z.infer<typeof environmentSchema>;
 

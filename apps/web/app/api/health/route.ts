@@ -9,6 +9,7 @@ export function GET() {
   return NextResponse.json({
     status: "ok",
     adapterMode: environment.PROOFSPEND_ADAPTER_MODE,
+    agentMode: environment.PROOFSPEND_AGENT_MODE,
     version: APPLICATION_VERSION,
   });
 }
