@@ -3,12 +3,13 @@ import type { CircleDeveloperControlledWalletsClient } from "@circle-fin/develop
 
 import { getCircleEnvironment } from "./env";
 import { normalizeWalletError, WalletProviderError } from "./errors";
+import { failureResult, preparedResult, revalidateApprovedIntent } from "./intent";
 import type {
-  PaymentPreparation,
-  PaymentResult,
+  ApprovedTransferIntent,
+  ArcTestnetTransferProvider,
+  TransferResult,
+  TransferWalletStatus,
   WalletBalance,
-  WalletProvider,
-  WalletStatus,
 } from "./types";
 
 export const USDC_DECIMALS = 6;
@@ -21,9 +22,7 @@ const TERMINAL_STATES: ReadonlySet<string> = new Set([
   "STUCK",
 ]);
 
-const EVM_ADDRESS_PATTERN = /^0x[a-fA-F0-9]{40}$/;
 const EVM_HASH_PATTERN = /^0x[a-fA-F0-9]{64}$/;
-const POSITIVE_INTEGER_PATTERN = /^[1-9]\d*$/;
 
 function isValidEvmHash(value: string | undefined): value is string {
   return typeof value === "string" && EVM_HASH_PATTERN.test(value);
@@ -33,6 +32,7 @@ export interface CircleWalletProviderConfig {
   apiKey: string;
   entitySecret: string;
   sourceWalletId: string;
+  destinationWalletId: string;
   pollIntervalMs?: number;
   maxPolls?: number;
 }
@@ -60,52 +60,47 @@ function decimalToAtomic(amountDecimal: string): string {
   ).toString();
 }
 
-function validatePayment(payment: PaymentPreparation, blockchain: string): void {
-  if (payment.chain !== blockchain) {
-    throw new WalletProviderError("INVALID_REQUEST", "Unsupported blockchain.");
-  }
-  if (payment.asset !== "USDC") {
-    throw new WalletProviderError("INVALID_REQUEST", "Unsupported asset.");
-  }
-  if (!EVM_ADDRESS_PATTERN.test(payment.destinationAddress)) {
-    throw new WalletProviderError("INVALID_REQUEST", "Invalid destination address.");
-  }
-  if (!POSITIVE_INTEGER_PATTERN.test(payment.amountAtomic)) {
-    throw new WalletProviderError("INVALID_REQUEST", "Invalid amount.");
-  }
-  if (!payment.idempotencyKey) {
-    throw new WalletProviderError("INVALID_REQUEST", "Missing idempotency key.");
-  }
-}
-
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
-export class CircleWalletProvider implements WalletProvider {
+export class CircleWalletProvider implements ArcTestnetTransferProvider {
   private readonly client: CircleDeveloperControlledWalletsClient;
   private readonly sourceWalletId: string;
+  private readonly destinationWalletId: string;
   private readonly blockchain: string;
   private readonly usdcTokenAddress: string;
   private readonly pollIntervalMs: number;
   private readonly maxPolls: number;
   private readonly arcscanBaseUrl: string;
+  private readonly submittedKeys: Set<string> = new Set();
 
   constructor(config: CircleWalletProviderConfig) {
-    if (!config.apiKey || !config.entitySecret || !config.sourceWalletId) {
-      throw new WalletProviderError("PROVIDER_UNAVAILABLE", "Circle adapter configuration is incomplete.");
+    if (
+      !config.apiKey ||
+      !config.entitySecret ||
+      !config.sourceWalletId ||
+      !config.destinationWalletId
+    ) {
+      throw new WalletProviderError(
+        "PROVIDER_UNAVAILABLE",
+        "Circle adapter configuration is incomplete.",
+      );
     }
     let environment;
     try {
       environment = getCircleEnvironment();
     } catch (error) {
-      throw new WalletProviderError("PROVIDER_UNAVAILABLE", "Circle adapter environment is incomplete.", {
-        cause: error,
-      });
+      throw new WalletProviderError(
+        "PROVIDER_UNAVAILABLE",
+        "Circle adapter environment is incomplete.",
+        { cause: error },
+      );
     }
     this.client = initiateDeveloperControlledWalletsClient({
       apiKey: config.apiKey,
       entitySecret: config.entitySecret,
     });
     this.sourceWalletId = config.sourceWalletId;
+    this.destinationWalletId = config.destinationWalletId;
     this.blockchain = environment.blockchain;
     this.usdcTokenAddress = environment.usdcTokenAddress;
     this.pollIntervalMs = config.pollIntervalMs ?? environment.pollIntervalMs;
@@ -113,12 +108,38 @@ export class CircleWalletProvider implements WalletProvider {
     this.arcscanBaseUrl = environment.arcscanBaseUrl;
   }
 
-  async getStatus(): Promise<WalletStatus> {
+  async getStatus(): Promise<TransferWalletStatus> {
     try {
-      await this.client.listWallets();
-      return { mode: "circle", state: "ready" };
+      const [source, destination] = await Promise.all([
+        this.client.getWallet({ id: this.sourceWalletId }),
+        this.client.getWallet({ id: this.destinationWalletId }),
+      ]);
+      const sourceWallet = source.data?.wallet;
+      const destinationWallet = destination.data?.wallet;
+      if (!sourceWallet || !destinationWallet) {
+        return {
+          mode: "ARC_TESTNET",
+          state: "unavailable",
+          sourceWalletId: this.sourceWalletId,
+          destinationWalletId: this.destinationWalletId,
+          reason: "A configured Arc Testnet wallet was not found.",
+        };
+      }
+      return {
+        mode: "ARC_TESTNET",
+        state: "ready",
+        sourceWalletId: sourceWallet.id,
+        destinationWalletId: destinationWallet.id,
+        sourceWalletAddress: sourceWallet.address,
+        destinationWalletAddress: destinationWallet.address,
+      };
     } catch {
-      return { mode: "circle", state: "unavailable" };
+      return {
+        mode: "ARC_TESTNET",
+        state: "unavailable",
+        sourceWalletId: this.sourceWalletId,
+        destinationWalletId: this.destinationWalletId,
+      };
     }
   }
 
@@ -140,39 +161,100 @@ export class CircleWalletProvider implements WalletProvider {
     }
   }
 
-  async preparePayment(payment: PaymentPreparation): Promise<PaymentPreparation> {
-    validatePayment(payment, this.blockchain);
-    return { ...payment };
+  async prepareTransfer(intent: ApprovedTransferIntent): Promise<TransferResult> {
+    const revalidation = revalidateApprovedIntent(intent, {
+      usdcTokenAddress: this.usdcTokenAddress,
+      sourceWalletId: this.sourceWalletId,
+    });
+    if (!revalidation.ok) {
+      return failureResult(intent, "ARC_TESTNET", revalidation);
+    }
+    return preparedResult(intent, "ARC_TESTNET");
   }
 
-  async executePayment(payment: PaymentPreparation): Promise<PaymentResult> {
-    validatePayment(payment, this.blockchain);
+  async submitTransfer(intent: ApprovedTransferIntent): Promise<TransferResult> {
+    const revalidation = revalidateApprovedIntent(intent, {
+      usdcTokenAddress: this.usdcTokenAddress,
+      sourceWalletId: this.sourceWalletId,
+    });
+    if (!revalidation.ok) {
+      return failureResult(intent, "ARC_TESTNET", revalidation);
+    }
+    if (this.submittedKeys.has(intent.proposalId) || this.submittedKeys.has(intent.idempotencyKey)) {
+      return failureResult(intent, "ARC_TESTNET", {
+        ok: false,
+        failureCode: "DUPLICATE_SUBMISSION",
+        failureMessage: "This proposal has already been submitted.",
+      });
+    }
     try {
-      const amountDecimal = atomicToDecimal(payment.amountAtomic);
+      const destination = await this.client.getWallet({ id: this.destinationWalletId });
+      const destinationAddress = destination.data?.wallet?.address;
+      if (
+        !destinationAddress ||
+        destinationAddress.toLowerCase() !== intent.destinationAddress.toLowerCase()
+      ) {
+        return failureResult(intent, "ARC_TESTNET", {
+          ok: false,
+          failureCode: "WALLET_MISMATCH",
+          failureMessage:
+            "The destination address does not match the configured Arc Testnet destination wallet.",
+        });
+      }
       const response = await this.client.createTransaction({
         walletId: this.sourceWalletId,
         tokenAddress: this.usdcTokenAddress,
-        amount: [amountDecimal],
-        destinationAddress: payment.destinationAddress,
+        amount: [atomicToDecimal(intent.amountAtomic)],
+        destinationAddress: intent.destinationAddress,
         fee: { type: "level", config: { feeLevel: "MEDIUM" } },
-        idempotencyKey: payment.idempotencyKey,
+        idempotencyKey: intent.idempotencyKey,
+        refId: intent.proposalId,
       });
       const transactionId = response.data?.id;
       if (!transactionId) {
         throw new WalletProviderError("INVALID_REQUEST", "Circle did not return a transaction id.");
       }
+      this.submittedKeys.add(intent.proposalId);
+      this.submittedKeys.add(intent.idempotencyKey);
+      return {
+        proposalId: intent.proposalId,
+        idempotencyKey: intent.idempotencyKey,
+        mode: "ARC_TESTNET",
+        status: "SUBMITTED",
+        transactionId,
+        polledAt: new Date().toISOString(),
+      };
+    } catch (error) {
+      throw normalizeWalletError(error);
+    }
+  }
 
-      let state = response.data?.state ?? "";
+  async pollTransfer(transactionId: string): Promise<TransferResult> {
+    try {
+      let state = "";
       let txHash: string | undefined;
+      let blockNumber: number | undefined;
+      let blockHash: string | undefined;
       let polls = 0;
 
       while (!TERMINAL_STATES.has(state) && polls < this.maxPolls) {
         await sleep(this.pollIntervalMs);
-        const transaction = (await this.client.getTransaction({ id: transactionId })).data?.transaction;
+        const transaction = (await this.client.getTransaction({ id: transactionId })).data
+          ?.transaction;
         if (transaction) {
           state = transaction.state ?? state;
           if (isValidEvmHash(transaction.txHash)) {
             txHash = transaction.txHash;
+          }
+          if (
+            typeof transaction.blockHeight === "number" &&
+            Number.isInteger(transaction.blockHeight) &&
+            transaction.blockHeight > 0
+          ) {
+            blockNumber = transaction.blockHeight;
+          }
+          if (isValidEvmHash(transaction.blockHash)) {
+            blockHash = transaction.blockHash;
           }
         }
         polls++;
@@ -187,13 +269,14 @@ export class CircleWalletProvider implements WalletProvider {
 
       const confirmed = state === "COMPLETE";
       return {
-        idempotencyKey: payment.idempotencyKey,
-        mode: "circle",
-        status: confirmed ? "confirmed" : "failed",
+        mode: "ARC_TESTNET",
+        status: confirmed ? "CONFIRMED" : "FAILED",
         transactionId,
-        transactionHash: isValidEvmHash(txHash) ? txHash : null,
-        explorerUrl: isValidEvmHash(txHash) ? `${this.arcscanBaseUrl}/tx/${txHash}` : null,
-        terminalState: state,
+        transactionHash: isValidEvmHash(txHash) ? txHash : undefined,
+        blockNumber,
+        blockHash,
+        explorerUrl: isValidEvmHash(txHash) ? `${this.arcscanBaseUrl}/tx/${txHash}` : undefined,
+        polledAt: new Date().toISOString(),
       };
     } catch (error) {
       throw normalizeWalletError(error);

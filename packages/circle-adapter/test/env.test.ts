@@ -38,6 +38,15 @@ describe("parseCircleEnvironment", () => {
     ).toThrow();
   });
 
+  it("rejects a syntactically valid address that is not the approved Arc Testnet USDC contract", () => {
+    expect(() =>
+      parseCircleEnvironment({
+        ...validEnvironment,
+        CIRCLE_USDC_TOKEN_ADDRESS: "0x1111111111111111111111111111111111111111",
+      }),
+    ).toThrow();
+  });
+
   it("rejects non-positive polling settings", () => {
     expect(() =>
       parseCircleEnvironment({ ...validEnvironment, CIRCLE_POLL_INTERVAL_MS: "0" }),

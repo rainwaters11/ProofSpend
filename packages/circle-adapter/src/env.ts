@@ -1,8 +1,15 @@
 import { z } from "zod";
 
+import { ARC_TESTNET_USDC_ADDRESS } from "./types";
+
 const circleEnvironmentSchema = z.object({
   CIRCLE_CHAIN: z.literal("ARC-TESTNET"),
-  CIRCLE_USDC_TOKEN_ADDRESS: z.string().regex(/^0x[a-fA-F0-9]{40}$/),
+  CIRCLE_USDC_TOKEN_ADDRESS: z
+    .string()
+    .refine(
+      (value) => value.toLowerCase() === ARC_TESTNET_USDC_ADDRESS.toLowerCase(),
+      "CIRCLE_USDC_TOKEN_ADDRESS must be the approved Arc Testnet USDC contract.",
+    ),
   CIRCLE_POLL_INTERVAL_MS: z.coerce.number().int().positive(),
   CIRCLE_MAX_POLLS: z.coerce.number().int().positive(),
   CIRCLE_ARGSCAN_BASE_URL: z.string().url(),
