@@ -87,6 +87,45 @@ describe("bounded Evidence Engine", () => {
     expect(recovered.evaluation.erc8183ActionPermitted).toBe(false);
   });
 
+  it("deduplicates exact recovery retries and rejects conflicting idempotency reuse", () => {
+    const scenario = createPawPovAiEvidenceScenario();
+    const first = evaluateEvidenceEngine(scenario.initialInput);
+    const recovered = applyMissingReceiptRecovery({
+      input: scenario.initialInput,
+      gap: first.proofGaps[0],
+      receipt: scenario.recoveryReceipt,
+      acceptedMatch: scenario.recoveryMatch,
+      actor: scenario.authorizedFounder,
+      resolvedAt,
+    });
+    const retried = applyMissingReceiptRecovery({
+      input: scenario.initialInput,
+      gap: first.proofGaps[0],
+      receipt: scenario.recoveryReceipt,
+      acceptedMatch: scenario.recoveryMatch,
+      actor: scenario.authorizedFounder,
+      resolvedAt,
+      existingAuditEvents: recovered.auditEvents,
+    });
+
+    expect(retried.auditEvents).toEqual(recovered.auditEvents);
+    expect(retried.auditEvents).toHaveLength(1);
+
+    const conflicting = AuditEventSchema.parse({
+      ...recovered.auditEvents[0],
+      details: { ...recovered.auditEvents[0].details, resolution: "CONFLICTING_RECOVERY" },
+    });
+    expect(() => applyMissingReceiptRecovery({
+      input: scenario.initialInput,
+      gap: first.proofGaps[0],
+      receipt: scenario.recoveryReceipt,
+      acceptedMatch: scenario.recoveryMatch,
+      actor: scenario.authorizedFounder,
+      resolvedAt,
+      existingAuditEvents: [conflicting],
+    })).toThrow(/idempotency key|audit event ID/i);
+  });
+
   it("rejects recovery timestamps that predate the evaluated evidence state", () => {
     const scenario = createPawPovAiEvidenceScenario();
     const first = evaluateEvidenceEngine(scenario.initialInput);
@@ -259,6 +298,7 @@ describe("bounded Evidence Engine", () => {
     expect(packetA.milestoneId).toBe(scenario.milestone.id);
     expect(packetA.evidenceIds).toEqual([...packetA.evidenceIds].sort());
     expect(packetA.evidenceHashes).toEqual([...packetA.evidenceHashes].sort());
+    expect(packetA.evidenceBindings).toEqual([...packetA.evidenceBindings].sort((left, right) => left.evidenceId.localeCompare(right.evidenceId)));
     expect(packetA.unresolvedProofGapIds).toEqual([]);
     expect(packetA.recommendedNextAction).toBe("REQUEST_HUMAN_APPROVAL");
   });
@@ -305,7 +345,59 @@ describe("bounded Evidence Engine", () => {
 
     expect(packet.evidenceIds).not.toContain(unapproved.id);
     expect(packet.evidenceHashes).not.toContain(unapproved.sourceHash);
+    expect(packet.evidenceBindings.some((binding) => binding.evidenceId === unapproved.id)).toBe(false);
     expect(packet.deliverableHashCandidate).toBe(baseline.deliverableHashCandidate);
+  });
+
+  it("binds evidence ID, hash, and requirement mappings into the deliverable commitment", async () => {
+    const scenario = createPawPovAiEvidenceScenario();
+    const baselineResult = evaluateEvidenceEngine(scenario.initialInput);
+    const baseline = await buildMilestoneEvaluationPacket({
+      input: scenario.initialInput,
+      evaluation: baselineResult.evaluation,
+      proofGaps: baselineResult.proofGaps,
+      generatedAt,
+    });
+
+    const deliverable = scenario.initialInput.evidenceItems.find((item) => item.id === "evidence:pawpovai:deliverable")!;
+    const transaction = scenario.initialInput.evidenceItems.find((item) => item.id === "evidence:pawpovai:transaction-context")!;
+    const swappedHashesInput: EvidenceEngineInput = {
+      ...scenario.initialInput,
+      evidenceItems: scenario.initialInput.evidenceItems.map((item) => {
+        if (item.id === deliverable.id) return EvidenceItemSchema.parse({ ...item, sourceHash: transaction.sourceHash });
+        if (item.id === transaction.id) return EvidenceItemSchema.parse({ ...item, sourceHash: deliverable.sourceHash });
+        return item;
+      }),
+    };
+    const swappedHashesResult = evaluateEvidenceEngine(swappedHashesInput);
+    expect(swappedHashesResult.evaluation).toEqual(baselineResult.evaluation);
+    const swappedHashesPacket = await buildMilestoneEvaluationPacket({
+      input: swappedHashesInput,
+      evaluation: swappedHashesResult.evaluation,
+      proofGaps: swappedHashesResult.proofGaps,
+      generatedAt,
+    });
+    expect(swappedHashesPacket.deliverableHashCandidate).not.toBe(baseline.deliverableHashCandidate);
+
+    const transactionMatch = scenario.initialInput.evidenceMatches.find((match) => match.id === "match:pawpovai:transaction-context")!;
+    const purposeMatch = scenario.initialInput.evidenceMatches.find((match) => match.id === "match:pawpovai:business-purpose")!;
+    const swappedRequirementsInput: EvidenceEngineInput = {
+      ...scenario.initialInput,
+      evidenceMatches: scenario.initialInput.evidenceMatches.map((match) => {
+        if (match.id === transactionMatch.id) return EvidenceMatchSchema.parse({ ...match, requirementId: purposeMatch.requirementId });
+        if (match.id === purposeMatch.id) return EvidenceMatchSchema.parse({ ...match, requirementId: transactionMatch.requirementId });
+        return match;
+      }),
+    };
+    const swappedRequirementsResult = evaluateEvidenceEngine(swappedRequirementsInput);
+    expect(swappedRequirementsResult.evaluation.status).toBe(baselineResult.evaluation.status);
+    const swappedRequirementsPacket = await buildMilestoneEvaluationPacket({
+      input: swappedRequirementsInput,
+      evaluation: swappedRequirementsResult.evaluation,
+      proofGaps: swappedRequirementsResult.proofGaps,
+      generatedAt,
+    });
+    expect(swappedRequirementsPacket.deliverableHashCandidate).not.toBe(baseline.deliverableHashCandidate);
   });
 
   it("binds packet hashes and fields to the exact evaluated evidence input", async () => {
@@ -330,6 +422,17 @@ describe("bounded Evidence Engine", () => {
       proofGaps: first.proofGaps,
       generatedAt,
     })).rejects.toThrow(/evaluation must match the exact current Evidence Engine input/i);
+  });
+
+  it("rejects evaluator packet generation before its evaluation timestamp", async () => {
+    const scenario = createPawPovAiEvidenceScenario();
+    const first = evaluateEvidenceEngine(scenario.initialInput);
+    await expect(buildMilestoneEvaluationPacket({
+      input: scenario.initialInput,
+      evaluation: first.evaluation,
+      proofGaps: first.proofGaps,
+      generatedAt: "2026-01-19T23:59:59.000Z",
+    })).rejects.toThrow(/generation time cannot precede/i);
   });
 
   it("changes packet hash candidates when canonical evidence or proof-gap inputs change", async () => {
