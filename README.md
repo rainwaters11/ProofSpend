@@ -102,7 +102,7 @@ The merged foundation includes:
 ProofSpend is positioned primarily for the **Agentic Economy track**, with a complementary **DeFi treasury and programmable-capital** use case.
 
 - **Arc Testnet** provides the programmable settlement environment.
-- **Circle wallet infrastructure** will provide the approved wallet and contract-execution path after the Issue #7 architecture decision record is completed.
+- **Circle wallet infrastructure** provides the approved wallet and contract-execution path selected by ADR-001 (Issue #7): Circle Developer-Controlled Wallets on Arc Testnet.
 - **The Verification Agent** analyzes evidence, calls structured tools, explains deterministic outcomes, and prepares exact proposals; it does not independently authorize value movement.
 - **ERC-8004** provides registered agent identity and reputation boundaries.
 - **ERC-8183** provides the milestone-job, escrow, evaluation, and settlement lifecycle.

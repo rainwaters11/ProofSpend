@@ -1,5 +1,18 @@
 # Upstream sources
 
+## Issue #7 re-audit record
+
+- Re-audit date: 2026-08-06.
+- `circlefin/agent-stack-starter-kits` default branch (`master`) is unchanged since the Issue #1 audit: pinned commit `fb4f4c71c198a7ad32db30b4edad2869fa4b8872`.
+- Circle Agent Stack `ARC-TESTNET` support and CLI command contracts were re-verified against official Circle documentation.
+- ADR-001 (docs/architecture/adr-001-circle-execution-architecture.md) selects **Circle Developer-Controlled Wallets** as the primary custody/execution path. The Agent Stack CLI path remains documented as a rejected alternative.
+
+## Issue #7 software-composition record
+
+| Package | Version | License | Purpose |
+| --- | --- | --- | --- |
+| `@circle-fin/developer-controlled-wallets` | 10.8.0 (pin at implementation) | Not declared on npm; verify before committing | Server-side wallet sets, wallets, balances, and contract execution on Arc Testnet |
+
 ## Circle Agent Stack starter kits audit
 
 ### Audit record
