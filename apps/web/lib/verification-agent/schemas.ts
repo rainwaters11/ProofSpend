@@ -126,6 +126,15 @@ export const RecoveryEvidenceBindingSchema = z
   .strict();
 export type RecoveryEvidenceBinding = z.infer<typeof RecoveryEvidenceBindingSchema>;
 
+export const DeterministicRequirementOutcomeSchema = z
+  .object({
+    requirementId: z.string().min(1),
+    outcome: z.enum(["PASS", "REVIEW", "FAIL"]),
+    reasonCodes: z.array(z.string().min(1)).min(1),
+  })
+  .strict();
+export type DeterministicRequirementOutcome = z.infer<typeof DeterministicRequirementOutcomeSchema>;
+
 export const VerificationAgentResultSchema = z
   .object({
     runId: z.string().min(1),
@@ -137,6 +146,7 @@ export const VerificationAgentResultSchema = z
     proposal: ReleaseProposalSchema.nullable(),
     missingGapId: z.string().min(1),
     recoveryEvidence: RecoveryEvidenceBindingSchema.nullable(),
+    requirementOutcomes: z.array(DeterministicRequirementOutcomeSchema).min(1),
     activityTrace: z.array(ActivityEventSchema).min(1),
   })
   .strict();

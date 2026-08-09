@@ -58,6 +58,9 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: error.message }, { status: error.status });
     }
     const code = error instanceof Error ? error.message : "HANDOFF_FAILED";
+    if (code === "HANDOFF_PERSISTENT_IDEMPOTENCY_REQUIRED") {
+      return NextResponse.json({ error: code }, { status: 503 });
+    }
     return NextResponse.json({ error: code }, { status: 400 });
   }
 }

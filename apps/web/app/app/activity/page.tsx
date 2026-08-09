@@ -4,6 +4,7 @@ import {
   resumeVerificationAgentAfterFounderCorrection,
   runVerificationAgent,
 } from "@/lib/verification-agent";
+import type { VerificationAgentResult } from "@/lib/verification-agent";
 import { createPawPovAiEvidenceScenario } from "@proofspend/domain";
 
 export const dynamic = "force-dynamic";
@@ -13,18 +14,31 @@ function adapterBadgeMode(adapterMode: "mock" | "arc-testnet") {
 }
 
 export default async function ActivityPage() {
-  const initialRun = await runVerificationAgent({
-    agentMode: "mock",
-    now: "2026-01-21T00:00:00.000Z",
-  });
-  const scenario = createPawPovAiEvidenceScenario();
-  const run = resumeVerificationAgentAfterFounderCorrection({
-    run: initialRun,
-    authenticatedActorId: scenario.authorizedFounder.actorId,
-    receipt: scenario.recoveryReceipt,
-    acceptedMatch: scenario.recoveryMatch,
-    now: "2026-01-21T00:01:00.000Z",
-  });
+  let run: VerificationAgentResult;
+  try {
+    const now = new Date();
+    const initialRun = await runVerificationAgent({
+      agentMode: "mock",
+      now: now.toISOString(),
+    });
+    const scenario = createPawPovAiEvidenceScenario();
+    run = resumeVerificationAgentAfterFounderCorrection({
+      run: initialRun,
+      authenticatedActorId: scenario.authorizedFounder.actorId,
+      receipt: scenario.recoveryReceipt,
+      acceptedMatch: scenario.recoveryMatch,
+      now: new Date(now.getTime() + 1_000).toISOString(),
+    });
+  } catch {
+    return (
+      <div className="flex max-w-5xl flex-col gap-6">
+        <h1 className="text-2xl font-semibold text-foreground">Verification Agent Activity</h1>
+        <p className="rounded-lg border border-border bg-surface p-4 text-sm text-muted-foreground">
+          The deterministic mock preview is temporarily unavailable. No release proposal was prepared.
+        </p>
+      </div>
+    );
+  }
 
   return (
     <div className="flex max-w-5xl flex-col gap-6">
@@ -88,6 +102,27 @@ export default async function ActivityPage() {
                 </dd>
               </div>
             </dl>
+          )}
+          {run.proposal !== null && (
+            <div className="border-t border-border pt-4">
+              <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                Deterministic requirement outcomes
+              </p>
+              <ul className="mt-3 space-y-2" aria-label="Deterministic requirement outcomes">
+                {run.requirementOutcomes.map((requirement) => (
+                  <li
+                    key={requirement.requirementId}
+                    className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-foreground"
+                  >
+                    <span className="font-medium">{requirement.requirementId}</span>
+                    <span>{requirement.outcome}</span>
+                    <span className="text-muted-foreground">
+                      {requirement.reasonCodes.join(", ")}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
           )}
         </div>
       </section>

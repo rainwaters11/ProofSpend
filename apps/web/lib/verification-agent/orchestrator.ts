@@ -35,6 +35,16 @@ const PROPOSAL_INTENT_ID = "intent:release:pawpovai:milestone-launch-ready";
 const PROPOSAL_IDEMPOTENCY_KEY = "release:pawpovai:milestone-launch-ready:250usdc";
 const PROPOSAL_DESTINATION = "mock:destination:pawpovai-operating-wallet";
 
+function deterministicRequirementOutcomes(
+  evaluation: ReturnType<typeof evaluateEvidenceEngine>["evaluation"],
+) {
+  return evaluation.requirementEvaluations.map((requirement) => ({
+    requirementId: requirement.requirementId,
+    outcome: requirement.outcome,
+    reasonCodes: requirement.reasonCodes,
+  }));
+}
+
 function buildProvider(mode: VerificationAgentMode): AgentModelProvider {
   const environment = getEnvironment();
   if (mode === "mock") {
@@ -200,6 +210,7 @@ export async function runVerificationAgent(
     proposal: null,
     missingGapId: missingGap.id,
     recoveryEvidence: null,
+    requirementOutcomes: deterministicRequirementOutcomes(initial.evaluation),
     activityTrace: trace.map((event) => ({
       ...event,
       message: redactMessage(event.message),
@@ -294,6 +305,7 @@ export function resumeVerificationAgentAfterFounderCorrection(args: {
       acceptedMatchId: args.acceptedMatch.id,
       resolvedAt: now,
     },
+    requirementOutcomes: deterministicRequirementOutcomes(recovered.evaluation),
     activityTrace: trace.map((event) => ({
       ...event,
       message: redactMessage(event.message),
