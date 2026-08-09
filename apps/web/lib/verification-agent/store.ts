@@ -23,6 +23,7 @@ const runs = new Map<string, StoredVerificationRun>();
 const consumedProposalKeys = new Set<string>();
 const RUN_RETENTION_MS = 30 * 60 * 1000;
 const MAX_STORED_RUNS = 100;
+export const MAX_HANDOFF_ATTEMPTS_PER_RUN = 20;
 
 function discardExpiredRuns(nowMs = Date.now()): void {
   for (const [runId, stored] of runs) {
@@ -92,7 +93,7 @@ export function persistApprovedHandoff(args: {
   runs.set(args.runId, {
     ...stored,
     handoff,
-    handoffAttempts: [...stored.handoffAttempts, handoff],
+    handoffAttempts: appendHandoffAttempt(stored.handoffAttempts, handoff),
   });
   consumedProposalKeys.add(stored.run.proposal.idempotencyKey);
   return true;
@@ -110,8 +111,21 @@ export function recordRejectedHandoff(args: {
   }
   runs.set(args.runId, {
     ...stored,
-    handoffAttempts: [...stored.handoffAttempts, parseHandoffAttempt(args)],
+    handoffAttempts: appendHandoffAttempt(
+      stored.handoffAttempts,
+      parseHandoffAttempt(args),
+    ),
   });
+}
+
+function appendHandoffAttempt(
+  attempts: StoredVerificationRun["handoffAttempts"],
+  attempt: StoredVerificationRun["handoffAttempts"][number],
+): StoredVerificationRun["handoffAttempts"] {
+  if (attempts.length >= MAX_HANDOFF_ATTEMPTS_PER_RUN) {
+    throw new Error("HANDOFF_ATTEMPT_LIMIT_REACHED");
+  }
+  return [...attempts, attempt];
 }
 
 function parseHandoffAttempt(args: {
