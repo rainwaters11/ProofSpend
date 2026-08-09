@@ -64,7 +64,7 @@ export async function matchIntentToRecords(
   if (intent.amountAtomic !== DEMO_TRANSFER_AMOUNT_ATOMIC) {
     return failure(
       "AMOUNT_MISMATCH",
-      "The transfer intent must prepare and submit exactly 250 USDC.",
+      "The transfer intent must prepare and submit exactly 1 USDC.",
     );
   }
   if (config.sourceWalletId && intent.sourceWalletId !== config.sourceWalletId) {
