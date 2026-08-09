@@ -7,6 +7,7 @@ const Time = z.string().datetime();
 const Hash = z.string().regex(/^sha256:[a-f0-9]{64}$/);
 const EvmAddress = /^0x[a-fA-F0-9]{40}$/;
 const EvmHash = /^0x[a-fA-F0-9]{64}$/;
+const CircleProviderOperationId = z.string().uuid();
 const isSynthetic = (value: string) => /^(mock|synthetic|fake|placeholder|demo|test):/i.test(value);
 export const LAUNCHVAULT_SETTLEMENT_ASSET = "USDC" as const;
 export const SettlementMoneyAmountSchema = MoneyAmountSchema.extend({ asset: z.literal(LAUNCHVAULT_SETTLEMENT_ASSET) });
@@ -59,6 +60,7 @@ export const ArcTransactionRefSchema = z.object({
   if (value.isMock && references.some((item) => !isSynthetic(item))) context.addIssue({ code: "custom", message: "Every mock transaction reference must be visibly synthetic." });
   if (value.isMock && value.explorerUrl !== null) context.addIssue({ code: "custom", message: "Mock transactions cannot have a live explorer URL." });
   if (!value.isMock && references.some(isSynthetic)) context.addIssue({ code: "custom", message: "Synthetic transaction references cannot be marked live." });
+  if (!value.isMock && value.providerOperationId != null && !CircleProviderOperationId.safeParse(value.providerOperationId).success) context.addIssue({ code: "custom", message: "Live Circle provider operation ID must be a UUID." });
   if (!value.isMock && value.chainId !== ARC_TESTNET_CHAIN_ID) context.addIssue({ code: "custom", message: "Live transaction reference must use Arc Testnet chain ID." });
   if (!value.isMock && value.transactionHash !== null && !EvmHash.test(value.transactionHash)) context.addIssue({ code: "custom", message: "Live transaction hash must be a canonical 32-byte EVM hash." });
   if (!value.isMock && value.blockHash !== null && !EvmHash.test(value.blockHash)) context.addIssue({ code: "custom", message: "Live block hash must be a canonical 32-byte EVM hash." });
