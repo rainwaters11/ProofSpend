@@ -44,6 +44,10 @@ const circleEnvironment = {
   CIRCLE_ARGSCAN_BASE_URL: "https://testnet.arcscan.app",
 };
 
+const OPERATION_ID_1 = "11111111-1111-4111-8111-111111111111";
+const OPERATION_ID_2 = "22222222-2222-4222-8222-222222222222";
+const OPERATION_ID_3 = "33333333-3333-4333-8333-333333333333";
+
 const baseIntent: ApprovedTransferIntent = {
   proposalId: "proposal-1",
   releaseRequestId: "proposal-1",
@@ -227,6 +231,21 @@ function mockDestinationWallet(): void {
   mockedClient.getWallet.mockResolvedValue({
     data: { wallet: { id: "wallet-dest", address: baseIntent.destinationAddress } },
   });
+}
+
+function mockConfirmedTransaction(overrides: Record<string, unknown> = {}) {
+  return {
+    state: "COMPLETE",
+    txHash: `0x${"1a".repeat(32)}`,
+    blockHeight: 42,
+    blockHash: `0x${"2b".repeat(32)}`,
+    blockchain: "ARC-TESTNET",
+    walletId: "wallet-123",
+    destinationAddress: baseIntent.destinationAddress,
+    amounts: ["250"],
+    contractAddress: circleEnvironment.CIRCLE_USDC_TOKEN_ADDRESS,
+    ...overrides,
+  };
 }
 
 describe("CircleWalletProvider", () => {
@@ -421,7 +440,9 @@ describe("CircleWalletProvider", () => {
   it("submits an approved intent and returns a resumable Circle operation id", async () => {
     const usdcTokenAddress = getCircleEnvironment().usdcTokenAddress;
     mockDestinationWallet();
-    mockedClient.createTransaction.mockResolvedValue({ data: { id: "tx-1", state: "SENT" } });
+    mockedClient.createTransaction.mockResolvedValue({
+      data: { id: OPERATION_ID_1, state: "SENT" },
+    });
 
     const result = await makeProvider().submitTransfer(validIntent());
 
@@ -439,14 +460,16 @@ describe("CircleWalletProvider", () => {
       idempotencyKey: "demo-payment-1",
       mode: "ARC_TESTNET",
       status: "SUBMITTED",
-      providerOperationId: "tx-1",
+      providerOperationId: OPERATION_ID_1,
       polledAt: expect.any(String),
     });
   });
 
   it("rejects a duplicate submission without touching the network again", async () => {
     mockDestinationWallet();
-    mockedClient.createTransaction.mockResolvedValue({ data: { id: "tx-1", state: "SENT" } });
+    mockedClient.createTransaction.mockResolvedValue({
+      data: { id: OPERATION_ID_1, state: "SENT" },
+    });
     const provider = makeProvider();
     const intent = validIntent();
 
@@ -462,7 +485,9 @@ describe("CircleWalletProvider", () => {
     mockedClient.getWallet.mockResolvedValue({
       data: { wallet: { id: "wallet-dest", address: "0x0000000000000000000000000000000000000002" } },
     });
-    mockedClient.createTransaction.mockResolvedValue({ data: { id: "tx-1", state: "SENT" } });
+    mockedClient.createTransaction.mockResolvedValue({
+      data: { id: OPERATION_ID_1, state: "SENT" },
+    });
 
     const result = await makeProvider().submitTransfer(validIntent());
 
@@ -517,34 +542,127 @@ describe("CircleWalletProvider", () => {
     expect((error as WalletProviderError).message).toBe("Circle did not return a transaction id.");
   });
 
+  it("refuses a malformed Circle transaction id instead of recording it", async () => {
+    mockDestinationWallet();
+    mockedClient.createTransaction.mockResolvedValue({
+      data: { id: "tx-1", state: "SENT" },
+    });
+
+    const error = await makeProvider().submitTransfer(validIntent()).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(WalletProviderError);
+    expect((error as WalletProviderError).code).toBe("INVALID_REQUEST");
+    expect((error as WalletProviderError).message).toContain("malformed transaction id");
+  });
+
+  it("refuses to poll a non-UUID provider operation id", async () => {
+    const error = await makeProvider()
+      .pollTransfer(validIntent(), "tx-1")
+      .catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(WalletProviderError);
+    expect((error as WalletProviderError).code).toBe("INVALID_REQUEST");
+    expect(mockedClient.getTransaction).not.toHaveBeenCalled();
+  });
+
   it("polls to confirmed and returns real transaction metadata", async () => {
     const arcscanBaseUrl = getCircleEnvironment().arcscanBaseUrl;
     const transactionHash = `0x${"1a".repeat(32)}`;
     const blockHash = `0x${"2b".repeat(32)}`;
     mockedClient.getTransaction.mockResolvedValue({
-      data: {
-        transaction: {
-          state: "COMPLETE",
-          txHash: transactionHash,
-          blockHeight: 42,
-          blockHash,
-        },
-      },
+      data: { transaction: mockConfirmedTransaction() },
     });
 
-    const result = await makeProvider().pollTransfer("tx-1");
+    const result = await makeProvider().pollTransfer(validIntent(), OPERATION_ID_1);
 
-    expect(mockedClient.getTransaction).toHaveBeenCalledWith({ id: "tx-1" });
+    expect(mockedClient.getTransaction).toHaveBeenCalledWith({ id: OPERATION_ID_1 });
     expect(result).toEqual({
       mode: "ARC_TESTNET",
       status: "CONFIRMED",
-      providerOperationId: "tx-1",
+      providerOperationId: OPERATION_ID_1,
       transactionHash,
-      blockNumber: 42,
       blockHash,
+      blockNumber: 42,
       explorerUrl: `${arcscanBaseUrl}/tx/${transactionHash}`,
       polledAt: expect.any(String),
     });
+  });
+
+  it("fails confirmation when the confirmed transaction source wallet does not match the intent", async () => {
+    mockedClient.getTransaction.mockResolvedValue({
+      data: { transaction: mockConfirmedTransaction({ walletId: "wallet-other" }) },
+    });
+
+    const result = await makeProvider().pollTransfer(validIntent(), OPERATION_ID_1);
+
+    expect(result.status).toBe("FAILED");
+    expect(result.failureCode).toBe("WALLET_MISMATCH");
+  });
+
+  it("fails confirmation when the confirmed transaction amount does not match the intent", async () => {
+    mockedClient.getTransaction.mockResolvedValue({
+      data: { transaction: mockConfirmedTransaction({ amounts: ["249"] }) },
+    });
+
+    const result = await makeProvider().pollTransfer(validIntent(), OPERATION_ID_1);
+
+    expect(result.status).toBe("FAILED");
+    expect(result.failureCode).toBe("AMOUNT_MISMATCH");
+  });
+
+  it("fails confirmation when the confirmed transaction destination does not match the intent", async () => {
+    mockedClient.getTransaction.mockResolvedValue({
+      data: {
+        transaction: mockConfirmedTransaction({
+          destinationAddress: "0x0000000000000000000000000000000000000002",
+        }),
+      },
+    });
+
+    const result = await makeProvider().pollTransfer(validIntent(), OPERATION_ID_1);
+
+    expect(result.status).toBe("FAILED");
+    expect(result.failureCode).toBe("WALLET_MISMATCH");
+  });
+
+  it("fails confirmation when the confirmed transaction is not on Arc Testnet", async () => {
+    mockedClient.getTransaction.mockResolvedValue({
+      data: { transaction: mockConfirmedTransaction({ blockchain: "SOL" }) },
+    });
+
+    const result = await makeProvider().pollTransfer(validIntent(), OPERATION_ID_1);
+
+    expect(result.status).toBe("FAILED");
+    expect(result.failureCode).toBe("NETWORK_MISMATCH");
+  });
+
+  it("fails confirmation when the confirmed transaction token does not match the intent", async () => {
+    mockedClient.getTransaction.mockResolvedValue({
+      data: {
+        transaction: mockConfirmedTransaction({
+          contractAddress: "0x0000000000000000000000000000000000000000",
+        }),
+      },
+    });
+
+    const result = await makeProvider().pollTransfer(validIntent(), OPERATION_ID_1);
+
+    expect(result.status).toBe("FAILED");
+    expect(result.failureCode).toBe("TOKEN_MISMATCH");
+  });
+
+  it("fails closed before polling when the persisted submission cannot be matched to the intent", async () => {
+    const nullStore: TransferAuthorizationStore = {
+      load: async () => null,
+      consume: async () => null,
+    };
+
+    const result = await makeProvider({ authorizationStore: nullStore }).pollTransfer(
+      validIntent(),
+      OPERATION_ID_1,
+    );
+
+    expect(result.status).toBe("FAILED");
+    expect(result.failureCode).toBe("AUTHORIZATION_UNAVAILABLE");
+    expect(mockedClient.getTransaction).not.toHaveBeenCalled();
   });
 
   it("returns a failed poll result for a terminal failure state", async () => {
@@ -552,10 +670,10 @@ describe("CircleWalletProvider", () => {
       data: { transaction: { state: "FAILED" } },
     });
 
-    const result = await makeProvider().pollTransfer("tx-2");
+    const result = await makeProvider().pollTransfer(validIntent(), OPERATION_ID_2);
 
     expect(result.status).toBe("FAILED");
-    expect(result.providerOperationId).toBe("tx-2");
+    expect(result.providerOperationId).toBe(OPERATION_ID_2);
     expect(result.transactionHash).toBeUndefined();
     expect(result.explorerUrl).toBeUndefined();
   });
@@ -565,18 +683,18 @@ describe("CircleWalletProvider", () => {
       data: { transaction: { state: "SENT" } },
     });
 
-    const result = await makeProvider().pollTransfer("tx-3");
+    const result = await makeProvider().pollTransfer(validIntent(), OPERATION_ID_3);
     expect(result.status).toBe("SUBMITTED");
-    expect(result.providerOperationId).toBe("tx-3");
+    expect(result.providerOperationId).toBe(OPERATION_ID_3);
     expect(result.failureCode).toBe("POLLING_TIMEOUT");
   });
 
   it("keeps polling across empty transaction responses and times out", async () => {
     mockedClient.getTransaction.mockResolvedValue({});
 
-    const result = await makeProvider().pollTransfer("tx-1");
+    const result = await makeProvider().pollTransfer(validIntent(), OPERATION_ID_1);
     expect(result.status).toBe("SUBMITTED");
-    expect(result.providerOperationId).toBe("tx-1");
+    expect(result.providerOperationId).toBe(OPERATION_ID_1);
     expect(result.failureCode).toBe("POLLING_TIMEOUT");
     expect(mockedClient.getTransaction).toHaveBeenCalledTimes(3);
   });
@@ -586,10 +704,10 @@ describe("CircleWalletProvider", () => {
       data: { transaction: { state: "COMPLETE", txHash: "not-a-real-hash" } },
     });
 
-    const result = await makeProvider().pollTransfer("tx-1");
+    const result = await makeProvider().pollTransfer(validIntent(), OPERATION_ID_1);
 
     expect(result.status).toBe("SUBMITTED");
-    expect(result.providerOperationId).toBe("tx-1");
+    expect(result.providerOperationId).toBe(OPERATION_ID_1);
     expect(result.failureCode).toBe("CONFIRMATION_INCOMPLETE");
     expect(result.transactionHash).toBeUndefined();
     expect(result.explorerUrl).toBeUndefined();

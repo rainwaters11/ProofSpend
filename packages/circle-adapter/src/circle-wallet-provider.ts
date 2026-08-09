@@ -3,7 +3,13 @@ import type { CircleDeveloperControlledWalletsClient } from "@circle-fin/develop
 
 import { getCircleEnvironment } from "./env";
 import { normalizeWalletError, WalletProviderError } from "./errors";
-import { failureResult, preparedResult, revalidateApprovedIntent } from "./intent";
+import {
+  failureResult,
+  preparedResult,
+  revalidateApprovedIntent,
+  revalidateSubmittedTransfer,
+} from "./intent";
+import type { Revalidation } from "./intent";
 import type {
   ApprovedTransferIntent,
   ArcTestnetTransferProvider,
@@ -26,8 +32,77 @@ const TERMINAL_STATES: ReadonlySet<string> = new Set([
 
 const EVM_HASH_PATTERN = /^0x[a-fA-F0-9]{64}$/;
 
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 function isValidEvmHash(value: string | undefined): value is string {
   return typeof value === "string" && EVM_HASH_PATTERN.test(value);
+}
+
+function isValidUuid(value: string): boolean {
+  return UUID_PATTERN.test(value);
+}
+
+type ReturnedTransaction = {
+  blockchain?: string;
+  walletId?: string;
+  destinationAddress?: string;
+  amounts?: string[];
+  contractAddress?: string;
+};
+
+function verifyReturnedTransaction(
+  intent: ApprovedTransferIntent,
+  transaction: ReturnedTransaction,
+  expected: {
+    blockchain: string;
+    sourceWalletId: string;
+    usdcTokenAddress: string;
+  },
+): Extract<Revalidation, { ok: false }> | { ok: true } {
+  if (transaction.blockchain !== expected.blockchain) {
+    return {
+      ok: false,
+      failureCode: "NETWORK_MISMATCH",
+      failureMessage: "The confirmed transaction is not on the configured Arc Testnet chain.",
+    };
+  }
+  if (transaction.walletId !== expected.sourceWalletId) {
+    return {
+      ok: false,
+      failureCode: "WALLET_MISMATCH",
+      failureMessage: "The confirmed transaction source wallet does not match the exact intent.",
+    };
+  }
+  if (
+    !transaction.destinationAddress ||
+    transaction.destinationAddress.toLowerCase() !== intent.destinationAddress.toLowerCase()
+  ) {
+    return {
+      ok: false,
+      failureCode: "WALLET_MISMATCH",
+      failureMessage: "The confirmed transaction destination does not match the exact intent.",
+    };
+  }
+  const expectedAmount = atomicToDecimal(intent.amountAtomic);
+  if (!transaction.amounts || !transaction.amounts.includes(expectedAmount)) {
+    return {
+      ok: false,
+      failureCode: "AMOUNT_MISMATCH",
+      failureMessage: "The confirmed transaction amount does not match the exact intent.",
+    };
+  }
+  if (
+    !transaction.contractAddress ||
+    transaction.contractAddress.toLowerCase() !== expected.usdcTokenAddress.toLowerCase()
+  ) {
+    return {
+      ok: false,
+      failureCode: "TOKEN_MISMATCH",
+      failureMessage: "The confirmed transaction token does not match the exact intent.",
+    };
+  }
+  return { ok: true };
 }
 
 export interface CircleWalletProviderConfig {
@@ -269,6 +344,12 @@ export class CircleWalletProvider implements ArcTestnetTransferProvider {
       if (!transactionId) {
         throw new WalletProviderError("INVALID_REQUEST", "Circle did not return a transaction id.");
       }
+      if (!isValidUuid(transactionId)) {
+        throw new WalletProviderError(
+          "INVALID_REQUEST",
+          "Circle returned a malformed transaction id; refusing to record an invalid provider operation.",
+        );
+      }
       this.submittedKeys.add(intent.proposalId);
       this.submittedKeys.add(intent.idempotencyKey);
       return {
@@ -284,12 +365,32 @@ export class CircleWalletProvider implements ArcTestnetTransferProvider {
     }
   }
 
-  async pollTransfer(providerOperationId: string): Promise<TransferResult> {
+  async pollTransfer(
+    intent: ApprovedTransferIntent,
+    providerOperationId: string,
+  ): Promise<TransferResult> {
+    if (!isValidUuid(providerOperationId)) {
+      throw new WalletProviderError(
+        "INVALID_REQUEST",
+        "The Circle provider operation id must be a UUID.",
+      );
+    }
+    const authorization = await this.authorizationStore.load(
+      authorizationReferences(intent),
+    );
+    const revalidation = await revalidateSubmittedTransfer(intent, authorization, {
+      usdcTokenAddress: this.usdcTokenAddress,
+      sourceWalletId: this.sourceWalletId,
+    });
+    if (!revalidation.ok) {
+      return failureResult(intent, "ARC_TESTNET", revalidation);
+    }
     try {
       let state = "";
       let txHash: string | undefined;
       let blockNumber: number | undefined;
       let blockHash: string | undefined;
+      let returnedTransaction: ReturnedTransaction | undefined;
       let polls = 0;
 
       while (polls < this.maxPolls) {
@@ -297,6 +398,7 @@ export class CircleWalletProvider implements ArcTestnetTransferProvider {
         const transaction = (await this.client.getTransaction({ id: providerOperationId })).data
           ?.transaction;
         if (transaction) {
+          returnedTransaction = transaction;
           state = transaction.state ?? state;
           if (isValidEvmHash(transaction.txHash)) {
             txHash = transaction.txHash;
@@ -314,6 +416,20 @@ export class CircleWalletProvider implements ArcTestnetTransferProvider {
         }
         polls++;
         if (state === "COMPLETE" && txHash && blockNumber && blockHash) {
+          if (returnedTransaction) {
+            const verification = verifyReturnedTransaction(
+              intent,
+              returnedTransaction,
+              {
+                blockchain: this.blockchain,
+                sourceWalletId: this.sourceWalletId,
+                usdcTokenAddress: this.usdcTokenAddress,
+              },
+            );
+            if (!verification.ok) {
+              return failureResult(intent, "ARC_TESTNET", verification);
+            }
+          }
           return {
             mode: "ARC_TESTNET",
             status: "CONFIRMED",

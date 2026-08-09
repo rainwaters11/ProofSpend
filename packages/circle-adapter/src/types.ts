@@ -147,5 +147,5 @@ export interface ArcTestnetTransferProvider {
   getBalance(): Promise<WalletBalance>;
   prepareTransfer(intent: ApprovedTransferIntent): Promise<TransferResult>;
   submitTransfer(intent: ApprovedTransferIntent): Promise<TransferResult>;
-  pollTransfer(providerOperationId: string): Promise<TransferResult>;
+  pollTransfer(intent: ApprovedTransferIntent, providerOperationId: string): Promise<TransferResult>;
 }

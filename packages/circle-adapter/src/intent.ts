@@ -27,11 +27,10 @@ function failure(failureCode: TransferFailureCode, failureMessage: string): Reva
   return { ok: false, failureCode, failureMessage };
 }
 
-export async function revalidateApprovedIntent(
+export async function matchIntentToRecords(
   intent: ApprovedTransferIntent,
   authorization: PersistedTransferAuthorization | null,
   config: RevalidationConfig,
-  asOf = new Date().toISOString(),
 ): Promise<Revalidation> {
   if (
     !intent.proposalId ||
@@ -107,9 +106,6 @@ export async function revalidateApprovedIntent(
   if (approval.decision !== "APPROVED" || approval.decidedAt === null) {
     return failure("APPROVAL_MISSING", "The transfer does not have a completed approval.");
   }
-  if (Date.parse(approval.expiresAt) <= Date.parse(asOf)) {
-    return failure("APPROVAL_EXPIRED", "The human approval for this transfer has expired.");
-  }
 
   const canonicalIntent = binding.executionIntent;
   if (
@@ -127,6 +123,31 @@ export async function revalidateApprovedIntent(
       "APPROVAL_ALTERED",
       "The transfer request does not match the canonical approved execution intent.",
     );
+  }
+
+  return { ok: true };
+}
+
+export async function revalidateApprovedIntent(
+  intent: ApprovedTransferIntent,
+  authorization: PersistedTransferAuthorization | null,
+  config: RevalidationConfig,
+  asOf = new Date().toISOString(),
+): Promise<Revalidation> {
+  const structural = await matchIntentToRecords(intent, authorization, config);
+  if (!structural.ok) {
+    return structural;
+  }
+  if (authorization === null) {
+    return failure(
+      "AUTHORIZATION_UNAVAILABLE",
+      "The persisted transfer authorization is unavailable or no longer active.",
+    );
+  }
+
+  const { approval, release, transaction, binding } = authorization;
+  if (Date.parse(approval.expiresAt) <= Date.parse(asOf)) {
+    return failure("APPROVAL_EXPIRED", "The human approval for this transfer has expired.");
   }
 
   try {
@@ -151,6 +172,14 @@ export async function revalidateApprovedIntent(
   }
 
   return { ok: true };
+}
+
+export async function revalidateSubmittedTransfer(
+  intent: ApprovedTransferIntent,
+  authorization: PersistedTransferAuthorization | null,
+  config: RevalidationConfig,
+): Promise<Revalidation> {
+  return matchIntentToRecords(intent, authorization, config);
 }
 
 export function preparedResult(intent: ApprovedTransferIntent, mode: TransferMode): TransferResult {
