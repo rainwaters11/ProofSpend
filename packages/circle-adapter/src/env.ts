@@ -2,6 +2,8 @@ import { z } from "zod";
 
 import { ARC_TESTNET_USDC_ADDRESS } from "./types";
 
+export const ARC_TESTNET_ARCSCAN_BASE_URL = "https://testnet.arcscan.app";
+
 const circleEnvironmentSchema = z.object({
   CIRCLE_CHAIN: z.literal("ARC-TESTNET"),
   CIRCLE_USDC_TOKEN_ADDRESS: z
@@ -12,7 +14,7 @@ const circleEnvironmentSchema = z.object({
     ),
   CIRCLE_POLL_INTERVAL_MS: z.coerce.number().int().positive(),
   CIRCLE_MAX_POLLS: z.coerce.number().int().positive(),
-  CIRCLE_ARGSCAN_BASE_URL: z.string().url(),
+  CIRCLE_ARGSCAN_BASE_URL: z.literal(ARC_TESTNET_ARCSCAN_BASE_URL),
 });
 
 export type CircleEnvironment = {

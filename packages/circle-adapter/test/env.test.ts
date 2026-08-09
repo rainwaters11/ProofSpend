@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { getCircleEnvironment, parseCircleEnvironment } from "../src/env";
+import {
+  ARC_TESTNET_ARCSCAN_BASE_URL,
+  getCircleEnvironment,
+  parseCircleEnvironment,
+} from "../src/env";
 
 const validEnvironment = {
   CIRCLE_CHAIN: "ARC-TESTNET",
@@ -60,6 +64,16 @@ describe("parseCircleEnvironment", () => {
     expect(() =>
       parseCircleEnvironment({ ...validEnvironment, CIRCLE_ARGSCAN_BASE_URL: "not-a-url" }),
     ).toThrow();
+  });
+
+  it("rejects a noncanonical explorer URL", () => {
+    expect(() =>
+      parseCircleEnvironment({
+        ...validEnvironment,
+        CIRCLE_ARGSCAN_BASE_URL: "https://example.com",
+      }),
+    ).toThrow();
+    expect(ARC_TESTNET_ARCSCAN_BASE_URL).toBe("https://testnet.arcscan.app");
   });
 });
 
