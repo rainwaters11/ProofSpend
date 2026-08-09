@@ -6,7 +6,7 @@ function assert(condition: boolean, message: string): asserts condition { if (!c
 export function serializeCanonicalExecutionIntent(intent: CanonicalExecutionIntent): string {
   const target = intent.protocolTarget;
   const targetValues = target.kind === "DESTINATION"
-    ? [target.kind, target.isMock, target.destination, target.network, target.chainId]
+    ? [target.kind, target.isMock, target.destination, target.sourceWalletId, target.network, target.chainId]
     : [target.kind, target.standard, target.network, target.chainId, target.contractReference, target.jobId, target.method, target.parameterCommitment, target.clientReference, target.providerReference, target.evaluatorReference, target.destination];
   return JSON.stringify([intent.version, intent.actionKind, intent.projectId, intent.releaseRequestId, intent.transactionRecordId, intent.intentId, intent.asset, intent.atomicAmount, intent.operationType, ...targetValues]);
 }
