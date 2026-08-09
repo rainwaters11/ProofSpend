@@ -14,10 +14,14 @@ function adapterBadgeMode(adapterMode: "mock" | "arc-testnet") {
 }
 
 function formatCircleDecimal(atomicUnits: string): string {
-  const value = BigInt(atomicUnits);
-  const whole = value / 1_000_000n;
-  const fraction = (value % 1_000_000n).toString().padStart(6, "0").replace(/0+$/, "");
-  return fraction ? `${whole}.${fraction}` : whole.toString();
+  try {
+    const value = BigInt(atomicUnits);
+    const whole = value / 1_000_000n;
+    const fraction = (value % 1_000_000n).toString().padStart(6, "0").replace(/0+$/, "");
+    return fraction ? `${whole}.${fraction}` : whole.toString();
+  } catch {
+    return "—";
+  }
 }
 
 export default async function ActivityPage() {
