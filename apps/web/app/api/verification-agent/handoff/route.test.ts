@@ -209,7 +209,7 @@ describe("POST /api/verification-agent/handoff", () => {
     expect(loadVerificationAgentRun(run.runId)?.handoffAttempts).toHaveLength(0);
   });
 
-  it("retains only the latest bounded rejected handoff attempts", async () => {
+  it("preserves the original audit entries and rejects attempts over budget", async () => {
     const runResponse = await runAgent(
       new Request("http://localhost/api/verification-agent/run", {
         method: "POST",
@@ -217,15 +217,10 @@ describe("POST /api/verification-agent/handoff", () => {
       }),
     );
     const run = await submitFounderCorrection(await runResponse.json());
-    const extraAttempts = 5;
 
-    for (
-      let index = 0;
-      index < MAX_HANDOFF_ATTEMPTS_PER_RUN + extraAttempts;
-      index += 1
-    ) {
+    const submitRejectedHandoff = (index: number) => {
       const suffix = index.toString().padStart(4, "0");
-      const response = await POST(
+      return POST(
         new Request("http://localhost/api/verification-agent/handoff", {
           method: "POST",
           headers: {
@@ -247,13 +242,29 @@ describe("POST /api/verification-agent/handoff", () => {
           }),
         }),
       );
+    };
+
+    for (let index = 0; index < MAX_HANDOFF_ATTEMPTS_PER_RUN; index += 1) {
+      const response = await submitRejectedHandoff(index);
       expect(response.status).toBe(422);
+    }
+
+    for (
+      let index = MAX_HANDOFF_ATTEMPTS_PER_RUN;
+      index < MAX_HANDOFF_ATTEMPTS_PER_RUN + 5;
+      index += 1
+    ) {
+      const response = await submitRejectedHandoff(index);
+      expect(response.status).toBe(429);
+      await expect(response.json()).resolves.toEqual({
+        error: "HANDOFF_ATTEMPT_LIMIT_REACHED",
+      });
     }
 
     const attempts = loadVerificationAgentRun(run.runId)?.handoffAttempts ?? [];
     expect(attempts).toHaveLength(MAX_HANDOFF_ATTEMPTS_PER_RUN);
-    expect(attempts[0]?.approval.approvalId).toBe("approval:rejected:0005");
-    expect(attempts.at(-1)?.approval.approvalId).toBe("approval:rejected:0024");
+    expect(attempts[0]?.approval.approvalId).toBe("approval:rejected:0000");
+    expect(attempts.at(-1)?.approval.approvalId).toBe("approval:rejected:0019");
   });
 });
 
