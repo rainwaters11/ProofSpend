@@ -76,6 +76,12 @@ export default async function ActivityPage() {
                 <dd className="font-medium text-foreground">{formatMoney(run.proposal.amount)}</dd>
               </div>
               <div>
+                <dt className="text-muted-foreground">Atomic / Circle amount</dt>
+                <dd className="font-medium text-foreground">
+                  {run.proposal.amount.atomicUnits} atomic / 1 USDC
+                </dd>
+              </div>
+              <div>
                 <dt className="text-muted-foreground">Asset and chain</dt>
                 <dd className="font-medium text-foreground">
                   {run.proposal.asset} on {run.proposal.chain}

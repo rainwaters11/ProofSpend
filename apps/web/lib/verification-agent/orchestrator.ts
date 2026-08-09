@@ -32,7 +32,7 @@ const MAX_MODEL_CALLS = 1;
 const MAX_ACTIVITY_EVENTS = 10;
 const RELEASE_TTL_MS = 15 * 60 * 1000;
 const PROPOSAL_INTENT_ID = "intent:release:pawpovai:milestone-launch-ready";
-const PROPOSAL_IDEMPOTENCY_KEY = "release:pawpovai:milestone-launch-ready:250usdc";
+const PROPOSAL_IDEMPOTENCY_KEY = "release:pawpovai:milestone-launch-ready:1usdc";
 const PROPOSAL_DESTINATION = "mock:destination:pawpovai-operating-wallet";
 
 function deterministicRequirementOutcomes(
@@ -85,7 +85,7 @@ function buildProposal(reason: string, now: string) {
     state: "APPROVAL_REQUIRED",
     intentId: PROPOSAL_INTENT_ID,
     idempotencyKey: PROPOSAL_IDEMPOTENCY_KEY,
-    amount: { asset: "USDC", atomicUnits: "250000000" },
+    amount: { asset: "USDC", atomicUnits: "1000000" },
     asset: "USDC",
     chain: "ARC_TESTNET",
     destination: PROPOSAL_DESTINATION,
@@ -280,7 +280,7 @@ export function resumeVerificationAgentAfterFounderCorrection(args: {
     at: now,
     layer: "DETERMINISTIC",
     code: "PROPOSAL_PREPARED",
-    message: "Prepared exact non-authorizing 250 USDC release proposal.",
+    message: "Prepared exact non-authorizing 1 USDC release proposal.",
   });
 
   appendEvent(trace, {
