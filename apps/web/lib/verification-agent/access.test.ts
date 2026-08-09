@@ -52,7 +52,7 @@ describe("verification agent API access", () => {
     expect(authorizeAgentInvocation(invocation, openAiEnvironment, 1_000)).toBe(
       "founder:fictional",
     );
-    expect(authorizeAgentInvocation(invocation, openAiEnvironment, 901_000)).toBe(
+    expect(authorizeAgentInvocation(invocation, openAiEnvironment, 902_000)).toBe(
       "founder:fictional",
     );
   });
