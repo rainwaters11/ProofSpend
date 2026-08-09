@@ -191,7 +191,7 @@ describe("handoffApprovedProposal", () => {
       authorizedActorRole: "FOUNDER" as const,
       authorizedActorId: "founder:fictional",
       decision: "APPROVED" as const,
-      decidedAt: "2026-01-21T00:00:00.000Z",
+      decidedAt: "2026-01-21T00:01:00.000Z",
       expiresAt: run.proposal!.expiresAt,
       idempotencyKey: run.proposal!.idempotencyKey,
     };
@@ -201,7 +201,7 @@ describe("handoffApprovedProposal", () => {
       run,
       approval,
       authenticatedActorId: "founder:fictional",
-      now: "2026-01-21T00:00:01.000Z",
+      now: "2026-01-21T00:01:01.000Z",
     });
 
     expect(first.status).toBe("HANDOFF_READY");
