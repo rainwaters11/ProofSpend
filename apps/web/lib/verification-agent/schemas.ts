@@ -7,6 +7,10 @@ export type VerificationAgentMode = z.infer<typeof VerificationAgentModeSchema>;
 export const AdapterModeSchema = z.enum(["mock", "arc-testnet"]);
 export type AdapterMode = z.infer<typeof AdapterModeSchema>;
 
+export const MAX_HANDOFF_IDENTIFIER_LENGTH = 200;
+const BoundedHandoffIdentifierSchema = z.string().min(1).max(MAX_HANDOFF_IDENTIFIER_LENGTH);
+const BoundedHandoffTimestampSchema = z.string().max(64).datetime();
+
 export const ActivityLayerSchema = z.enum([
   "AI",
   "DETERMINISTIC",
@@ -154,14 +158,14 @@ export type VerificationAgentResult = z.infer<typeof VerificationAgentResultSche
 
 export const ApprovalDecisionSchema = z
   .object({
-    approvalId: z.string().min(1),
-    intentId: z.string().min(1),
+    approvalId: BoundedHandoffIdentifierSchema,
+    intentId: BoundedHandoffIdentifierSchema,
     authorizedActorRole: z.literal("FOUNDER"),
-    authorizedActorId: z.string().min(1),
+    authorizedActorId: BoundedHandoffIdentifierSchema,
     decision: z.literal("APPROVED"),
-    decidedAt: z.string().datetime(),
-    expiresAt: z.string().datetime(),
-    idempotencyKey: z.string().min(1),
+    decidedAt: BoundedHandoffTimestampSchema,
+    expiresAt: BoundedHandoffTimestampSchema,
+    idempotencyKey: BoundedHandoffIdentifierSchema,
   })
   .strict();
 export type ApprovalDecision = z.infer<typeof ApprovalDecisionSchema>;
