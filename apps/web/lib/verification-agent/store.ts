@@ -26,9 +26,8 @@ function discardExpiredRuns(nowMs = Date.now()): void {
   for (const [runId, stored] of runs) {
     if (stored.expiresAt <= nowMs) {
       runs.delete(runId);
-      if (stored.run.proposal !== null) {
-        consumedProposalKeys.delete(stored.run.proposal.idempotencyKey);
-      }
+      // Consumed keys intentionally outlive transient run records so expiry
+      // cannot reopen an already authorized release for another handoff.
     }
   }
 }
