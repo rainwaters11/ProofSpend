@@ -7,7 +7,8 @@ const Time = z.string().datetime();
 const Hash = z.string().regex(/^sha256:[a-f0-9]{64}$/);
 const EvmAddress = /^0x[a-fA-F0-9]{40}$/;
 const EvmHash = /^0x[a-fA-F0-9]{64}$/;
-const isSynthetic = (value: string) => /^(mock:|synthetic:)/.test(value);
+const CircleProviderOperationId = z.string().uuid();
+const isSynthetic = (value: string) => /^(mock|synthetic|fake|placeholder|demo|test):/i.test(value);
 export const LAUNCHVAULT_SETTLEMENT_ASSET = "USDC" as const;
 export const SettlementMoneyAmountSchema = MoneyAmountSchema.extend({ asset: z.literal(LAUNCHVAULT_SETTLEMENT_ASSET) });
 export type SettlementMoneyAmount = z.infer<typeof SettlementMoneyAmountSchema>;
@@ -47,18 +48,19 @@ export const ArcTransactionRefSchema = z.object({
   network: z.literal(ARC_TESTNET_NETWORK), chainId: z.string().min(1), transactionHash: z.string().min(1).nullable(),
   status: z.enum(["NONE", "PREPARED", "SUBMITTED", "CONFIRMED", "FAILED"]), blockNumber: z.string().regex(/^\d+$/).nullable(),
   blockHash: z.string().min(1).nullable(), explorerUrl: z.string().url().nullable(),
-  operationType: TransactionOperationTypeSchema, isMock: z.boolean(),
+  operationType: TransactionOperationTypeSchema, isMock: z.boolean(), providerOperationId: Id.nullable().optional(),
 }).superRefine((value, context) => {
-  if (["NONE", "PREPARED"].includes(value.status) && (value.transactionHash !== null || value.blockNumber !== null || value.blockHash !== null || value.explorerUrl !== null)) context.addIssue({ code: "custom", message: `${value.status} transaction cannot contain transaction or block evidence.` });
-  if (value.status === "SUBMITTED" && value.transactionHash === null) context.addIssue({ code: "custom", message: "Submitted transaction requires a transaction hash." });
+  if (["NONE", "PREPARED"].includes(value.status) && (value.transactionHash !== null || value.blockNumber !== null || value.blockHash !== null || value.explorerUrl !== null || value.providerOperationId != null)) context.addIssue({ code: "custom", message: `${value.status} transaction cannot contain submission, transaction, or block evidence.` });
+  if (value.status === "SUBMITTED" && value.transactionHash === null && value.providerOperationId == null) context.addIssue({ code: "custom", message: "Submitted transaction requires a transaction hash or provider operation ID." });
   if (value.status === "SUBMITTED" && (value.blockNumber !== null || value.blockHash !== null)) context.addIssue({ code: "custom", message: "Submitted transaction cannot contain confirmation block evidence." });
   if (value.status === "CONFIRMED" && (value.transactionHash === null || value.blockNumber === null || value.blockHash === null)) context.addIssue({ code: "custom", message: "Confirmed transaction requires transaction hash, block number, and block hash." });
   if (value.status === "FAILED" && (value.blockNumber !== null || value.blockHash !== null)) context.addIssue({ code: "custom", message: "Failed transaction cannot contain confirmation block evidence." });
   if (value.transactionHash === null && value.explorerUrl !== null) context.addIssue({ code: "custom", message: "A transaction without a hash cannot have an explorer URL." });
-  const references = [value.chainId, value.transactionHash, value.blockHash].filter((item): item is string => item !== null);
+  const references = [value.chainId, value.transactionHash, value.blockHash, value.providerOperationId].filter((item): item is string => item != null);
   if (value.isMock && references.some((item) => !isSynthetic(item))) context.addIssue({ code: "custom", message: "Every mock transaction reference must be visibly synthetic." });
   if (value.isMock && value.explorerUrl !== null) context.addIssue({ code: "custom", message: "Mock transactions cannot have a live explorer URL." });
   if (!value.isMock && references.some(isSynthetic)) context.addIssue({ code: "custom", message: "Synthetic transaction references cannot be marked live." });
+  if (!value.isMock && value.providerOperationId != null && !CircleProviderOperationId.safeParse(value.providerOperationId).success) context.addIssue({ code: "custom", message: "Live Circle provider operation ID must be a UUID." });
   if (!value.isMock && value.chainId !== ARC_TESTNET_CHAIN_ID) context.addIssue({ code: "custom", message: "Live transaction reference must use Arc Testnet chain ID." });
   if (!value.isMock && value.transactionHash !== null && !EvmHash.test(value.transactionHash)) context.addIssue({ code: "custom", message: "Live transaction hash must be a canonical 32-byte EVM hash." });
   if (!value.isMock && value.blockHash !== null && !EvmHash.test(value.blockHash)) context.addIssue({ code: "custom", message: "Live block hash must be a canonical 32-byte EVM hash." });
@@ -243,12 +245,13 @@ export type SettlementRecord = z.infer<typeof SettlementRecordSchema>;
 const DestinationProtocolTargetSchema = z.object({
   kind: z.literal("DESTINATION"),
   destination: Id,
+  sourceWalletId: Id,
   network: z.literal(ARC_TESTNET_NETWORK),
   chainId: Id,
   isMock: z.boolean(),
 }).strict().superRefine((value, context) => {
-  if (value.isMock && (!isSynthetic(value.destination) || !isSynthetic(value.chainId))) context.addIssue({ code: "custom", message: "Mock destination intents require visibly synthetic destination and chain references." });
-  if (!value.isMock && (!EvmAddress.test(value.destination) || value.chainId !== ARC_TESTNET_CHAIN_ID)) context.addIssue({ code: "custom", message: "Live destination intents require a canonical EVM recipient on Arc Testnet." });
+  if (value.isMock && (!isSynthetic(value.destination) || !isSynthetic(value.sourceWalletId) || !isSynthetic(value.chainId))) context.addIssue({ code: "custom", message: "Mock destination intents require visibly synthetic source wallet, destination, and chain references." });
+  if (!value.isMock && (!EvmAddress.test(value.destination) || !CircleProviderOperationId.safeParse(value.sourceWalletId).success || value.chainId !== ARC_TESTNET_CHAIN_ID)) context.addIssue({ code: "custom", message: "Live destination intents require a Circle source wallet, canonical EVM recipient, and Arc Testnet." });
 });
 const Erc8183ProtocolTargetSchema = z.object({
   kind: z.literal("ERC8183"), standard: z.literal("ERC-8183"), network: z.literal(ARC_TESTNET_NETWORK), chainId: Id.refine(isSynthetic),

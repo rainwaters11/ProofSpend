@@ -243,14 +243,14 @@ describe("separate state machines", () => {
   });
   it("requires persisted approval and exact canonical intent evidence to submit", async () => {
     const transaction = TransactionRecordSchema.parse({ id: "transaction:submission", projectId: "project:1", releaseRequestId: "release:1", intentId: "intent:1", destinationReference: "mock:recipient", approvalId: "approval:1", approvalBindingId: "binding:submission", reconciliationId: null, idempotencyKey: "transaction:key", amount: usdc("1"), operationState: "SUBMITTED", arcTransaction: mockTransaction("SUBMITTED"), createdAt: context.occurredAt, updatedAt: context.occurredAt });
-    const executionIntent = CanonicalExecutionIntentSchema.parse({ version: 1, actionKind: "RELEASE_APPROVAL", projectId: transaction.projectId, releaseRequestId: transaction.releaseRequestId, transactionRecordId: transaction.id, intentId: transaction.intentId, asset: "USDC", atomicAmount: "1", operationType: "SETTLEMENT", protocolTarget: { kind: "DESTINATION", destination: transaction.destinationReference, network: "ARC_TESTNET", chainId: "synthetic:chain", isMock: true } });
+    const executionIntent = CanonicalExecutionIntentSchema.parse({ version: 1, actionKind: "RELEASE_APPROVAL", projectId: transaction.projectId, releaseRequestId: transaction.releaseRequestId, transactionRecordId: transaction.id, intentId: transaction.intentId, asset: "USDC", atomicAmount: "1", operationType: "SETTLEMENT", protocolTarget: { kind: "DESTINATION", destination: transaction.destinationReference, sourceWalletId: "mock:source-wallet", network: "ARC_TESTNET", chainId: "synthetic:chain", isMock: true } });
     for (const protocolTarget of [
       { ...executionIntent.protocolTarget, network: null },
       { ...executionIntent.protocolTarget, chainId: null },
       { ...executionIntent.protocolTarget, network: "OTHER_NETWORK" },
       { ...executionIntent.protocolTarget, destination: "not-an-address" },
     ]) expect(CanonicalExecutionIntentSchema.safeParse({ ...executionIntent, protocolTarget }).success).toBe(false);
-    const liveDestinationTarget = { kind: "DESTINATION" as const, destination: `0x${"1".repeat(40)}`, network: "ARC_TESTNET" as const, chainId: ARC_TESTNET_CHAIN_ID, isMock: false };
+    const liveDestinationTarget = { kind: "DESTINATION" as const, destination: `0x${"1".repeat(40)}`, sourceWalletId: "11111111-1111-4111-8111-111111111111", network: "ARC_TESTNET" as const, chainId: ARC_TESTNET_CHAIN_ID, isMock: false };
     expect(CanonicalExecutionIntentSchema.safeParse({ ...executionIntent, protocolTarget: liveDestinationTarget }).success).toBe(true);
     expect(CanonicalExecutionIntentSchema.safeParse({ ...executionIntent, protocolTarget: { ...liveDestinationTarget, destination: "mock:recipient" } }).success).toBe(false);
     expect(CanonicalExecutionIntentSchema.safeParse({ ...executionIntent, protocolTarget: { ...executionIntent.protocolTarget, destination: liveDestinationTarget.destination } }).success).toBe(false);
@@ -293,7 +293,7 @@ describe("separate state machines", () => {
     const erc8183Target = (method: "JOB_FUND" | "JOB_SUBMIT" | "JOB_EVALUATE" | "JOB_REJECT") => ({ kind: "ERC8183" as const, standard: "ERC-8183" as const, network: "ARC_TESTNET" as const, chainId: "synthetic:chain", contractReference: "mock:contract", jobId: "mock:job", method, parameterCommitment: `sha256:${"c".repeat(64)}`, clientReference: "mock:client", providerReference: "mock:provider", evaluatorReference: "mock:evaluator", destination: transaction.destinationReference });
     const submissionForOperation = async (operationType: SubmissionOperationType, actorType: "FOUNDER" | "PROVIDER" | "EVALUATOR") => {
       const actionKind = operationType === "JOB_REJECT" ? "JOB_REJECTION" : actorType === "FOUNDER" ? "RELEASE_APPROVAL" : actorType === "PROVIDER" ? "JOB_SUBMISSION" : "JOB_EVALUATION";
-      const protocolTarget = operationType === "JOB_FUND" || operationType === "JOB_SUBMIT" || operationType === "JOB_EVALUATE" || operationType === "JOB_REJECT" ? erc8183Target(operationType) : { kind: "DESTINATION" as const, destination: transaction.destinationReference, network: "ARC_TESTNET" as const, chainId: "synthetic:chain", isMock: true };
+      const protocolTarget = operationType === "JOB_FUND" || operationType === "JOB_SUBMIT" || operationType === "JOB_EVALUATE" || operationType === "JOB_REJECT" ? erc8183Target(operationType) : { kind: "DESTINATION" as const, destination: transaction.destinationReference, sourceWalletId: "mock:source-wallet", network: "ARC_TESTNET" as const, chainId: "synthetic:chain", isMock: true };
       const candidateTransaction = TransactionRecordSchema.parse({ ...transaction, arcTransaction: { ...transaction.arcTransaction!, operationType } });
       const candidateIntent = CanonicalExecutionIntentSchema.parse({ ...executionIntent, actionKind, operationType, protocolTarget });
       const candidateHash = await hashCanonicalExecutionIntent(candidateIntent);
@@ -330,7 +330,7 @@ describe("separate state machines", () => {
     expect(await hashCanonicalExecutionIntent({ ...jobFundIntent, actionKind: "JOB_EVALUATION" } as unknown as typeof jobFundIntent)).not.toBe(await hashCanonicalExecutionIntent(jobFundIntent));
     expect(await hashCanonicalExecutionIntent({ ...jobFundIntent, protocolTarget: erc8183Target("JOB_EVALUATE") } as unknown as typeof jobFundIntent)).not.toBe(await hashCanonicalExecutionIntent(jobFundIntent));
     for (const operationType of ["JOB_CREATE", "IDENTITY_REGISTRATION", "REPUTATION_WRITE"] as const) {
-      const protocolTarget = { kind: "DESTINATION" as const, destination: transaction.destinationReference, network: "ARC_TESTNET" as const, chainId: "synthetic:chain", isMock: true };
+      const protocolTarget = { kind: "DESTINATION" as const, destination: transaction.destinationReference, sourceWalletId: "mock:source-wallet", network: "ARC_TESTNET" as const, chainId: "synthetic:chain", isMock: true };
       for (const actionKind of ["RELEASE_APPROVAL", "JOB_SUBMISSION", "JOB_EVALUATION"] as const) expect(CanonicalExecutionIntentSchema.safeParse({ ...executionIntent, actionKind, operationType, protocolTarget }).success).toBe(false);
       const rawUnsupportedIntent = { ...executionIntent, actionKind: "RELEASE_APPROVAL" as const, operationType, protocolTarget };
       const unsupportedTransaction = TransactionRecordSchema.parse({ ...transaction, arcTransaction: { ...transaction.arcTransaction!, operationType } });
@@ -869,6 +869,12 @@ describe("lifecycle evidence schemas", () => {
     expect(ArcTransactionRefSchema.parse(mockTransaction("NONE"))).toBeDefined(); expect(ArcTransactionRefSchema.parse(mockTransaction("PREPARED"))).toBeDefined();
     expect(() => ArcTransactionRefSchema.parse({ ...mockTransaction("NONE"), transactionHash: "mock:transaction" })).toThrow();
     expect(() => ArcTransactionRefSchema.parse({ ...mockTransaction("SUBMITTED"), transactionHash: null })).toThrow();
+    const liveSubmitted = { ...liveTransaction, status: "SUBMITTED" as const, transactionHash: null, blockNumber: null, blockHash: null, explorerUrl: null, providerOperationId: "123e4567-e89b-12d3-a456-426614174000" };
+    expect(ArcTransactionRefSchema.parse(liveSubmitted)).toBeDefined();
+    for (const providerOperationId of ["mock:operation-1", "synthetic:operation-1", "fake:operation-1", "placeholder:operation-1", "demo:operation-1", "test:operation-1", "MoCk:operation-1", "circle-operation:1", "bogus:operation-1", " ", "123e4567-e89b-12d3-a456-42661417400z"]) {
+      expect(() => ArcTransactionRefSchema.parse({ ...liveSubmitted, providerOperationId })).toThrow();
+    }
+    expect(() => ArcTransactionRefSchema.parse({ ...mockTransaction("PREPARED"), providerOperationId: "circle-operation:1" })).toThrow();
     expect(() => ArcTransactionRefSchema.parse({ ...mockTransaction("CONFIRMED"), blockHash: null })).toThrow();
     expect(ArcTransactionRefSchema.parse(liveTransaction)).toEqual(liveTransaction);
     expect(() => ArcTransactionRefSchema.parse({ ...liveTransaction, chainId: "1" })).toThrow();
@@ -960,14 +966,27 @@ describe("persisted relationship integrity", () => {
   async function authorizationFixture() {
     const release = ReleaseRequestSchema.parse({ id: "release:1", projectId: "project:1", milestoneId: "milestone:1", proofId: "proof:1", intentId: "intent:1", settlementId: null, amount: usdc("100"), state: "PREPARED", approvalId: "approval:1", idempotencyKey: "release:key", createdAt: context.occurredAt });
     const transaction = TransactionRecordSchema.parse({ id: "transaction:1", projectId: release.projectId, releaseRequestId: release.id, intentId: release.intentId, destinationReference: "mock:recipient", approvalId: "approval:1", approvalBindingId: "binding:1", reconciliationId: null, idempotencyKey: "transaction:key", amount: release.amount, operationState: "PREPARED", arcTransaction: mockTransaction("PREPARED"), createdAt: context.occurredAt, updatedAt: context.occurredAt });
-    const executionIntent = { version: 1 as const, actionKind: "RELEASE_APPROVAL" as const, projectId: release.projectId, releaseRequestId: release.id, transactionRecordId: transaction.id, intentId: release.intentId, asset: release.amount.asset, atomicAmount: release.amount.atomicUnits, operationType: transaction.arcTransaction!.operationType, protocolTarget: { kind: "DESTINATION" as const, destination: transaction.destinationReference, network: transaction.arcTransaction!.network, chainId: transaction.arcTransaction!.chainId, isMock: true } };
+    const executionIntent = { version: 1 as const, actionKind: "RELEASE_APPROVAL" as const, projectId: release.projectId, releaseRequestId: release.id, transactionRecordId: transaction.id, intentId: release.intentId, asset: release.amount.asset, atomicAmount: release.amount.atomicUnits, operationType: transaction.arcTransaction!.operationType, protocolTarget: { kind: "DESTINATION" as const, destination: transaction.destinationReference, sourceWalletId: "mock:source-wallet", network: transaction.arcTransaction!.network, chainId: transaction.arcTransaction!.chainId, isMock: true } };
     const exactIntentHash = await hashCanonicalExecutionIntent(executionIntent);
     const approval = ApprovalRecordSchema.parse({ id: "approval:1", aggregateId: release.id, intentId: release.intentId, actionKind: "RELEASE_APPROVAL", authorizedActorType: "FOUNDER", authorizedActorId: "founder:1", exactIntentHash, idempotencyKey: "approval:key", decision: "APPROVED", approver: { actorId: "founder:1", actorType: "FOUNDER" }, expiresAt: "2027-01-01T00:00:00.000Z", decidedAt: context.occurredAt });
     const binding = { id: "binding:1", releaseRequestId: release.id, approvalId: approval.id, intentId: release.intentId, exactIntentHash, transactionRecordId: transaction.id, executionIntent, status: "ACTIVE" as const, consumedAt: null, consumedByTransactionId: null, createdAt: context.occurredAt };
     return { approval, release, transaction, binding };
   }
   it("uses one deterministic ordered canonical intent serialization and hash", async () => {
-    const { binding } = await authorizationFixture(); expect(JSON.parse(serializeCanonicalExecutionIntent(binding.executionIntent))).toEqual([1, "RELEASE_APPROVAL", "project:1", "release:1", "transaction:1", "intent:1", "USDC", "100", "SETTLEMENT", "DESTINATION", true, "mock:recipient", "ARC_TESTNET", "synthetic:chain"]); expect(binding.exactIntentHash).toMatch(/^sha256:[a-f0-9]{64}$/);
+    const { binding } = await authorizationFixture(); expect(JSON.parse(serializeCanonicalExecutionIntent(binding.executionIntent))).toEqual([1, "RELEASE_APPROVAL", "project:1", "release:1", "transaction:1", "intent:1", "USDC", "100", "SETTLEMENT", "DESTINATION", true, "mock:recipient", "mock:source-wallet", "ARC_TESTNET", "synthetic:chain"]); expect(binding.exactIntentHash).toMatch(/^sha256:[a-f0-9]{64}$/);
+  });
+  it("binds the canonical approval hash to the exact source wallet", async () => {
+    const { binding } = await authorizationFixture();
+    const originalHash = await hashCanonicalExecutionIntent(binding.executionIntent);
+    const changedIntent = {
+      ...binding.executionIntent,
+      protocolTarget: {
+        ...binding.executionIntent.protocolTarget,
+        sourceWalletId: "mock:other-source-wallet",
+      },
+    };
+
+    await expect(hashCanonicalExecutionIntent(changedIntent)).resolves.not.toBe(originalHash);
   });
   it("validates only the recomputed exact approved execution intent", async () => {
     const { approval, release, transaction, binding } = await authorizationFixture();

@@ -3,6 +3,10 @@ export type WalletErrorCode =
   | "PROVIDER_UNAVAILABLE"
   | "PAYMENT_NOT_SUPPORTED";
 
+export type SanitizedErrorCause = {
+  errorType: string;
+};
+
 export class WalletProviderError extends Error {
   readonly code: WalletErrorCode;
   readonly cause?: unknown;
@@ -20,7 +24,11 @@ export function normalizeWalletError(error: unknown): WalletProviderError {
     return error;
   }
 
+  const cause: SanitizedErrorCause = {
+    errorType: error instanceof Error ? error.name : typeof error,
+  };
+
   return new WalletProviderError("PROVIDER_UNAVAILABLE", "Wallet provider request failed.", {
-    cause: error,
+    cause,
   });
 }
