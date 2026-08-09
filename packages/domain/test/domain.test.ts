@@ -973,7 +973,20 @@ describe("persisted relationship integrity", () => {
     return { approval, release, transaction, binding };
   }
   it("uses one deterministic ordered canonical intent serialization and hash", async () => {
-    const { binding } = await authorizationFixture(); expect(JSON.parse(serializeCanonicalExecutionIntent(binding.executionIntent))).toEqual([1, "RELEASE_APPROVAL", "project:1", "release:1", "transaction:1", "intent:1", "USDC", "100", "SETTLEMENT", "DESTINATION", true, "mock:recipient", "ARC_TESTNET", "synthetic:chain"]); expect(binding.exactIntentHash).toMatch(/^sha256:[a-f0-9]{64}$/);
+    const { binding } = await authorizationFixture(); expect(JSON.parse(serializeCanonicalExecutionIntent(binding.executionIntent))).toEqual([1, "RELEASE_APPROVAL", "project:1", "release:1", "transaction:1", "intent:1", "USDC", "100", "SETTLEMENT", "DESTINATION", true, "mock:recipient", "mock:source-wallet", "ARC_TESTNET", "synthetic:chain"]); expect(binding.exactIntentHash).toMatch(/^sha256:[a-f0-9]{64}$/);
+  });
+  it("binds the canonical approval hash to the exact source wallet", async () => {
+    const { binding } = await authorizationFixture();
+    const originalHash = await hashCanonicalExecutionIntent(binding.executionIntent);
+    const changedIntent = {
+      ...binding.executionIntent,
+      protocolTarget: {
+        ...binding.executionIntent.protocolTarget,
+        sourceWalletId: "mock:other-source-wallet",
+      },
+    };
+
+    await expect(hashCanonicalExecutionIntent(changedIntent)).resolves.not.toBe(originalHash);
   });
   it("validates only the recomputed exact approved execution intent", async () => {
     const { approval, release, transaction, binding } = await authorizationFixture();
