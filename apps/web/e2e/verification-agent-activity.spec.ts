@@ -10,7 +10,7 @@ test.describe("verification agent activity", () => {
 
     await expect(page.getByRole("heading", { name: "Verification Agent Activity" })).toBeVisible();
     await expect(page.getByText("APPROVAL_REQUIRED").first()).toBeVisible();
-    await expect(page.getByText("250.00 USDC")).toBeVisible();
+    await expect(page.getByText("1.00 USDC")).toBeVisible();
     await expect(page.getByText("AI").first()).toBeVisible();
     await expect(page.getByText("DETERMINISTIC").first()).toBeVisible();
     await expect(page.getByText("HUMAN").first()).toBeVisible();

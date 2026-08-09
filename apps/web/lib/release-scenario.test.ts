@@ -50,15 +50,15 @@ describe("release lifecycle mock scenario", () => {
     }
   });
 
-  it("proposes a 250 test USDC release, distinct from the 150 test USDC spend-limit requirement", () => {
-    expect(scenario.milestone.proposedAmount).toEqual({ asset: "USDC", atomicUnits: "250000000" });
+  it("proposes a 1 test USDC release, distinct from the 150 test USDC spend-limit requirement", () => {
+    expect(scenario.milestone.proposedAmount).toEqual({ asset: "USDC", atomicUnits: "1000000" });
 
     const spendRequirement = scenario.requirements.find((requirement) => requirement.kind === "SPEND_LIMIT");
     expect(spendRequirement?.spendLimit).toEqual({ asset: "USDC", atomicUnits: "150000000" });
   });
 
-  it("propagates the 250 test USDC release amount consistently across every lifecycle record", () => {
-    const expectedAmount = { asset: "USDC", atomicUnits: "250000000" };
+  it("propagates the 1 test USDC release amount consistently across every lifecycle record", () => {
+    const expectedAmount = { asset: "USDC", atomicUnits: "1000000" };
     for (const snapshot of Object.values(scenario.snapshots)) {
       expect(snapshot.release.amount).toEqual(expectedAmount);
       if (snapshot.transaction) expect(snapshot.transaction.amount).toEqual(expectedAmount);
@@ -74,10 +74,10 @@ describe("release lifecycle mock scenario", () => {
     }
   });
 
-  it("uses the same 250 test USDC release amount for the Backer View settlement disclosure", () => {
+  it("uses the same 1 test USDC release amount for the Backer View settlement disclosure", () => {
     const disclosure = buildBackerDisclosure(scenario);
     for (const settlement of disclosure.settlements) {
-      expect(settlement.amount).toEqual({ asset: "USDC", atomicUnits: "250000000" });
+      expect(settlement.amount).toEqual({ asset: "USDC", atomicUnits: "1000000" });
     }
   });
 

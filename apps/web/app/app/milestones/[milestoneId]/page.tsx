@@ -106,8 +106,8 @@ export default async function MilestoneDetailPage({
         {activeView === "config-missing" && <ConfigurationMissingState />}
         {activeView === "insufficient-balance" && (
           <InsufficientBalanceState
-            available={{ atomicUnits: "50000000", asset: "USDC" }}
-            required={{ atomicUnits: "250000000", asset: "USDC" }}
+            available={{ atomicUnits: "500000", asset: "USDC" }}
+            required={{ atomicUnits: "1000000", asset: "USDC" }}
           />
         )}
       </div>

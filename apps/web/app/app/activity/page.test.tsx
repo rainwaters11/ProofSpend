@@ -35,7 +35,7 @@ describe("ActivityPage", () => {
     expect(markup).toContain("Verification Agent Activity");
     expect(markup).toContain("Agent mode:");
     expect(markup).toContain("APPROVAL_REQUIRED");
-    expect(markup).toContain("250.00 USDC");
+    expect(markup).toContain("1.00 USDC");
     expect(markup).toContain("AI");
     expect(markup).toContain("DETERMINISTIC");
     expect(markup).toContain("HUMAN");

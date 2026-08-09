@@ -40,7 +40,7 @@ Use only approved Phases A–D as recorded in `roadmap.md`; compositions ship on
 
 ### D-010 — Issue #32 owns the bounded Verification Agent runtime
 
-Issue #32 is the dedicated submission-ready implementation issue. It owns one server-only PawPOVAI orchestrator, one explicit OpenAI Responses API call in live mode, strict structured boundaries, one Proof Recovery question, deterministic re-evaluation, an exact 250 USDC non-authorizing proposal, and a hard stop at `APPROVAL_REQUIRED`. It does not own Circle submission, ERC-8004, ERC-8183, or generalized agent infrastructure.
+Issue #32 is the dedicated submission-ready implementation issue. It owns one server-only PawPOVAI orchestrator, one explicit OpenAI Responses API call in live mode, strict structured boundaries, one Proof Recovery question, deterministic re-evaluation, an exact 1 USDC non-authorizing proposal, and a hard stop at `APPROVAL_REQUIRED`. It does not own Circle submission, ERC-8004, ERC-8183, or generalized agent infrastructure.
 
 ### D-011 — Circle execution architecture selected (ADR-001)
 

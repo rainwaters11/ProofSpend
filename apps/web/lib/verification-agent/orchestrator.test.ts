@@ -70,6 +70,7 @@ describe("runVerificationAgent", () => {
 
     expect(result.status).toBe("APPROVAL_REQUIRED");
     expect(result.proposal?.amount.atomicUnits).toBe("1000000");
+    expect(result.proposal?.amount).toEqual(scenario.milestone.proposedAmount);
     expect(result.recoveryEvidence).toEqual({
       gapId: initial.missingGapId,
       receiptHash: scenario.recoveryReceipt.sourceHash,

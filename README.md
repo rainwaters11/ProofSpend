@@ -97,7 +97,7 @@ The merged foundation includes:
 - Frozen dependency installation in GitHub Actions
 - Arc and Circle architecture, dependency, roadmap, and governance documentation
 - A bounded server-side PawPOVAI Verification Agent runtime with explicit `mock` and `openai` modes
-- One validated Proof Recovery interaction, deterministic re-evaluation, and an exact 250 USDC proposal that stops at `APPROVAL_REQUIRED`
+- One validated Proof Recovery interaction, deterministic re-evaluation, and an exact 1 USDC proposal that stops at `APPROVAL_REQUIRED`
 - A privacy-safe Agent Activity trace with independently visible agent and wallet-adapter modes
 
 ## Arc and Circle architecture

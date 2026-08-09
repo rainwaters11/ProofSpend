@@ -55,7 +55,7 @@ Issue #32 implements a small, server-only Verification Agent orchestrator for th
 - deterministic `mock` provider support for CI and offline development;
 - strict schema validation at model input/output, tool output, activity trace, proposal, and handoff boundaries;
 - deterministic Evidence Engine and Milestone Engine ownership of policy outcomes;
-- one missing-receipt question, one validated founder correction, deterministic re-evaluation, and exact 250 USDC proposal;
+- one missing-receipt question, one validated founder correction, deterministic re-evaluation, and exact 1 USDC proposal;
 - stop at `APPROVAL_REQUIRED` with human authorization and value-moving execution outside the model loop;
 - sanitized ordered activity trace labels (`AI`, `DETERMINISTIC`, `HUMAN`, `MOCK` or `ARC TESTNET`);
 - no silent fallback from live to mock mode, no stored OpenAI response, and no fabricated Arc hash/confirmation/explorer output in mock mode;
