@@ -85,7 +85,11 @@ function verifyReturnedTransaction(
     };
   }
   const expectedAmount = atomicToDecimal(intent.amountAtomic);
-  if (!transaction.amounts || !transaction.amounts.includes(expectedAmount)) {
+  if (
+    !transaction.amounts ||
+    transaction.amounts.length !== 1 ||
+    transaction.amounts[0] !== expectedAmount
+  ) {
     return {
       ok: false,
       failureCode: "AMOUNT_MISMATCH",
