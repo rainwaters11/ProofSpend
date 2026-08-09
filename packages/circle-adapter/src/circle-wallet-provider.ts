@@ -320,30 +320,30 @@ export class CircleWalletProvider implements ArcTestnetTransferProvider {
       if (BigInt(balance.amountAtomic) < BigInt(intent.amountAtomic)) {
         return failureResult(intent, "ARC_TESTNET", {
           ok: false,
-        failureCode: "INSUFFICIENT_BALANCE",
-        failureMessage: "The configured source wallet has insufficient USDC for this transfer.",
+          failureCode: "INSUFFICIENT_BALANCE",
+          failureMessage: "The configured source wallet has insufficient USDC for this transfer.",
         });
       }
       const currentAuthorization = await this.authorizationStore.load(
         authorizationReferences(intent),
       );
+      if (currentAuthorization === null) {
+        return failureResult(intent, "ARC_TESTNET", {
+          ok: false,
+          failureCode: "AUTHORIZATION_UNAVAILABLE",
+          failureMessage: "The persisted transfer authorization is unavailable.",
+        });
+      }
       const currentRevalidation = await revalidateApprovedIntent(
         intent,
         currentAuthorization,
         {
-        usdcTokenAddress: this.usdcTokenAddress,
-        sourceWalletId: this.sourceWalletId,
+          usdcTokenAddress: this.usdcTokenAddress,
+          sourceWalletId: this.sourceWalletId,
         },
       );
       if (!currentRevalidation.ok) {
         return failureResult(intent, "ARC_TESTNET", currentRevalidation);
-      }
-      if (currentAuthorization === null) {
-        return failureResult(intent, "ARC_TESTNET", {
-        ok: false,
-        failureCode: "AUTHORIZATION_UNAVAILABLE",
-          failureMessage: "The persisted transfer authorization is unavailable.",
-        });
       }
       const consumedAt = new Date().toISOString();
       const consumedAuthorization = await this.authorizationStore.consume({
