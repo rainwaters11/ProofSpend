@@ -47,10 +47,10 @@ export const ArcTransactionRefSchema = z.object({
   network: z.literal(ARC_TESTNET_NETWORK), chainId: z.string().min(1), transactionHash: z.string().min(1).nullable(),
   status: z.enum(["NONE", "PREPARED", "SUBMITTED", "CONFIRMED", "FAILED"]), blockNumber: z.string().regex(/^\d+$/).nullable(),
   blockHash: z.string().min(1).nullable(), explorerUrl: z.string().url().nullable(),
-  operationType: TransactionOperationTypeSchema, isMock: z.boolean(),
+  operationType: TransactionOperationTypeSchema, isMock: z.boolean(), providerOperationId: Id.nullable().optional(),
 }).superRefine((value, context) => {
-  if (["NONE", "PREPARED"].includes(value.status) && (value.transactionHash !== null || value.blockNumber !== null || value.blockHash !== null || value.explorerUrl !== null)) context.addIssue({ code: "custom", message: `${value.status} transaction cannot contain transaction or block evidence.` });
-  if (value.status === "SUBMITTED" && value.transactionHash === null) context.addIssue({ code: "custom", message: "Submitted transaction requires a transaction hash." });
+  if (["NONE", "PREPARED"].includes(value.status) && (value.transactionHash !== null || value.blockNumber !== null || value.blockHash !== null || value.explorerUrl !== null || value.providerOperationId != null)) context.addIssue({ code: "custom", message: `${value.status} transaction cannot contain submission, transaction, or block evidence.` });
+  if (value.status === "SUBMITTED" && value.transactionHash === null && value.providerOperationId == null) context.addIssue({ code: "custom", message: "Submitted transaction requires a transaction hash or provider operation ID." });
   if (value.status === "SUBMITTED" && (value.blockNumber !== null || value.blockHash !== null)) context.addIssue({ code: "custom", message: "Submitted transaction cannot contain confirmation block evidence." });
   if (value.status === "CONFIRMED" && (value.transactionHash === null || value.blockNumber === null || value.blockHash === null)) context.addIssue({ code: "custom", message: "Confirmed transaction requires transaction hash, block number, and block hash." });
   if (value.status === "FAILED" && (value.blockNumber !== null || value.blockHash !== null)) context.addIssue({ code: "custom", message: "Failed transaction cannot contain confirmation block evidence." });

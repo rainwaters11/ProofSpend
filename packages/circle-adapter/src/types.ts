@@ -1,3 +1,10 @@
+import type {
+  ApprovalRecord,
+  ExecutionAuthorizationBinding,
+  ReleaseRequest,
+  TransactionRecord,
+} from "@proofspend/domain";
+
 export type WalletAdapterMode = "mock" | "circle";
 
 export type WalletStatus = {
@@ -49,16 +56,22 @@ export type TransferFailureCode =
   | "APPROVAL_MISSING"
   | "APPROVAL_EXPIRED"
   | "APPROVAL_ALTERED"
+  | "AUTHORIZATION_UNAVAILABLE"
   | "AMOUNT_MISMATCH"
   | "NETWORK_MISMATCH"
   | "TOKEN_MISMATCH"
   | "WALLET_MISMATCH"
-  | "DUPLICATE_SUBMISSION";
+  | "DUPLICATE_SUBMISSION"
+  | "POLLING_TIMEOUT"
+  | "CONFIRMATION_INCOMPLETE";
 
 export type ApprovedTransferIntent = {
   proposalId: string;
-  approvalReference: string;
-  exactIntentHash: string;
+  releaseRequestId: string;
+  approvalId: string;
+  authorizationBindingId: string;
+  transactionRecordId: string;
+  intentId: string;
   idempotencyKey: string;
   network: "ARC-TESTNET";
   chainId: "5042002";
@@ -67,9 +80,42 @@ export type ApprovedTransferIntent = {
   amountAtomic: string;
   sourceWalletId: string;
   destinationAddress: string;
-  decidedAt: string;
-  expiresAt: string;
 };
+
+export type TransferAuthorizationReferences = Pick<
+  ApprovedTransferIntent,
+  | "releaseRequestId"
+  | "approvalId"
+  | "authorizationBindingId"
+  | "transactionRecordId"
+  | "intentId"
+>;
+
+export type PersistedTransferAuthorization = {
+  approval: ApprovalRecord;
+  release: ReleaseRequest;
+  transaction: TransactionRecord;
+  binding: ExecutionAuthorizationBinding;
+};
+
+export type ConsumeTransferAuthorizationInput = TransferAuthorizationReferences & {
+  expectedExactIntentHash: string;
+  idempotencyKey: string;
+  asOf: string;
+};
+
+/**
+ * Server-only durable authorization boundary. `consume` must atomically compare the
+ * supplied references/hash/idempotency key against current persisted records, require
+ * an active unexpired binding, mark it consumed, and return the exact pre-consumption
+ * snapshot. Returning `null` fails closed when the records changed or were consumed.
+ */
+export interface TransferAuthorizationStore {
+  load(references: TransferAuthorizationReferences): Promise<PersistedTransferAuthorization | null>;
+  consume(
+    input: ConsumeTransferAuthorizationInput,
+  ): Promise<PersistedTransferAuthorization | null>;
+}
 
 export type TransferResult = {
   proposalId?: string;
@@ -78,7 +124,7 @@ export type TransferResult = {
   status: TransferStatus;
   failureCode?: TransferFailureCode;
   failureMessage?: string;
-  transactionId?: string;
+  providerOperationId?: string;
   transactionHash?: string;
   blockNumber?: number;
   blockHash?: string;
@@ -101,5 +147,5 @@ export interface ArcTestnetTransferProvider {
   getBalance(): Promise<WalletBalance>;
   prepareTransfer(intent: ApprovedTransferIntent): Promise<TransferResult>;
   submitTransfer(intent: ApprovedTransferIntent): Promise<TransferResult>;
-  pollTransfer(transactionId: string): Promise<TransferResult>;
+  pollTransfer(providerOperationId: string): Promise<TransferResult>;
 }

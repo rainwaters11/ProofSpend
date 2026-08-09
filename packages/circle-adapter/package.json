@@ -16,6 +16,7 @@
   },
   "dependencies": {
     "@circle-fin/developer-controlled-wallets": "10.8.0",
+    "@proofspend/domain": "workspace:*",
     "zod": "^4.0.0"
   }
 }

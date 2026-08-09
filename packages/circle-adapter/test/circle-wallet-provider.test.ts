@@ -1,10 +1,29 @@
+import { createHash } from "node:crypto";
+
+import {
+  ApprovalRecordSchema,
+  CanonicalExecutionIntentSchema,
+  ExecutionAuthorizationBindingSchema,
+  ReleaseRequestSchema,
+  TransactionRecordSchema,
+  serializeCanonicalExecutionIntent,
+} from "@proofspend/domain";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { CircleWalletProvider, USDC_DECIMALS } from "../src/circle-wallet-provider";
+import {
+  CircleWalletProvider,
+  type CircleWalletProviderConfig,
+  USDC_DECIMALS,
+} from "../src/circle-wallet-provider";
 import { getCircleEnvironment } from "../src/env";
 import { WalletProviderError } from "../src/errors";
-import { computeExactIntentHash } from "../src/intent";
-import type { ApprovedTransferIntent } from "../src/types";
+import type {
+  ApprovedTransferIntent,
+  ConsumeTransferAuthorizationInput,
+  PersistedTransferAuthorization,
+  TransferAuthorizationReferences,
+  TransferAuthorizationStore,
+} from "../src/types";
 
 const mockedClient = vi.hoisted(() => ({
   getWallet: vi.fn(),
@@ -25,11 +44,13 @@ const circleEnvironment = {
   CIRCLE_ARGSCAN_BASE_URL: "https://testnet.arcscan.app",
 };
 
-type IntentFields = Omit<ApprovedTransferIntent, "exactIntentHash">;
-
-const baseIntent: IntentFields = {
+const baseIntent: ApprovedTransferIntent = {
   proposalId: "proposal-1",
-  approvalReference: "approval-1",
+  releaseRequestId: "proposal-1",
+  approvalId: "approval-1",
+  authorizationBindingId: "binding-1",
+  transactionRecordId: "transaction-record-1",
+  intentId: "intent-1",
   idempotencyKey: "demo-payment-1",
   network: "ARC-TESTNET",
   chainId: "5042002",
@@ -38,26 +59,166 @@ const baseIntent: IntentFields = {
   amountAtomic: "250000000",
   sourceWalletId: "wallet-123",
   destinationAddress: "0x0000000000000000000000000000000000000001",
-  decidedAt: "2026-08-08T00:00:00.000Z",
-  expiresAt: "2099-01-01T00:00:00.000Z",
 };
 
 function validIntent(overrides: Record<string, unknown> = {}): ApprovedTransferIntent {
-  const intent = { ...baseIntent, ...overrides } as IntentFields;
-  return { ...intent, exactIntentHash: computeExactIntentHash(intent) };
+  return { ...baseIntent, ...overrides } as ApprovedTransferIntent;
 }
 
-function alteredIntent(overrides: Record<string, unknown>): ApprovedTransferIntent {
-  const intent = { ...baseIntent, ...overrides } as IntentFields;
-  return { ...intent, exactIntentHash: computeExactIntentHash(baseIntent) };
+function createAuthorization(): PersistedTransferAuthorization {
+  const executionIntent = CanonicalExecutionIntentSchema.parse({
+    version: 1,
+    actionKind: "RELEASE_APPROVAL",
+    projectId: "project-1",
+    releaseRequestId: baseIntent.releaseRequestId,
+    transactionRecordId: baseIntent.transactionRecordId,
+    intentId: baseIntent.intentId,
+    asset: "USDC",
+    atomicAmount: baseIntent.amountAtomic,
+    operationType: "SETTLEMENT",
+    protocolTarget: {
+      kind: "DESTINATION",
+      isMock: false,
+      destination: baseIntent.destinationAddress,
+      network: "ARC_TESTNET",
+      chainId: "5042002",
+    },
+  });
+  const exactIntentHash = `sha256:${createHash("sha256")
+    .update(serializeCanonicalExecutionIntent(executionIntent), "utf8")
+    .digest("hex")}`;
+  const approval = ApprovalRecordSchema.parse({
+    id: baseIntent.approvalId,
+    aggregateId: baseIntent.releaseRequestId,
+    intentId: baseIntent.intentId,
+    exactIntentHash,
+    idempotencyKey: "approval-key-1",
+    decision: "APPROVED",
+    approver: { actorId: "founder-1", actorType: "FOUNDER" },
+    expiresAt: "2099-01-01T00:00:00.000Z",
+    decidedAt: "2026-08-08T00:00:00.000Z",
+    actionKind: "RELEASE_APPROVAL",
+    authorizedActorType: "FOUNDER",
+    authorizedActorId: "founder-1",
+  });
+  const release = ReleaseRequestSchema.parse({
+    id: baseIntent.releaseRequestId,
+    projectId: "project-1",
+    milestoneId: "milestone-1",
+    proofId: "proof-1",
+    intentId: baseIntent.intentId,
+    settlementId: null,
+    amount: { asset: "USDC", atomicUnits: baseIntent.amountAtomic },
+    state: "PREPARED",
+    approvalId: baseIntent.approvalId,
+    idempotencyKey: "release-key-1",
+    createdAt: "2026-08-08T00:00:00.000Z",
+  });
+  const transaction = TransactionRecordSchema.parse({
+    id: baseIntent.transactionRecordId,
+    projectId: "project-1",
+    releaseRequestId: baseIntent.releaseRequestId,
+    intentId: baseIntent.intentId,
+    destinationReference: baseIntent.destinationAddress,
+    approvalId: baseIntent.approvalId,
+    approvalBindingId: baseIntent.authorizationBindingId,
+    reconciliationId: null,
+    idempotencyKey: baseIntent.idempotencyKey,
+    amount: { asset: "USDC", atomicUnits: baseIntent.amountAtomic },
+    operationState: "PREPARED",
+    arcTransaction: {
+      network: "ARC_TESTNET",
+      chainId: "5042002",
+      transactionHash: null,
+      status: "PREPARED",
+      blockNumber: null,
+      blockHash: null,
+      explorerUrl: null,
+      operationType: "SETTLEMENT",
+      isMock: false,
+    },
+    createdAt: "2026-08-08T00:00:00.000Z",
+    updatedAt: "2026-08-08T00:00:00.000Z",
+  });
+  const binding = ExecutionAuthorizationBindingSchema.parse({
+    id: baseIntent.authorizationBindingId,
+    releaseRequestId: baseIntent.releaseRequestId,
+    approvalId: baseIntent.approvalId,
+    intentId: baseIntent.intentId,
+    exactIntentHash,
+    transactionRecordId: baseIntent.transactionRecordId,
+    executionIntent,
+    status: "ACTIVE",
+    consumedAt: null,
+    consumedByTransactionId: null,
+    createdAt: "2026-08-08T00:00:00.000Z",
+  });
+  return { approval, release, transaction, binding };
 }
 
-function makeProvider(overrides: Partial<Record<string, unknown>> = {}): CircleWalletProvider {
+class FakeAuthorizationStore implements TransferAuthorizationStore {
+  private current: PersistedTransferAuthorization;
+  consumeCalls = 0;
+
+  constructor(snapshot: PersistedTransferAuthorization = createAuthorization()) {
+    this.current = structuredClone(snapshot);
+  }
+
+  async load(references: TransferAuthorizationReferences): Promise<PersistedTransferAuthorization | null> {
+    if (
+      references.releaseRequestId !== this.current.release.id ||
+      references.approvalId !== this.current.approval.id ||
+      references.authorizationBindingId !== this.current.binding.id ||
+      references.transactionRecordId !== this.current.transaction.id ||
+      references.intentId !== this.current.binding.intentId
+    ) {
+      return null;
+    }
+    return structuredClone(this.current);
+  }
+
+  async consume(
+    input: ConsumeTransferAuthorizationInput,
+  ): Promise<PersistedTransferAuthorization | null> {
+    this.consumeCalls++;
+    const snapshot = await this.load(input);
+    if (
+      snapshot === null ||
+      snapshot.binding.status !== "ACTIVE" ||
+      snapshot.binding.exactIntentHash !== input.expectedExactIntentHash ||
+      snapshot.transaction.idempotencyKey !== input.idempotencyKey ||
+      snapshot.approval.decision !== "APPROVED" ||
+      Date.parse(snapshot.approval.expiresAt) <= Date.parse(input.asOf)
+    ) {
+      return null;
+    }
+    this.current = {
+      ...this.current,
+      binding: {
+        ...this.current.binding,
+        status: "CONSUMED",
+        consumedAt: input.asOf,
+        consumedByTransactionId: input.transactionRecordId,
+      },
+    };
+    return snapshot;
+  }
+
+  revoke(): void {
+    this.current = {
+      ...this.current,
+      binding: { ...this.current.binding, status: "REVOKED" },
+    };
+  }
+}
+
+function makeProvider(overrides: Partial<CircleWalletProviderConfig> = {}): CircleWalletProvider {
   return new CircleWalletProvider({
     apiKey: "test-api-key",
     entitySecret: "test-entity-secret",
     sourceWalletId: "wallet-123",
     destinationWalletId: "wallet-dest",
+    authorizationStore: new FakeAuthorizationStore(),
     ...overrides,
   });
 }
@@ -82,17 +243,18 @@ describe("CircleWalletProvider", () => {
   });
 
   it("rejects incomplete configuration without touching the network", () => {
+    const authorizationStore = new FakeAuthorizationStore();
     expect(
-      () => new CircleWalletProvider({ apiKey: "", entitySecret: "secret", sourceWalletId: "w", destinationWalletId: "d" }),
+      () => new CircleWalletProvider({ apiKey: "", entitySecret: "secret", sourceWalletId: "w", destinationWalletId: "d", authorizationStore }),
     ).toThrow(WalletProviderError);
     expect(
-      () => new CircleWalletProvider({ apiKey: "key", entitySecret: "", sourceWalletId: "w", destinationWalletId: "d" }),
+      () => new CircleWalletProvider({ apiKey: "key", entitySecret: "", sourceWalletId: "w", destinationWalletId: "d", authorizationStore }),
     ).toThrow(WalletProviderError);
     expect(
-      () => new CircleWalletProvider({ apiKey: "key", entitySecret: "secret", sourceWalletId: "", destinationWalletId: "d" }),
+      () => new CircleWalletProvider({ apiKey: "key", entitySecret: "secret", sourceWalletId: "", destinationWalletId: "d", authorizationStore }),
     ).toThrow(WalletProviderError);
     expect(
-      () => new CircleWalletProvider({ apiKey: "key", entitySecret: "secret", sourceWalletId: "w", destinationWalletId: "" }),
+      () => new CircleWalletProvider({ apiKey: "key", entitySecret: "secret", sourceWalletId: "w", destinationWalletId: "", authorizationStore }),
     ).toThrow(WalletProviderError);
   });
 
@@ -151,6 +313,11 @@ describe("CircleWalletProvider", () => {
       asset: "USDC",
       amountAtomic: "1250000",
     });
+    expect(mockedClient.getWalletTokenBalance).toHaveBeenCalledWith({
+      id: "wallet-123",
+      includeAll: true,
+      tokenAddresses: [usdcTokenAddress],
+    });
   });
 
   it("returns a zero atomic balance when the USDC token is absent", async () => {
@@ -195,16 +362,23 @@ describe("CircleWalletProvider", () => {
   });
 
   it("rejects preparation when the intent differs from the approved hash", async () => {
-    const result = await makeProvider().prepareTransfer(alteredIntent({ destinationAddress: "0x0000000000000000000000000000000000000002" }));
+    const result = await makeProvider().prepareTransfer(
+      validIntent({ destinationAddress: "0x0000000000000000000000000000000000000002" }),
+    );
 
     expect(result.status).toBe("FAILED");
     expect(result.failureCode).toBe("APPROVAL_ALTERED");
   });
 
   it("rejects preparation when the approval has expired", async () => {
-    const result = await makeProvider().prepareTransfer(
-      validIntent({ expiresAt: "2020-01-01T00:00:00.000Z" }),
-    );
+    const authorization = createAuthorization();
+    authorization.approval = ApprovalRecordSchema.parse({
+      ...authorization.approval,
+      expiresAt: "2026-08-08T00:30:00.000Z",
+    });
+    const result = await makeProvider({
+      authorizationStore: new FakeAuthorizationStore(authorization),
+    }).prepareTransfer(validIntent());
 
     expect(result.status).toBe("FAILED");
     expect(result.failureCode).toBe("APPROVAL_EXPIRED");
@@ -238,13 +412,13 @@ describe("CircleWalletProvider", () => {
   });
 
   it("rejects preparation when approval fields are missing", async () => {
-    const result = await makeProvider().prepareTransfer(alteredIntent({ approvalReference: "" }));
+    const result = await makeProvider().prepareTransfer(validIntent({ approvalId: "" }));
 
     expect(result.status).toBe("FAILED");
     expect(result.failureCode).toBe("APPROVAL_MISSING");
   });
 
-  it("submits an approved intent and returns a submitted result with a transaction id", async () => {
+  it("submits an approved intent and returns a resumable Circle operation id", async () => {
     const usdcTokenAddress = getCircleEnvironment().usdcTokenAddress;
     mockDestinationWallet();
     mockedClient.createTransaction.mockResolvedValue({ data: { id: "tx-1", state: "SENT" } });
@@ -265,7 +439,7 @@ describe("CircleWalletProvider", () => {
       idempotencyKey: "demo-payment-1",
       mode: "ARC_TESTNET",
       status: "SUBMITTED",
-      transactionId: "tx-1",
+      providerOperationId: "tx-1",
       polledAt: expect.any(String),
     });
   });
@@ -304,6 +478,22 @@ describe("CircleWalletProvider", () => {
 
     expect(result.status).toBe("FAILED");
     expect(result.failureCode).toBe("AMOUNT_MISMATCH");
+    expect(mockedClient.createTransaction).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when authorization is revoked during destination lookup", async () => {
+    const authorizationStore = new FakeAuthorizationStore();
+    mockedClient.getWallet.mockImplementation(async () => {
+      authorizationStore.revoke();
+      return {
+        data: { wallet: { id: "wallet-dest", address: baseIntent.destinationAddress } },
+      };
+    });
+
+    const result = await makeProvider({ authorizationStore }).submitTransfer(validIntent());
+
+    expect(result.status).toBe("FAILED");
+    expect(result.failureCode).toBe("AUTHORIZATION_UNAVAILABLE");
     expect(mockedClient.createTransaction).not.toHaveBeenCalled();
   });
 
@@ -348,7 +538,7 @@ describe("CircleWalletProvider", () => {
     expect(result).toEqual({
       mode: "ARC_TESTNET",
       status: "CONFIRMED",
-      transactionId: "tx-1",
+      providerOperationId: "tx-1",
       transactionHash,
       blockNumber: 42,
       blockHash,
@@ -365,27 +555,29 @@ describe("CircleWalletProvider", () => {
     const result = await makeProvider().pollTransfer("tx-2");
 
     expect(result.status).toBe("FAILED");
-    expect(result.transactionId).toBe("tx-2");
+    expect(result.providerOperationId).toBe("tx-2");
     expect(result.transactionHash).toBeUndefined();
     expect(result.explorerUrl).toBeUndefined();
   });
 
-  it("throws a normalized error when polling never reaches a terminal state", async () => {
+  it("returns a resumable submitted result when polling reaches its time limit", async () => {
     mockedClient.getTransaction.mockResolvedValue({
       data: { transaction: { state: "SENT" } },
     });
 
-    const error = await makeProvider().pollTransfer("tx-3").catch((e: unknown) => e);
-    expect(error).toBeInstanceOf(WalletProviderError);
-    expect((error as WalletProviderError).code).toBe("PROVIDER_UNAVAILABLE");
+    const result = await makeProvider().pollTransfer("tx-3");
+    expect(result.status).toBe("SUBMITTED");
+    expect(result.providerOperationId).toBe("tx-3");
+    expect(result.failureCode).toBe("POLLING_TIMEOUT");
   });
 
   it("keeps polling across empty transaction responses and times out", async () => {
     mockedClient.getTransaction.mockResolvedValue({});
 
-    const error = await makeProvider().pollTransfer("tx-1").catch((e: unknown) => e);
-    expect(error).toBeInstanceOf(WalletProviderError);
-    expect((error as WalletProviderError).code).toBe("PROVIDER_UNAVAILABLE");
+    const result = await makeProvider().pollTransfer("tx-1");
+    expect(result.status).toBe("SUBMITTED");
+    expect(result.providerOperationId).toBe("tx-1");
+    expect(result.failureCode).toBe("POLLING_TIMEOUT");
     expect(mockedClient.getTransaction).toHaveBeenCalledTimes(3);
   });
 
@@ -396,7 +588,9 @@ describe("CircleWalletProvider", () => {
 
     const result = await makeProvider().pollTransfer("tx-1");
 
-    expect(result.status).toBe("CONFIRMED");
+    expect(result.status).toBe("SUBMITTED");
+    expect(result.providerOperationId).toBe("tx-1");
+    expect(result.failureCode).toBe("CONFIRMATION_INCOMPLETE");
     expect(result.transactionHash).toBeUndefined();
     expect(result.explorerUrl).toBeUndefined();
   });
