@@ -1,6 +1,10 @@
 import { ModeBadge } from "@/components/mode-badge";
 import { formatMoney } from "@/lib/format-money";
-import { runVerificationAgent } from "@/lib/verification-agent";
+import {
+  resumeVerificationAgentAfterFounderCorrection,
+  runVerificationAgent,
+} from "@/lib/verification-agent";
+import { createPawPovAiEvidenceScenario } from "@proofspend/domain";
 
 export const dynamic = "force-dynamic";
 
@@ -9,7 +13,18 @@ function adapterBadgeMode(adapterMode: "mock" | "arc-testnet") {
 }
 
 export default async function ActivityPage() {
-  const run = await runVerificationAgent({ agentMode: "mock" });
+  const initialRun = await runVerificationAgent({
+    agentMode: "mock",
+    now: "2026-01-21T00:00:00.000Z",
+  });
+  const scenario = createPawPovAiEvidenceScenario();
+  const run = resumeVerificationAgentAfterFounderCorrection({
+    run: initialRun,
+    authenticatedActorId: scenario.authorizedFounder.actorId,
+    receipt: scenario.recoveryReceipt,
+    acceptedMatch: scenario.recoveryMatch,
+    now: "2026-01-21T00:01:00.000Z",
+  });
 
   return (
     <div className="flex max-w-5xl flex-col gap-6">
@@ -22,7 +37,8 @@ export default async function ActivityPage() {
           Agent mode: <strong className="font-semibold text-foreground">{run.agentMode.toUpperCase()}</strong>
         </p>
         <p className="text-sm text-muted-foreground">
-          This public activity preview is deterministic mock data. Live runs require the authenticated API boundary.
+          This public activity preview is deterministic mock data, including a seeded founder correction.
+          Live runs require the authenticated API boundary.
         </p>
       </div>
 

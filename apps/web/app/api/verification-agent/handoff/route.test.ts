@@ -1,7 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { createPawPovAiEvidenceScenario } from "@proofspend/domain";
-
 import {
   loadVerificationAgentRun,
   resetAgentApiAccessForTest,
@@ -127,10 +125,34 @@ describe("POST /api/verification-agent/handoff", () => {
     const response = await POST(request);
     expect(response.status).toBe(400);
   });
+
+  it("rejects client-supplied correction evidence", async () => {
+    const runResponse = await runAgent(
+      new Request("http://localhost/api/verification-agent/run", {
+        method: "POST",
+        headers: { Authorization: `****** },
+      }),
+    );
+    const run = await runResponse.json();
+    const response = await submitCorrection(
+      new Request("http://localhost/api/verification-agent/correction", {
+        method: "POST",
+        headers: new Headers({
+          Authorization: "Bearer " + API_TOKEN,
+          "Content-Type": "application/json",
+        }),
+        body: JSON.stringify({
+          runId: run.runId,
+          receipt: { sourceHash: `sha256:${"0".repeat(64)}` },
+        }),
+      }),
+    );
+
+    expect(response.status).toBe(400);
+  });
 });
 
 async function submitFounderCorrection(run: { runId: string }) {
-  const scenario = createPawPovAiEvidenceScenario();
   const response = await submitCorrection(
     new Request("http://localhost/api/verification-agent/correction", {
       method: "POST",
@@ -140,8 +162,6 @@ async function submitFounderCorrection(run: { runId: string }) {
       }),
       body: JSON.stringify({
         runId: run.runId,
-        receipt: scenario.recoveryReceipt,
-        acceptedMatch: scenario.recoveryMatch,
       }),
     }),
   );
