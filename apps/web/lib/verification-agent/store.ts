@@ -122,7 +122,10 @@ function appendHandoffAttempt(
   attempts: StoredVerificationRun["handoffAttempts"],
   attempt: StoredVerificationRun["handoffAttempts"][number],
 ): StoredVerificationRun["handoffAttempts"] {
-  return [...attempts, attempt].slice(-MAX_HANDOFF_ATTEMPTS_PER_RUN);
+  if (attempts.length >= MAX_HANDOFF_ATTEMPTS_PER_RUN) {
+    throw new Error("HANDOFF_ATTEMPT_LIMIT_REACHED");
+  }
+  return [...attempts, attempt];
 }
 
 function parseHandoffAttempt(args: {
