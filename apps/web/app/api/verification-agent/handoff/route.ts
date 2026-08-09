@@ -5,6 +5,7 @@ import {
   AgentApiAccessError,
   ApprovalDecisionSchema,
   HandoffResultSchema,
+  MAX_HANDOFF_IDENTIFIER_LENGTH,
   authorizeAgentApiRequest,
   handoffApprovedProposal,
   loadVerificationAgentRun,
@@ -15,7 +16,7 @@ import { z } from "zod";
 
 const HandoffRequestSchema = z
   .object({
-    runId: z.string().min(1),
+    runId: z.string().min(1).max(MAX_HANDOFF_IDENTIFIER_LENGTH),
     approval: ApprovalDecisionSchema,
   })
   .strict();
