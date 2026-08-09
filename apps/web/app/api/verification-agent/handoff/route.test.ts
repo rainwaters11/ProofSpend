@@ -130,7 +130,7 @@ describe("POST /api/verification-agent/handoff", () => {
     const runResponse = await runAgent(
       new Request("http://localhost/api/verification-agent/run", {
         method: "POST",
-        headers: { Authorization: `****** },
+        headers: { Authorization: "Bearer " + API_TOKEN },
       }),
     );
     const run = await runResponse.json();
@@ -155,7 +155,7 @@ describe("POST /api/verification-agent/handoff", () => {
     const runResponse = await runAgent(
       new Request("http://localhost/api/verification-agent/run", {
         method: "POST",
-        headers: { Authorization: `****** },
+        headers: { Authorization: "Bearer " + API_TOKEN },
       }),
     );
     const run = await runResponse.json();
@@ -163,7 +163,7 @@ describe("POST /api/verification-agent/handoff", () => {
       new Request("http://localhost/api/verification-agent/correction", {
         method: "POST",
         headers: new Headers({
-          Authorization: `******
+          Authorization: "Bearer " + API_TOKEN,
           "Content-Type": "application/json",
         }),
         body: JSON.stringify({ runId: run.runId }),

@@ -162,42 +162,20 @@ export function handoffApprovedProposal(args: {
     message: "Human approval accepted after deterministic server revalidation.",
   });
 
-  if (run.adapterMode === "mock") {
-    appendActivity(trace, {
-      id: `${run.runId}:handoff:mock`,
-      at: now,
-      layer: "MOCK",
-      code: "HANDOFF_EXECUTED",
-      message:
-        "Mock adapter acknowledged the approved proposal; no Arc transaction hash or confirmation is produced.",
-    });
-
-    return HandoffResultSchema.parse({
-      status: "HANDOFF_READY",
-      adapterMode: run.adapterMode,
-      execution: {
-        state: "SKIPPED_MOCK",
-        transactionHash: null,
-        confirmation: null,
-        explorerUrl: null,
-      },
-      activityTrace: trace,
-    });
-  }
-
   appendActivity(trace, {
-    id: `${run.runId}:handoff:arc`,
+    id: `${run.runId}:handoff:mock`,
     at: now,
-    layer: "ARC TESTNET",
+    layer: "MOCK",
     code: "HANDOFF_EXECUTED",
-    message: "Arc Testnet handoff queued through typed adapter boundary.",
+    message:
+      "Mock adapter acknowledged the approved proposal; no Arc transaction hash or confirmation is produced.",
   });
 
   return HandoffResultSchema.parse({
     status: "HANDOFF_READY",
     adapterMode: run.adapterMode,
     execution: {
-      state: "PENDING_ARC_TESTNET",
+      state: "SKIPPED_MOCK",
       transactionHash: null,
       confirmation: null,
       explorerUrl: null,
