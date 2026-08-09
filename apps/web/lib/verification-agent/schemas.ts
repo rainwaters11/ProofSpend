@@ -109,11 +109,22 @@ export const ReleaseProposalSchema = z
     chain: z.literal("ARC_TESTNET"),
     destination: z.string().min(1),
     authorizedRole: z.literal("FOUNDER"),
+    preparedAt: z.string().datetime(),
     expiresAt: z.string().datetime(),
     reason: z.string().min(1),
   })
   .strict();
 export type ReleaseProposal = z.infer<typeof ReleaseProposalSchema>;
+
+export const RecoveryEvidenceBindingSchema = z
+  .object({
+    gapId: z.string().min(1),
+    receiptHash: z.string().regex(/^sha256:[a-f0-9]{64}$/),
+    acceptedMatchId: z.string().min(1),
+    resolvedAt: z.string().datetime(),
+  })
+  .strict();
+export type RecoveryEvidenceBinding = z.infer<typeof RecoveryEvidenceBindingSchema>;
 
 export const VerificationAgentResultSchema = z
   .object({
@@ -125,6 +136,7 @@ export const VerificationAgentResultSchema = z
     modelSummary: z.string().min(1),
     proposal: ReleaseProposalSchema.nullable(),
     missingGapId: z.string().min(1),
+    recoveryEvidence: RecoveryEvidenceBindingSchema.nullable(),
     activityTrace: z.array(ActivityEventSchema).min(1),
   })
   .strict();

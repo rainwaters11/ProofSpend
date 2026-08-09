@@ -70,6 +70,12 @@ describe("runVerificationAgent", () => {
 
     expect(result.status).toBe("APPROVAL_REQUIRED");
     expect(result.proposal?.amount.atomicUnits).toBe("250000000");
+    expect(result.recoveryEvidence).toEqual({
+      gapId: initial.missingGapId,
+      receiptHash: scenario.recoveryReceipt.sourceHash,
+      acceptedMatchId: scenario.recoveryMatch.id,
+      resolvedAt: "2026-01-21T00:01:00.000Z",
+    });
     expect(result.activityTrace.map((event) => event.code)).toContain(
       "FOUNDER_CORRECTION_ACCEPTED",
     );
@@ -234,6 +240,37 @@ describe("handoffApprovedProposal", () => {
     });
 
     expect(result.status).toBe("HANDOFF_REJECTED");
+  });
+
+  it("rejects an approval decided before proposal preparation", async () => {
+    const run = await createApprovalRun();
+    const result = handoffApprovedProposal({
+      run,
+      approval: {
+        approvalId: "approval:pre-created",
+        intentId: run.proposal!.intentId,
+        authorizedActorRole: "FOUNDER",
+        authorizedActorId: "founder:fictional",
+        decision: "APPROVED",
+        decidedAt: "2026-01-21T00:00:59.999Z",
+        expiresAt: run.proposal!.expiresAt,
+        idempotencyKey: run.proposal!.idempotencyKey,
+      },
+      authenticatedActorId: "founder:fictional",
+      now: "2026-01-21T00:01:01.000Z",
+    });
+
+    expect(result.status).toBe("HANDOFF_REJECTED");
+    expect(result.activityTrace.map((event) => event.code)).not.toContain("APPROVAL_ACCEPTED");
+  });
+
+  it("generates distinct run IDs for runs started at the same instant", async () => {
+    const [first, second] = await Promise.all([
+      runVerificationAgent({ now: "2026-01-21T00:00:00.000Z" }),
+      runVerificationAgent({ now: "2026-01-21T00:00:00.000Z" }),
+    ]);
+
+    expect(first.runId).not.toBe(second.runId);
   });
 });
 

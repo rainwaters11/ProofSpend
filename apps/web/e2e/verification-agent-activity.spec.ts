@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 
 test.describe("verification agent activity", () => {
-  test("shows sanitized ordered activity labels and approval-required state", async ({ page }) => {
+  test("shows sanitized ordered activity labels and correction-required state", async ({ page }) => {
     const visible = (
       locator: ReturnType<import("@playwright/test").Page["getByLabel"]>,
     ) => locator.locator("visible=true").first();
@@ -9,8 +9,10 @@ test.describe("verification agent activity", () => {
     await page.goto("/app/activity");
 
     await expect(page.getByRole("heading", { name: "Verification Agent Activity" })).toBeVisible();
-    await expect(page.getByText("APPROVAL_REQUIRED").first()).toBeVisible();
-    await expect(page.getByText("250.00 USDC")).toBeVisible();
+    await expect(page.getByText("CORRECTION_REQUIRED").first()).toBeVisible();
+    await expect(
+      page.getByText("A proposal cannot be prepared until the founder submits a validated receipt correction."),
+    ).toBeVisible();
     await expect(page.getByText("AI").first()).toBeVisible();
     await expect(page.getByText("DETERMINISTIC").first()).toBeVisible();
     await expect(page.getByText("HUMAN").first()).toBeVisible();

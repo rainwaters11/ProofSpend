@@ -29,14 +29,6 @@ export function handoffApprovedProposal(args: {
     throw new Error("HANDOFF_PERSISTENT_IDEMPOTENCY_REQUIRED");
   }
 
-  appendActivity(trace, {
-    id: `${run.runId}:handoff:approval`,
-    at: now,
-    layer: "HUMAN",
-    code: "APPROVAL_ACCEPTED",
-    message: "Human approval submitted for deterministic server revalidation.",
-  });
-
   if (run.status !== "APPROVAL_REQUIRED" || run.proposal === null) {
     appendActivity(trace, {
       id: `${run.runId}:handoff:reject:state`,
@@ -104,14 +96,17 @@ export function handoffApprovedProposal(args: {
   }
 
   const approvalExpiresAt = Date.parse(approval.expiresAt);
+  const proposalPreparedAt = Date.parse(run.proposal.preparedAt);
   const proposalExpiresAt = Date.parse(run.proposal.expiresAt);
   const decidedAt = Date.parse(approval.decidedAt);
   const nowMs = Date.parse(now);
   if (
     !Number.isFinite(approvalExpiresAt) ||
+    !Number.isFinite(proposalPreparedAt) ||
     !Number.isFinite(proposalExpiresAt) ||
     !Number.isFinite(decidedAt) ||
     !Number.isFinite(nowMs) ||
+    decidedAt < proposalPreparedAt ||
     decidedAt > nowMs ||
     decidedAt >= proposalExpiresAt ||
     nowMs >= approvalExpiresAt ||
@@ -158,6 +153,14 @@ export function handoffApprovedProposal(args: {
       activityTrace: trace,
     });
   }
+
+  appendActivity(trace, {
+    id: `${run.runId}:handoff:approval`,
+    at: now,
+    layer: "HUMAN",
+    code: "APPROVAL_ACCEPTED",
+    message: "Human approval accepted after deterministic server revalidation.",
+  });
 
   if (run.adapterMode === "mock") {
     appendActivity(trace, {

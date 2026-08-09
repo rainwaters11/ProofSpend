@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+
 import "server-only";
 
 import {
@@ -49,7 +51,7 @@ function buildProvider(mode: VerificationAgentMode): AgentModelProvider {
 
 function buildRunId(now: string): string {
   const compact = now.replaceAll(/[-:TZ.]/g, "");
-  return `run:${compact}`;
+  return `run:${compact}:${randomUUID()}`;
 }
 
 function appendEvent(trace: ActivityEvent[], event: ActivityEvent) {
@@ -78,6 +80,7 @@ function buildProposal(reason: string, now: string) {
     chain: "ARC_TESTNET",
     destination: PROPOSAL_DESTINATION,
     authorizedRole: "FOUNDER",
+    preparedAt: now,
     expiresAt: new Date(nowMs + RELEASE_TTL_MS).toISOString(),
     reason,
   });
@@ -197,6 +200,7 @@ export async function runVerificationAgent(
     modelSummary: redactMessage(modelOutput.summary),
     proposal: null,
     missingGapId: missingGap.id,
+    recoveryEvidence: null,
     activityTrace: trace.map((event) => ({
       ...event,
       message: redactMessage(event.message),
@@ -285,6 +289,12 @@ export function resumeVerificationAgentAfterFounderCorrection(args: {
     ...run,
     status: "APPROVAL_REQUIRED",
     proposal,
+    recoveryEvidence: {
+      gapId: missingGap.id,
+      receiptHash: args.receipt.sourceHash,
+      acceptedMatchId: args.acceptedMatch.id,
+      resolvedAt: now,
+    },
     activityTrace: trace.map((event) => ({
       ...event,
       message: redactMessage(event.message),
