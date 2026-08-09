@@ -17,6 +17,7 @@ export default function Home() {
         <aside className="mode-notice" aria-label="Application mode">
           <strong>DEMO MODE</strong>
           <span>No real funds are being moved.</span>
+          <small>Agent: {environment.PROOFSPEND_AGENT_MODE}</small>
           <small>Adapter: {environment.PROOFSPEND_ADAPTER_MODE}</small>
         </aside>
 

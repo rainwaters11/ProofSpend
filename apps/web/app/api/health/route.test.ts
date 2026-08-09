@@ -3,10 +3,12 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { GET } from "./route";
 
 const originalAdapterMode = process.env.PROOFSPEND_ADAPTER_MODE;
+const originalAgentMode = process.env.PROOFSPEND_AGENT_MODE;
 
 describe("GET /api/health", () => {
   beforeEach(() => {
     process.env.PROOFSPEND_ADAPTER_MODE = "mock";
+    process.env.PROOFSPEND_AGENT_MODE = "mock";
   });
 
   afterEach(() => {
@@ -14,6 +16,12 @@ describe("GET /api/health", () => {
       delete process.env.PROOFSPEND_ADAPTER_MODE;
     } else {
       process.env.PROOFSPEND_ADAPTER_MODE = originalAdapterMode;
+    }
+
+    if (originalAgentMode === undefined) {
+      delete process.env.PROOFSPEND_AGENT_MODE;
+    } else {
+      process.env.PROOFSPEND_AGENT_MODE = originalAgentMode;
     }
   });
 
@@ -24,6 +32,7 @@ describe("GET /api/health", () => {
     expect(await response.json()).toEqual({
       status: "ok",
       adapterMode: "mock",
+      agentMode: "mock",
       version: "0.1.0",
     });
   });

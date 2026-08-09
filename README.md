@@ -10,7 +10,7 @@
 
 ProofSpend LaunchVault is an evidence-aware programmable capital platform for founders, solopreneurs, and the people who fund their work. It connects business capital, milestone requirements, receipts, deliverables, LLM-assisted evidence analysis, deterministic policy, human approval, and Arc Testnet settlement into one accountable workflow.
 
-> **Current status:** The technical foundation and Arc-native architecture are complete. The application currently runs in explicit mock mode, and no real funds are being moved. Smart Reserves, evidence workflows, ERC-8004 identity, ERC-8183 settlement, and the premium product interface are in active development.
+> **Current status:** The technical foundation and Arc-native architecture are complete, and Issue #32 ships a bounded server-side Verification Agent orchestrator for the seeded PawPOVAI flow. The app defaults to explicit mock adapter mode, no real funds are being moved, and human approval plus typed adapter execution remain outside the model loop.
 
 ## Why ProofSpend
 
@@ -89,13 +89,16 @@ The merged foundation includes:
 - Next.js App Router application
 - Strict TypeScript configuration
 - Zod-based server environment validation
-- Explicit credential-free mock mode
+- Explicit credential-free mock mode plus explicit live `PROOFSPEND_AGENT_MODE=openai`
 - Typed Circle wallet integration boundary
 - Deterministic `MockWalletProvider`
-- Safe `/api/health` endpoint
+- Safe `/api/health` endpoint with independent agent/adapter mode visibility
 - Repository-wide lint, typecheck, test, and build scripts
 - Frozen dependency installation in GitHub Actions
 - Arc and Circle architecture, dependency, roadmap, and governance documentation
+- A bounded server-side PawPOVAI Verification Agent runtime with explicit `mock` and `openai` modes
+- One validated Proof Recovery interaction, deterministic re-evaluation, and an exact 250 USDC proposal that stops at `APPROVAL_REQUIRED`
+- A privacy-safe Agent Activity trace with independently visible agent and wallet-adapter modes
 
 ## Arc and Circle architecture
 
@@ -154,6 +157,8 @@ bun --filter @proofspend/web dev
 
 Open `http://localhost:3000`.
 
+Set `PROOFSPEND_AGENT_MODE=mock` for deterministic offline development. The agent API endpoints also require a server-only `PROOFSPEND_AGENT_API_TOKEN` of at least 32 characters. To run the one-call live path, set `PROOFSPEND_AGENT_MODE=openai` together with `OPENAI_API_KEY`, `LLM_MODEL`, and the API token. Live invocation additionally requires a unique `Idempotency-Key`, is rate limited, fails closed, and never falls back to mock mode.
+
 The safe health endpoint is available at:
 
 ```text
@@ -165,6 +170,7 @@ http://localhost:3000/api/health
 - The current application is a mock-mode and Arc Testnet prototype.
 - No real funds are moved by the current foundation.
 - Mock behavior must never fabricate a transaction hash.
+- The current server-owned run and proposal-key stores are process-local, mock-only demo guardrails. Non-mock handoff is blocked until Issue #7 supplies durable atomic persistence and the typed adapter boundary.
 - Raw receipts and founder-private evidence remain offchain.
 - LLM extractions, recommendations, and explanations are not deterministic policy decisions or approvals.
 - PASS does not mean approved; approved does not mean submitted; submitted does not mean confirmed.
@@ -186,7 +192,7 @@ The active implementation order is maintained in [`docs/roadmap.md`](docs/roadma
 9. Guided founder and backer demo
 10. Security, accessibility, deployment, and submission review
 
-**Separate backlog item:** Complete Verification Agent orchestration requires its own future issue and dependency review unless the live backlog explicitly assigns it elsewhere. It is not part of Issue #9.
+Issue #32 owns the bounded submission-ready Verification Agent runtime. It remains separate from Issue #9 integration work and from value-moving Circle execution.
 
 ---
 

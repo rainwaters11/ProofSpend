@@ -4,10 +4,12 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import Home from "./page";
 
 const originalAdapterMode = process.env.PROOFSPEND_ADAPTER_MODE;
+const originalAgentMode = process.env.PROOFSPEND_AGENT_MODE;
 
 describe("Home", () => {
   beforeEach(() => {
     process.env.PROOFSPEND_ADAPTER_MODE = "mock";
+    process.env.PROOFSPEND_AGENT_MODE = "mock";
   });
 
   afterEach(() => {
@@ -15,6 +17,12 @@ describe("Home", () => {
       delete process.env.PROOFSPEND_ADAPTER_MODE;
     } else {
       process.env.PROOFSPEND_ADAPTER_MODE = originalAdapterMode;
+    }
+
+    if (originalAgentMode === undefined) {
+      delete process.env.PROOFSPEND_AGENT_MODE;
+    } else {
+      process.env.PROOFSPEND_AGENT_MODE = originalAgentMode;
     }
   });
 
@@ -24,6 +32,7 @@ describe("Home", () => {
     expect(markup).toContain("Fund the vision. Prove the progress. Unlock what comes next.");
     expect(markup).toContain("DEMO MODE");
     expect(markup).toContain("No real funds are being moved.");
+    expect(markup).toContain("Agent: mock");
     expect(markup).toContain("Adapter: mock");
   });
 
