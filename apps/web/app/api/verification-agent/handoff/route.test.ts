@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
+  MAX_HANDOFF_ATTEMPTS_PER_RUN,
   loadVerificationAgentRun,
   resetAgentApiAccessForTest,
   resetVerificationAgentStoreForTest,
@@ -171,6 +172,88 @@ describe("POST /api/verification-agent/handoff", () => {
     );
 
     expect(response.status).toBe(400);
+  });
+
+  it("rejects oversized approval identifiers before retaining an attempt", async () => {
+    const runResponse = await runAgent(
+      new Request("http://localhost/api/verification-agent/run", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${API_TOKEN}` },
+      }),
+    );
+    const run = await submitFounderCorrection(await runResponse.json());
+    const response = await POST(
+      new Request("http://localhost/api/verification-agent/handoff", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${API_TOKEN}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          runId: run.runId,
+          approval: {
+            approvalId: "a".repeat(201),
+            intentId: run.proposal.intentId,
+            authorizedActorRole: "FOUNDER",
+            authorizedActorId: "founder:fictional",
+            decision: "APPROVED",
+            decidedAt: new Date().toISOString(),
+            expiresAt: run.proposal.expiresAt,
+            idempotencyKey: run.proposal.idempotencyKey,
+          },
+        }),
+      }),
+    );
+
+    expect(response.status).toBe(400);
+    expect(loadVerificationAgentRun(run.runId)?.handoffAttempts).toHaveLength(0);
+  });
+
+  it("retains only the latest bounded rejected handoff attempts", async () => {
+    const runResponse = await runAgent(
+      new Request("http://localhost/api/verification-agent/run", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${API_TOKEN}` },
+      }),
+    );
+    const run = await submitFounderCorrection(await runResponse.json());
+    const extraAttempts = 5;
+
+    for (
+      let index = 0;
+      index < MAX_HANDOFF_ATTEMPTS_PER_RUN + extraAttempts;
+      index += 1
+    ) {
+      const suffix = index.toString().padStart(4, "0");
+      const response = await POST(
+        new Request("http://localhost/api/verification-agent/handoff", {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${API_TOKEN}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            runId: run.runId,
+            approval: {
+              approvalId: `approval:rejected:${suffix}`,
+              intentId: `intent:wrong:${suffix}`,
+              authorizedActorRole: "FOUNDER",
+              authorizedActorId: "founder:fictional",
+              decision: "APPROVED",
+              decidedAt: new Date().toISOString(),
+              expiresAt: run.proposal.expiresAt,
+              idempotencyKey: run.proposal.idempotencyKey,
+            },
+          }),
+        }),
+      );
+      expect(response.status).toBe(422);
+    }
+
+    const attempts = loadVerificationAgentRun(run.runId)?.handoffAttempts ?? [];
+    expect(attempts).toHaveLength(MAX_HANDOFF_ATTEMPTS_PER_RUN);
+    expect(attempts[0]?.approval.approvalId).toBe("approval:rejected:0005");
+    expect(attempts.at(-1)?.approval.approvalId).toBe("approval:rejected:0024");
   });
 });
 
