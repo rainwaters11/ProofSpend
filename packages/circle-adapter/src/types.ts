@@ -42,7 +42,7 @@ export interface WalletProvider {
   executePayment(payment: PaymentPreparation): Promise<PaymentResult>;
 }
 
-export const DEMO_TRANSFER_AMOUNT_ATOMIC = "250000000";
+export const DEMO_TRANSFER_AMOUNT_ATOMIC = "1000000";
 
 export const ARC_TESTNET_CHAIN_ID = "5042002";
 
