@@ -61,7 +61,7 @@ const baseIntent: ApprovedTransferIntent = {
   chainId: "5042002",
   asset: "USDC",
   tokenContractAddress: circleEnvironment.CIRCLE_USDC_TOKEN_ADDRESS,
-  amountAtomic: "250000000",
+  amountAtomic: "1000000",
   sourceWalletId: SOURCE_WALLET_ID,
   destinationAddress: "0x0000000000000000000000000000000000000001",
 };
@@ -243,7 +243,7 @@ function mockSufficientBalance(): void {
   mockedClient.getWalletTokenBalance.mockResolvedValue({
     data: {
       tokenBalances: [{
-        amount: "250",
+        amount: "1",
         token: { tokenAddress: circleEnvironment.CIRCLE_USDC_TOKEN_ADDRESS },
       }],
     },
@@ -259,7 +259,7 @@ function mockConfirmedTransaction(overrides: Record<string, unknown> = {}) {
     blockchain: "ARC-TESTNET",
     walletId: SOURCE_WALLET_ID,
     destinationAddress: baseIntent.destinationAddress,
-    amounts: ["250"],
+    amounts: ["1"],
     contractAddress: circleEnvironment.CIRCLE_USDC_TOKEN_ADDRESS,
     ...overrides,
   };
@@ -388,9 +388,9 @@ describe("CircleWalletProvider", () => {
     expect(mockedClient.getWallet).not.toHaveBeenCalled();
   });
 
-  it("rejects preparation when the amount is not exactly 250 USDC", async () => {
+  it("rejects preparation when the amount is not exactly 1 USDC", async () => {
     const result = await makeProvider().prepareTransfer(
-      validIntent({ amountAtomic: "1000000" }),
+      validIntent({ amountAtomic: "250000000" }),
     );
 
     expect(result.status).toBe("FAILED");
@@ -467,7 +467,7 @@ describe("CircleWalletProvider", () => {
     expect(mockedClient.createTransaction).toHaveBeenCalledWith({
       walletId: SOURCE_WALLET_ID,
       tokenAddress: usdcTokenAddress,
-      amount: ["250"],
+      amount: ["1"],
       destinationAddress: baseIntent.destinationAddress,
       fee: { type: "level", config: { feeLevel: "MEDIUM" } },
       idempotencyKey: "demo-payment-1",
@@ -542,7 +542,7 @@ describe("CircleWalletProvider", () => {
     mockedClient.getWalletTokenBalance.mockResolvedValue({
       data: {
         tokenBalances: [{
-          amount: "249.999999",
+          amount: "0.5",
           token: { tokenAddress: circleEnvironment.CIRCLE_USDC_TOKEN_ADDRESS },
         }],
       },
@@ -560,7 +560,7 @@ describe("CircleWalletProvider", () => {
     mockWallets();
     mockSufficientBalance();
 
-    const result = await makeProvider().submitTransfer(validIntent({ amountAtomic: "1000000" }));
+    const result = await makeProvider().submitTransfer(validIntent({ amountAtomic: "250000000" }));
 
     expect(result.status).toBe("FAILED");
     expect(result.failureCode).toBe("AMOUNT_MISMATCH");
