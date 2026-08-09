@@ -7,7 +7,7 @@ const Time = z.string().datetime();
 const Hash = z.string().regex(/^sha256:[a-f0-9]{64}$/);
 const EvmAddress = /^0x[a-fA-F0-9]{40}$/;
 const EvmHash = /^0x[a-fA-F0-9]{64}$/;
-const isSynthetic = (value: string) => /^(mock:|synthetic:)/.test(value);
+const isSynthetic = (value: string) => /^(mock|synthetic|fake|placeholder|demo|test):/i.test(value);
 export const LAUNCHVAULT_SETTLEMENT_ASSET = "USDC" as const;
 export const SettlementMoneyAmountSchema = MoneyAmountSchema.extend({ asset: z.literal(LAUNCHVAULT_SETTLEMENT_ASSET) });
 export type SettlementMoneyAmount = z.infer<typeof SettlementMoneyAmountSchema>;
@@ -55,7 +55,7 @@ export const ArcTransactionRefSchema = z.object({
   if (value.status === "CONFIRMED" && (value.transactionHash === null || value.blockNumber === null || value.blockHash === null)) context.addIssue({ code: "custom", message: "Confirmed transaction requires transaction hash, block number, and block hash." });
   if (value.status === "FAILED" && (value.blockNumber !== null || value.blockHash !== null)) context.addIssue({ code: "custom", message: "Failed transaction cannot contain confirmation block evidence." });
   if (value.transactionHash === null && value.explorerUrl !== null) context.addIssue({ code: "custom", message: "A transaction without a hash cannot have an explorer URL." });
-  const references = [value.chainId, value.transactionHash, value.blockHash].filter((item): item is string => item !== null);
+  const references = [value.chainId, value.transactionHash, value.blockHash, value.providerOperationId].filter((item): item is string => item != null);
   if (value.isMock && references.some((item) => !isSynthetic(item))) context.addIssue({ code: "custom", message: "Every mock transaction reference must be visibly synthetic." });
   if (value.isMock && value.explorerUrl !== null) context.addIssue({ code: "custom", message: "Mock transactions cannot have a live explorer URL." });
   if (!value.isMock && references.some(isSynthetic)) context.addIssue({ code: "custom", message: "Synthetic transaction references cannot be marked live." });

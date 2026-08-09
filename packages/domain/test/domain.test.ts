@@ -869,7 +869,11 @@ describe("lifecycle evidence schemas", () => {
     expect(ArcTransactionRefSchema.parse(mockTransaction("NONE"))).toBeDefined(); expect(ArcTransactionRefSchema.parse(mockTransaction("PREPARED"))).toBeDefined();
     expect(() => ArcTransactionRefSchema.parse({ ...mockTransaction("NONE"), transactionHash: "mock:transaction" })).toThrow();
     expect(() => ArcTransactionRefSchema.parse({ ...mockTransaction("SUBMITTED"), transactionHash: null })).toThrow();
-    expect(ArcTransactionRefSchema.parse({ ...liveTransaction, status: "SUBMITTED", transactionHash: null, blockNumber: null, blockHash: null, explorerUrl: null, providerOperationId: "circle-operation:1" })).toBeDefined();
+    const liveSubmitted = { ...liveTransaction, status: "SUBMITTED" as const, transactionHash: null, blockNumber: null, blockHash: null, explorerUrl: null, providerOperationId: "123e4567-e89b-12d3-a456-426614174000" };
+    expect(ArcTransactionRefSchema.parse(liveSubmitted)).toBeDefined();
+    for (const providerOperationId of ["mock:operation-1", "synthetic:operation-1", "fake:operation-1", "placeholder:operation-1", "demo:operation-1", "test:operation-1", "MoCk:operation-1"]) {
+      expect(() => ArcTransactionRefSchema.parse({ ...liveSubmitted, providerOperationId })).toThrow();
+    }
     expect(() => ArcTransactionRefSchema.parse({ ...mockTransaction("PREPARED"), providerOperationId: "circle-operation:1" })).toThrow();
     expect(() => ArcTransactionRefSchema.parse({ ...mockTransaction("CONFIRMED"), blockHash: null })).toThrow();
     expect(ArcTransactionRefSchema.parse(liveTransaction)).toEqual(liveTransaction);
