@@ -245,12 +245,13 @@ export type SettlementRecord = z.infer<typeof SettlementRecordSchema>;
 const DestinationProtocolTargetSchema = z.object({
   kind: z.literal("DESTINATION"),
   destination: Id,
+  sourceWalletId: Id,
   network: z.literal(ARC_TESTNET_NETWORK),
   chainId: Id,
   isMock: z.boolean(),
 }).strict().superRefine((value, context) => {
-  if (value.isMock && (!isSynthetic(value.destination) || !isSynthetic(value.chainId))) context.addIssue({ code: "custom", message: "Mock destination intents require visibly synthetic destination and chain references." });
-  if (!value.isMock && (!EvmAddress.test(value.destination) || value.chainId !== ARC_TESTNET_CHAIN_ID)) context.addIssue({ code: "custom", message: "Live destination intents require a canonical EVM recipient on Arc Testnet." });
+  if (value.isMock && (!isSynthetic(value.destination) || !isSynthetic(value.sourceWalletId) || !isSynthetic(value.chainId))) context.addIssue({ code: "custom", message: "Mock destination intents require visibly synthetic source wallet, destination, and chain references." });
+  if (!value.isMock && (!EvmAddress.test(value.destination) || !CircleProviderOperationId.safeParse(value.sourceWalletId).success || value.chainId !== ARC_TESTNET_CHAIN_ID)) context.addIssue({ code: "custom", message: "Live destination intents require a Circle source wallet, canonical EVM recipient, and Arc Testnet." });
 });
 const Erc8183ProtocolTargetSchema = z.object({
   kind: z.literal("ERC8183"), standard: z.literal("ERC-8183"), network: z.literal(ARC_TESTNET_NETWORK), chainId: Id.refine(isSynthetic),

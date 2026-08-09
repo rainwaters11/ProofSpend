@@ -116,6 +116,7 @@ export async function matchIntentToRecords(
     canonicalIntent.asset !== intent.asset ||
     canonicalIntent.protocolTarget.network !== "ARC_TESTNET" ||
     canonicalIntent.protocolTarget.chainId !== intent.chainId ||
+    canonicalIntent.protocolTarget.sourceWalletId !== intent.sourceWalletId ||
     canonicalIntent.protocolTarget.destination.toLowerCase() !==
       intent.destinationAddress.toLowerCase()
   ) {

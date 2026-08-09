@@ -292,7 +292,19 @@ export class CircleWalletProvider implements ArcTestnetTransferProvider {
       return failureResult(intent, "ARC_TESTNET", revalidation);
     }
     try {
-      const destination = await this.client.getWallet({ id: this.destinationWalletId });
+      const [source, destination, balance] = await Promise.all([
+        this.client.getWallet({ id: this.sourceWalletId }),
+        this.client.getWallet({ id: this.destinationWalletId }),
+        this.getBalance(),
+      ]);
+      if (source.data?.wallet?.id !== this.sourceWalletId) {
+        return failureResult(intent, "ARC_TESTNET", {
+          ok: false,
+          failureCode: "WALLET_MISMATCH",
+          failureMessage:
+            "The configured source wallet does not match the exact approved transfer intent.",
+        });
+      }
       const destinationAddress = destination.data?.wallet?.address;
       if (
         !destinationAddress ||
@@ -305,20 +317,42 @@ export class CircleWalletProvider implements ArcTestnetTransferProvider {
             "The destination address does not match the configured Arc Testnet destination wallet.",
         });
       }
-      if (initialAuthorization === null) {
+      if (BigInt(balance.amountAtomic) < BigInt(intent.amountAtomic)) {
         return failureResult(intent, "ARC_TESTNET", {
           ok: false,
-          failureCode: "AUTHORIZATION_UNAVAILABLE",
+        failureCode: "INSUFFICIENT_BALANCE",
+        failureMessage: "The configured source wallet has insufficient USDC for this transfer.",
+        });
+      }
+      const currentAuthorization = await this.authorizationStore.load(
+        authorizationReferences(intent),
+      );
+      const currentRevalidation = await revalidateApprovedIntent(
+        intent,
+        currentAuthorization,
+        {
+        usdcTokenAddress: this.usdcTokenAddress,
+        sourceWalletId: this.sourceWalletId,
+        },
+      );
+      if (!currentRevalidation.ok) {
+        return failureResult(intent, "ARC_TESTNET", currentRevalidation);
+      }
+      if (currentAuthorization === null) {
+        return failureResult(intent, "ARC_TESTNET", {
+        ok: false,
+        failureCode: "AUTHORIZATION_UNAVAILABLE",
           failureMessage: "The persisted transfer authorization is unavailable.",
         });
       }
-      const submissionAt = new Date().toISOString();
+      const consumedAt = new Date().toISOString();
       const consumedAuthorization = await this.authorizationStore.consume({
         ...authorizationReferences(intent),
-        expectedExactIntentHash: initialAuthorization.binding.exactIntentHash,
+        expectedExactIntentHash: currentAuthorization.binding.exactIntentHash,
         idempotencyKey: intent.idempotencyKey,
-        asOf: submissionAt,
+        asOf: consumedAt,
       });
+      const submissionAt = new Date().toISOString();
       const submissionRevalidation = await revalidateApprovedIntent(
         intent,
         consumedAuthorization,

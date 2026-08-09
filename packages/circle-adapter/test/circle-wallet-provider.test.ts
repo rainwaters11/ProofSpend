@@ -47,6 +47,7 @@ const circleEnvironment = {
 const OPERATION_ID_1 = "11111111-1111-4111-8111-111111111111";
 const OPERATION_ID_2 = "22222222-2222-4222-8222-222222222222";
 const OPERATION_ID_3 = "33333333-3333-4333-8333-333333333333";
+const SOURCE_WALLET_ID = "44444444-4444-4444-8444-444444444444";
 
 const baseIntent: ApprovedTransferIntent = {
   proposalId: "proposal-1",
@@ -61,7 +62,7 @@ const baseIntent: ApprovedTransferIntent = {
   asset: "USDC",
   tokenContractAddress: circleEnvironment.CIRCLE_USDC_TOKEN_ADDRESS,
   amountAtomic: "250000000",
-  sourceWalletId: "wallet-123",
+  sourceWalletId: SOURCE_WALLET_ID,
   destinationAddress: "0x0000000000000000000000000000000000000001",
 };
 
@@ -84,6 +85,7 @@ function createAuthorization(): PersistedTransferAuthorization {
       kind: "DESTINATION",
       isMock: false,
       destination: baseIntent.destinationAddress,
+      sourceWalletId: SOURCE_WALLET_ID,
       network: "ARC_TESTNET",
       chainId: "5042002",
     },
@@ -220,16 +222,31 @@ function makeProvider(overrides: Partial<CircleWalletProviderConfig> = {}): Circ
   return new CircleWalletProvider({
     apiKey: "test-api-key",
     entitySecret: "test-entity-secret",
-    sourceWalletId: "wallet-123",
+    sourceWalletId: SOURCE_WALLET_ID,
     destinationWalletId: "wallet-dest",
     authorizationStore: new FakeAuthorizationStore(),
     ...overrides,
   });
 }
 
-function mockDestinationWallet(): void {
-  mockedClient.getWallet.mockResolvedValue({
-    data: { wallet: { id: "wallet-dest", address: baseIntent.destinationAddress } },
+function mockWallets(): void {
+  mockedClient.getWallet
+    .mockResolvedValueOnce({
+      data: { wallet: { id: SOURCE_WALLET_ID, address: "0x0000000000000000000000000000000000000003" } },
+    })
+    .mockResolvedValueOnce({
+      data: { wallet: { id: "wallet-dest", address: baseIntent.destinationAddress } },
+    });
+}
+
+function mockSufficientBalance(): void {
+  mockedClient.getWalletTokenBalance.mockResolvedValue({
+    data: {
+      tokenBalances: [{
+        amount: "250",
+        token: { tokenAddress: circleEnvironment.CIRCLE_USDC_TOKEN_ADDRESS },
+      }],
+    },
   });
 }
 
@@ -240,7 +257,7 @@ function mockConfirmedTransaction(overrides: Record<string, unknown> = {}) {
     blockHeight: 42,
     blockHash: `0x${"2b".repeat(32)}`,
     blockchain: "ARC-TESTNET",
-    walletId: "wallet-123",
+    walletId: SOURCE_WALLET_ID,
     destinationAddress: baseIntent.destinationAddress,
     amounts: ["250"],
     contractAddress: circleEnvironment.CIRCLE_USDC_TOKEN_ADDRESS,
@@ -280,7 +297,7 @@ describe("CircleWalletProvider", () => {
   it("reports ready only when both configured Arc wallets resolve", async () => {
     mockedClient.getWallet
       .mockResolvedValueOnce({
-        data: { wallet: { id: "wallet-123", address: "0x0000000000000000000000000000000000000001" } },
+        data: { wallet: { id: SOURCE_WALLET_ID, address: "0x0000000000000000000000000000000000000001" } },
       })
       .mockResolvedValueOnce({
         data: { wallet: { id: "wallet-dest", address: "0x0000000000000000000000000000000000000002" } },
@@ -289,7 +306,7 @@ describe("CircleWalletProvider", () => {
     await expect(makeProvider().getStatus()).resolves.toEqual({
       mode: "ARC_TESTNET",
       state: "ready",
-      sourceWalletId: "wallet-123",
+      sourceWalletId: SOURCE_WALLET_ID,
       destinationWalletId: "wallet-dest",
       sourceWalletAddress: "0x0000000000000000000000000000000000000001",
       destinationWalletAddress: "0x0000000000000000000000000000000000000002",
@@ -302,7 +319,7 @@ describe("CircleWalletProvider", () => {
     await expect(makeProvider().getStatus()).resolves.toEqual({
       mode: "ARC_TESTNET",
       state: "unavailable",
-      sourceWalletId: "wallet-123",
+      sourceWalletId: SOURCE_WALLET_ID,
       destinationWalletId: "wallet-dest",
     });
   });
@@ -333,7 +350,7 @@ describe("CircleWalletProvider", () => {
       amountAtomic: "1250000",
     });
     expect(mockedClient.getWalletTokenBalance).toHaveBeenCalledWith({
-      id: "wallet-123",
+      id: SOURCE_WALLET_ID,
       includeAll: true,
       tokenAddresses: [usdcTokenAddress],
     });
@@ -439,7 +456,8 @@ describe("CircleWalletProvider", () => {
 
   it("submits an approved intent and returns a resumable Circle operation id", async () => {
     const usdcTokenAddress = getCircleEnvironment().usdcTokenAddress;
-    mockDestinationWallet();
+    mockWallets();
+    mockSufficientBalance();
     mockedClient.createTransaction.mockResolvedValue({
       data: { id: OPERATION_ID_1, state: "SENT" },
     });
@@ -447,7 +465,7 @@ describe("CircleWalletProvider", () => {
     const result = await makeProvider().submitTransfer(validIntent());
 
     expect(mockedClient.createTransaction).toHaveBeenCalledWith({
-      walletId: "wallet-123",
+      walletId: SOURCE_WALLET_ID,
       tokenAddress: usdcTokenAddress,
       amount: ["250"],
       destinationAddress: baseIntent.destinationAddress,
@@ -466,7 +484,8 @@ describe("CircleWalletProvider", () => {
   });
 
   it("rejects a duplicate submission without touching the network again", async () => {
-    mockDestinationWallet();
+    mockWallets();
+    mockSufficientBalance();
     mockedClient.createTransaction.mockResolvedValue({
       data: { id: OPERATION_ID_1, state: "SENT" },
     });
@@ -482,9 +501,13 @@ describe("CircleWalletProvider", () => {
   });
 
   it("rejects submission when the destination does not match the configured destination wallet", async () => {
-    mockedClient.getWallet.mockResolvedValue({
+    mockedClient.getWallet.mockResolvedValueOnce({
+      data: { wallet: { id: SOURCE_WALLET_ID, address: "0x0000000000000000000000000000000000000003" } },
+    });
+    mockedClient.getWallet.mockResolvedValueOnce({
       data: { wallet: { id: "wallet-dest", address: "0x0000000000000000000000000000000000000002" } },
     });
+    mockSufficientBalance();
     mockedClient.createTransaction.mockResolvedValue({
       data: { id: OPERATION_ID_1, state: "SENT" },
     });
@@ -496,8 +519,46 @@ describe("CircleWalletProvider", () => {
     expect(mockedClient.createTransaction).not.toHaveBeenCalled();
   });
 
+  it("rejects submission when Circle resolves a different source wallet", async () => {
+    mockedClient.getWallet
+      .mockResolvedValueOnce({
+        data: { wallet: { id: "55555555-5555-4555-8555-555555555555" } },
+      })
+      .mockResolvedValueOnce({
+        data: { wallet: { id: "wallet-dest", address: baseIntent.destinationAddress } },
+      });
+    mockSufficientBalance();
+
+    const result = await makeProvider().submitTransfer(validIntent());
+
+    expect(result.status).toBe("FAILED");
+    expect(result.failureCode).toBe("WALLET_MISMATCH");
+    expect(mockedClient.createTransaction).not.toHaveBeenCalled();
+  });
+
+  it("rejects submission without consuming approval when the source USDC balance is insufficient", async () => {
+    const authorizationStore = new FakeAuthorizationStore();
+    mockWallets();
+    mockedClient.getWalletTokenBalance.mockResolvedValue({
+      data: {
+        tokenBalances: [{
+          amount: "249.999999",
+          token: { tokenAddress: circleEnvironment.CIRCLE_USDC_TOKEN_ADDRESS },
+        }],
+      },
+    });
+
+    const result = await makeProvider({ authorizationStore }).submitTransfer(validIntent());
+
+    expect(result.status).toBe("FAILED");
+    expect(result.failureCode).toBe("INSUFFICIENT_BALANCE");
+    expect(authorizationStore.consumeCalls).toBe(0);
+    expect(mockedClient.createTransaction).not.toHaveBeenCalled();
+  });
+
   it("rejects submission when the approved amount changed before submission", async () => {
-    mockDestinationWallet();
+    mockWallets();
+    mockSufficientBalance();
 
     const result = await makeProvider().submitTransfer(validIntent({ amountAtomic: "1000000" }));
 
@@ -508,12 +569,15 @@ describe("CircleWalletProvider", () => {
 
   it("fails closed when authorization is revoked during destination lookup", async () => {
     const authorizationStore = new FakeAuthorizationStore();
-    mockedClient.getWallet.mockImplementation(async () => {
+    mockedClient.getWallet.mockImplementationOnce(async () => ({
+      data: { wallet: { id: SOURCE_WALLET_ID, address: "0x0000000000000000000000000000000000000003" } },
+    })).mockImplementationOnce(async () => {
       authorizationStore.revoke();
       return {
         data: { wallet: { id: "wallet-dest", address: baseIntent.destinationAddress } },
       };
     });
+    mockSufficientBalance();
 
     const result = await makeProvider({ authorizationStore }).submitTransfer(validIntent());
 
@@ -523,7 +587,8 @@ describe("CircleWalletProvider", () => {
   });
 
   it("throws a normalized error when the transfer submission fails", async () => {
-    mockDestinationWallet();
+    mockWallets();
+    mockSufficientBalance();
     mockedClient.createTransaction.mockRejectedValue(new Error("sensitive upstream detail"));
 
     const error = await makeProvider().submitTransfer(validIntent()).catch((e: unknown) => e);
@@ -533,7 +598,8 @@ describe("CircleWalletProvider", () => {
   });
 
   it("throws a normalized error when Circle omits the transaction id", async () => {
-    mockDestinationWallet();
+    mockWallets();
+    mockSufficientBalance();
     mockedClient.createTransaction.mockResolvedValue({ data: {} });
 
     const error = await makeProvider().submitTransfer(validIntent()).catch((e: unknown) => e);
@@ -543,7 +609,8 @@ describe("CircleWalletProvider", () => {
   });
 
   it("refuses a malformed Circle transaction id instead of recording it", async () => {
-    mockDestinationWallet();
+    mockWallets();
+    mockSufficientBalance();
     mockedClient.createTransaction.mockResolvedValue({
       data: { id: "tx-1", state: "SENT" },
     });
