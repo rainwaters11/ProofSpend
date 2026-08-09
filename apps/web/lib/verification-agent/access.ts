@@ -7,9 +7,10 @@ import type { ServerEnvironment } from "../env";
 const SEEDED_FOUNDER_ACTOR_ID = "founder:fictional";
 const LIVE_RATE_LIMIT = 3;
 const LIVE_RATE_WINDOW_MS = 60_000;
+const INVOCATION_KEY_TTL_MS = 15 * 60_000;
 
 const invocationWindows = new Map<string, { count: number; startedAt: number }>();
-const consumedInvocationKeys = new Set<string>();
+const consumedInvocationKeys = new Map<string, number>();
 
 export class AgentApiAccessError extends Error {
   constructor(
@@ -58,6 +59,16 @@ export function authorizeAgentInvocation(
   if (environment.PROOFSPEND_AGENT_MODE !== "openai") {
     return actorId;
   }
+  for (const [key, expiresAt] of consumedInvocationKeys) {
+    if (expiresAt <= nowMs) {
+      consumedInvocationKeys.delete(key);
+    }
+  }
+  for (const [actor, window] of invocationWindows) {
+    if (nowMs - window.startedAt >= LIVE_RATE_WINDOW_MS) {
+      invocationWindows.delete(actor);
+    }
+  }
 
   const invocationKey = request.headers.get("idempotency-key");
   if (
@@ -83,7 +94,7 @@ export function authorizeAgentInvocation(
 
   window.count += 1;
   invocationWindows.set(actorId, window);
-  consumedInvocationKeys.add(invocationKey);
+  consumedInvocationKeys.set(invocationKey, nowMs + INVOCATION_KEY_TTL_MS);
   return actorId;
 }
 

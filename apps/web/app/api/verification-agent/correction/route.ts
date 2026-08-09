@@ -15,6 +15,7 @@ import {
 const CorrectionRequestSchema = z
   .object({
     runId: z.string().min(1),
+    confirmSeededCorrection: z.literal(true),
   })
   .strict();
 

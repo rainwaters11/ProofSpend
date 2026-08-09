@@ -47,6 +47,16 @@ describe("verification agent API access", () => {
     );
   });
 
+  it("expires retained invocation keys after the bounded replay window", () => {
+    const invocation = request({ token: API_TOKEN, key: "invocation:expires:0001" });
+    expect(authorizeAgentInvocation(invocation, openAiEnvironment, 1_000)).toBe(
+      "founder:fictional",
+    );
+    expect(authorizeAgentInvocation(invocation, openAiEnvironment, 901_000)).toBe(
+      "founder:fictional",
+    );
+  });
+
   it("rate limits paid live invocations", () => {
     for (let index = 0; index < 3; index += 1) {
       authorizeAgentInvocation(

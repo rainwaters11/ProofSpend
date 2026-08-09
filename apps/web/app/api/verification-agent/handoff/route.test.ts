@@ -150,6 +150,28 @@ describe("POST /api/verification-agent/handoff", () => {
 
     expect(response.status).toBe(400);
   });
+
+  it("requires an explicit founder confirmation before applying the seeded correction", async () => {
+    const runResponse = await runAgent(
+      new Request("http://localhost/api/verification-agent/run", {
+        method: "POST",
+        headers: { Authorization: `****** },
+      }),
+    );
+    const run = await runResponse.json();
+    const response = await submitCorrection(
+      new Request("http://localhost/api/verification-agent/correction", {
+        method: "POST",
+        headers: new Headers({
+          Authorization: `******
+          "Content-Type": "application/json",
+        }),
+        body: JSON.stringify({ runId: run.runId }),
+      }),
+    );
+
+    expect(response.status).toBe(400);
+  });
 });
 
 async function submitFounderCorrection(run: { runId: string }) {
@@ -162,6 +184,7 @@ async function submitFounderCorrection(run: { runId: string }) {
       }),
       body: JSON.stringify({
         runId: run.runId,
+        confirmSeededCorrection: true,
       }),
     }),
   );
