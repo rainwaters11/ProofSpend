@@ -871,7 +871,7 @@ describe("lifecycle evidence schemas", () => {
     expect(() => ArcTransactionRefSchema.parse({ ...mockTransaction("SUBMITTED"), transactionHash: null })).toThrow();
     const liveSubmitted = { ...liveTransaction, status: "SUBMITTED" as const, transactionHash: null, blockNumber: null, blockHash: null, explorerUrl: null, providerOperationId: "123e4567-e89b-12d3-a456-426614174000" };
     expect(ArcTransactionRefSchema.parse(liveSubmitted)).toBeDefined();
-    for (const providerOperationId of ["mock:operation-1", "synthetic:operation-1", "fake:operation-1", "placeholder:operation-1", "demo:operation-1", "test:operation-1", "MoCk:operation-1"]) {
+    for (const providerOperationId of ["mock:operation-1", "synthetic:operation-1", "fake:operation-1", "placeholder:operation-1", "demo:operation-1", "test:operation-1", "MoCk:operation-1", "circle-operation:1", "bogus:operation-1", " ", "123e4567-e89b-12d3-a456-42661417400z"]) {
       expect(() => ArcTransactionRefSchema.parse({ ...liveSubmitted, providerOperationId })).toThrow();
     }
     expect(() => ArcTransactionRefSchema.parse({ ...mockTransaction("PREPARED"), providerOperationId: "circle-operation:1" })).toThrow();
