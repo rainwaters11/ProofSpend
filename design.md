@@ -57,7 +57,7 @@ ERC-8004 registration identifies an agent; it does not prove trustworthiness, co
 
 The fictional PawPOVAI InvestFest Soft Launch starts with 1,000 test USDC allocated in integer atomic units across Product and platform (350), Marketing (250), InvestFest travel (200), Operations (100), and Contingency (100).
 
-Milestone 1, “Launch identity and outreach ready,” requires a visual identity asset, landing-page screenshot, promotional flyer, two expense records, eligible spend no greater than 150 USDC, and founder confirmation. The proposed next amount is 250 test USDC. The demo must show LLM-assisted evidence review, deterministic outcomes, an agent-prepared proposal, exact human approval, and truthful mock or Arc lifecycle states without implying that analysis, preparation, submission, or internal eligibility equals settlement.
+Milestone 1, “Launch identity and outreach ready,” requires a visual identity asset, landing-page screenshot, promotional flyer, two expense records, eligible spend no greater than 150 USDC, and founder confirmation. The proposed next amount is 1 test USDC. The demo must show LLM-assisted evidence review, deterministic outcomes, an agent-prepared proposal, exact human approval, and truthful mock or Arc lifecycle states without implying that analysis, preparation, submission, or internal eligibility equals settlement.
 
 ## Core modules
 
