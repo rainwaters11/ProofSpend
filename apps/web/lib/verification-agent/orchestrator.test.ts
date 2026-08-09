@@ -1,4 +1,4 @@
-import { afterAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createPawPovAiEvidenceScenario } from "@proofspend/domain";
 import {
@@ -191,7 +191,7 @@ describe("handoffApprovedProposal", () => {
       authorizedActorRole: "FOUNDER" as const,
       authorizedActorId: "founder:fictional",
       decision: "APPROVED" as const,
-      decidedAt: "2026-01-21T00:00:00.000Z",
+      decidedAt: run.proposal!.preparedAt,
       expiresAt: run.proposal!.expiresAt,
       idempotencyKey: run.proposal!.idempotencyKey,
     };
@@ -201,7 +201,7 @@ describe("handoffApprovedProposal", () => {
       run,
       approval,
       authenticatedActorId: "founder:fictional",
-      now: "2026-01-21T00:00:01.000Z",
+      now: "2026-01-21T00:01:01.000Z",
     });
 
     expect(first.status).toBe("HANDOFF_READY");
@@ -219,6 +219,71 @@ describe("handoffApprovedProposal", () => {
         result: first,
       }),
     ).toBe(false);
+  });
+
+  it("keeps consumed proposal keys after the approved run expires", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-01-21T00:00:00.000Z"));
+      const firstRun = await createApprovalRun();
+      const firstApproval = {
+        approvalId: "approval:before-expiry",
+        intentId: firstRun.proposal!.intentId,
+        authorizedActorRole: "FOUNDER" as const,
+        authorizedActorId: "founder:fictional",
+        decision: "APPROVED" as const,
+        decidedAt: firstRun.proposal!.preparedAt,
+        expiresAt: firstRun.proposal!.expiresAt,
+        idempotencyKey: firstRun.proposal!.idempotencyKey,
+      };
+
+      saveVerificationAgentRun({
+        authorizedActorId: "founder:fictional",
+        run: firstRun,
+      });
+      const firstResult = handoffApprovedProposal({
+        run: firstRun,
+        approval: firstApproval,
+        authenticatedActorId: "founder:fictional",
+        now: "2026-01-21T00:01:01.000Z",
+      });
+      expect(firstResult.status).toBe("HANDOFF_READY");
+      expect(
+        persistApprovedHandoff({
+          runId: firstRun.runId,
+          approval: firstApproval,
+          result: firstResult,
+        }),
+      ).toBe(true);
+
+      vi.advanceTimersByTime(31 * 60 * 1000);
+      const laterRun = await createApprovalRun();
+      const laterApproval = {
+        ...firstApproval,
+        approvalId: "approval:after-expiry",
+      };
+      saveVerificationAgentRun({
+        authorizedActorId: "founder:fictional",
+        run: laterRun,
+      });
+      const laterResult = handoffApprovedProposal({
+        run: laterRun,
+        approval: laterApproval,
+        authenticatedActorId: "founder:fictional",
+        now: "2026-01-21T00:01:01.000Z",
+      });
+
+      expect(laterResult.status).toBe("HANDOFF_READY");
+      expect(
+        persistApprovedHandoff({
+          runId: laterRun.runId,
+          approval: laterApproval,
+          result: laterResult,
+        }),
+      ).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("rejects an approval that attempts to extend an expired proposal", async () => {
