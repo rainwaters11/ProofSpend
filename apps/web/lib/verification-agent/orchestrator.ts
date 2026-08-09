@@ -130,11 +130,10 @@ export async function runVerificationAgent(
     message: "Exactly one missing receipt proof gap was identified.",
   });
 
-  if (modelCallCount >= MAX_MODEL_CALLS) {
+  modelCallCount += 1;
+  if (modelCallCount > MAX_MODEL_CALLS) {
     throw new Error("AGENT_MAX_TURNS_EXCEEDED");
   }
-
-  modelCallCount += 1;
   const evidenceKindCounts = new Map<string, number>();
   for (const evidence of scenario.initialInput.evidenceItems) {
     evidenceKindCounts.set(
