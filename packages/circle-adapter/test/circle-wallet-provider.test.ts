@@ -675,6 +675,17 @@ describe("CircleWalletProvider", () => {
     expect(result.failureCode).toBe("AMOUNT_MISMATCH");
   });
 
+  it("rejects confirmation when Circle returns the approved amount plus another amount", async () => {
+    mockedClient.getTransaction.mockResolvedValue({
+      data: { transaction: mockConfirmedTransaction({ amounts: ["1", "250"] }) },
+    });
+
+    const result = await makeProvider().pollTransfer(validIntent(), OPERATION_ID_1);
+
+    expect(result.status).toBe("FAILED");
+    expect(result.failureCode).toBe("AMOUNT_MISMATCH");
+  });
+
   it("fails confirmation when the confirmed transaction destination does not match the intent", async () => {
     mockedClient.getTransaction.mockResolvedValue({
       data: {
