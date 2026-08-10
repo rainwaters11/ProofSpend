@@ -1,7 +1,7 @@
 import "server-only";
 
 import { randomUUID } from "node:crypto";
-import { mkdir, open, readFile, rename, stat, unlink } from "node:fs/promises";
+import { mkdir, open, readFile, rename, stat, unlink, utimes } from "node:fs/promises";
 import { dirname } from "node:path";
 
 import {
@@ -138,6 +138,7 @@ const EMPTY_STATE: DurableState = {
 const LOCK_RETRIES = 100;
 const LOCK_RETRY_MS = 10;
 const LOCK_STALE_MS = 30_000;
+const LOCK_HEARTBEAT_MS = 10_000;
 
 function referencesMatch(
   snapshot: PersistedTransferAuthorization,
@@ -207,15 +208,6 @@ function parseLockMetadata(raw: string): LockMetadata | null {
   }
 }
 
-function processIsAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code !== "ESRCH";
-  }
-}
-
 export class FileTransferAuthorizationStore implements TransferAuthorizationStore {
   readonly path: string;
   private readonly lockPath: string;
@@ -255,6 +247,18 @@ export class FileTransferAuthorizationStore implements TransferAuthorizationStor
       return null;
     }
     return DurableAuthorizationSchema.parse(structuredClone(snapshot));
+  }
+
+  async loadAuthorizationByTransactionRecordId(
+    transactionRecordId: string,
+  ): Promise<PersistedTransferAuthorization | null> {
+    const state = await this.readState();
+    const snapshot = Object.values(state.authorizations).find(
+      (candidate) => candidate.transaction.id === transactionRecordId,
+    );
+    return snapshot === undefined
+      ? null
+      : DurableAuthorizationSchema.parse(structuredClone(snapshot));
   }
 
   async consume(
@@ -426,12 +430,7 @@ export class FileTransferAuthorizationStore implements TransferAuthorizationStor
         stat(this.lockPath),
         readFile(this.lockPath, "utf8"),
       ]);
-      const metadata = parseLockMetadata(raw);
-      const createdAt = metadata === null ? lockStat.mtimeMs : Date.parse(metadata.createdAt);
-      if (Date.now() - createdAt < LOCK_STALE_MS) {
-        return null;
-      }
-      if (metadata !== null && processIsAlive(metadata.pid)) {
+      if (Date.now() - lockStat.mtimeMs < LOCK_STALE_MS) {
         return null;
       }
       return {
@@ -482,6 +481,20 @@ export class FileTransferAuthorizationStore implements TransferAuthorizationStor
     return true;
   }
 
+  private async renewOwnedLock(ownerToken: string): Promise<void> {
+    try {
+      const metadata = parseLockMetadata(await readFile(this.lockPath, "utf8"));
+      if (metadata?.ownerToken === ownerToken) {
+        const now = new Date();
+        await utimes(this.lockPath, now, now);
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw error;
+      }
+    }
+  }
+
   private async releaseOwnedLock(ownerToken: string): Promise<void> {
     try {
       const metadata = parseLockMetadata(await readFile(this.lockPath, "utf8"));
@@ -530,9 +543,13 @@ export class FileTransferAuthorizationStore implements TransferAuthorizationStor
         throw error;
       }
 
+      const heartbeat = setInterval(() => {
+        void this.renewOwnedLock(ownerToken).catch(() => undefined);
+      }, LOCK_HEARTBEAT_MS);
       try {
         return await operation();
       } finally {
+        clearInterval(heartbeat);
         await lock.close();
         await this.releaseOwnedLock(ownerToken);
       }
