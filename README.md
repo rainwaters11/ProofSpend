@@ -159,6 +159,18 @@ Open `http://localhost:3000`.
 
 Set `PROOFSPEND_AGENT_MODE=mock` for deterministic offline development. The agent API endpoints also require a server-only `PROOFSPEND_AGENT_API_TOKEN` of at least 32 characters. To run the one-call live path, set `PROOFSPEND_AGENT_MODE=openai` together with `OPENAI_API_KEY`, `LLM_MODEL`, and the API token. Live invocation additionally requires a unique `Idempotency-Key`, is rate limited, fails closed, and never falls back to mock mode.
 
+The bounded live path also requires `PROOFSPEND_ADAPTER_MODE=arc-testnet`, the documented Circle developer-controlled wallet settings, two pre-created Arc Testnet wallets, and a writable persistent `PROOFSPEND_AUTH_STORE_PATH`. Before approval, the proposal exposes the bound source wallet and canonical intent hash. The server persists that exact approval before Circle submission and atomically consumes it during submission. If a response is lost after Circle accepts the request, the server recovers with the same idempotency key or resumes polling the stored Circle operation. Credentials are never written to that store. The file-backed store is intentionally limited to the single-instance judge demo; a multi-instance production deployment requires a transactional shared database.
+
+After deploying the server with those credentials, an administrator can perform the complete credentialed run, explicit human approval, real 1 USDC transfer, replay check, UI verification, and timed rehearsal with:
+
+```bash
+PROOFSPEND_DEMO_BASE_URL=https://your-deployment.example \
+PROOFSPEND_AGENT_API_TOKEN=your-server-api-token \
+bun run demo:live
+```
+
+The command pauses and requires the administrator to type `APPROVE 1 USDC` before the value-moving request. It fails unless Circle confirms, the Arcscan URL matches the real transaction hash, replay returns `HANDOFF_DUPLICATE`, the activity page shows the truthful result, and the full path completes within three minutes.
+
 The safe health endpoint is available at:
 
 ```text
@@ -168,9 +180,9 @@ http://localhost:3000/api/health
 ## Safety and truthfulness boundaries
 
 - The current application is a mock-mode and Arc Testnet prototype.
-- No real funds are moved by the current foundation.
+- Arc Testnet mode can move test USDC only after an exact, unexpired founder approval. Mock mode never moves value.
 - Mock behavior must never fabricate a transaction hash.
-- The current server-owned run and proposal-key stores are process-local, mock-only demo guardrails. Non-mock handoff is blocked until Issue #7 supplies durable atomic persistence and the typed adapter boundary.
+- Authenticated run data is short-lived and process-local for the bounded demo. Live authorization and replay state are stored separately in a durable, atomic server-side store before Circle submission.
 - Raw receipts and founder-private evidence remain offchain.
 - LLM extractions, recommendations, and explanations are not deterministic policy decisions or approvals.
 - PASS does not mean approved; approved does not mean submitted; submitted does not mean confirmed.

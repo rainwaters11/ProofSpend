@@ -33,7 +33,9 @@ const TERMINAL_STATES: ReadonlySet<string> = new Set([
 const EVM_HASH_PATTERN = /^0x[a-fA-F0-9]{64}$/;
 
 const UUID_PATTERN =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const MAX_RECOVERY_PAGES = 100;
+const RECOVERY_PAGE_SIZE = 50;
 
 function isValidEvmHash(value: string | undefined): value is string {
   return typeof value === "string" && EVM_HASH_PATTERN.test(value);
@@ -44,12 +46,101 @@ function isValidUuid(value: string): boolean {
 }
 
 type ReturnedTransaction = {
+  id?: string;
+  refId?: string;
+  transactionType?: string;
+  operation?: string;
   blockchain?: string;
   walletId?: string;
   destinationAddress?: string;
   amounts?: string[];
   contractAddress?: string;
+  tokenAddress?: string;
 };
+
+type CircleTransactionLookupClient = {
+  listTransactions(input: {
+    blockchain: string;
+    walletIds: string[];
+    destinationAddress: string;
+    pageAfter?: string;
+    pageSize: number;
+  }): Promise<{
+    data?: {
+      transactions?: ReturnedTransaction[];
+    };
+  }>;
+};
+
+async function listAllRecoveryTransactions(
+  client: CircleTransactionLookupClient,
+  input: { blockchain: string; walletIds: string[]; destinationAddress: string },
+): Promise<ReturnedTransaction[]> {
+  const transactions: ReturnedTransaction[] = [];
+  const seenCursors = new Set<string>();
+  let pageAfter: string | undefined;
+
+  for (let page = 0; page < MAX_RECOVERY_PAGES; page += 1) {
+    const response = await client.listTransactions({
+      ...input,
+      pageAfter,
+      pageSize: RECOVERY_PAGE_SIZE,
+    });
+    if (!response.data || !Array.isArray(response.data.transactions)) {
+      throw new WalletProviderError(
+        "INVALID_REQUEST",
+        "Circle transaction recovery returned a malformed page.",
+      );
+    }
+    const pageTransactions = response.data.transactions;
+    if (pageTransactions.length > RECOVERY_PAGE_SIZE) {
+      throw new WalletProviderError(
+        "INVALID_REQUEST",
+        "Circle transaction recovery returned an oversized page.",
+      );
+    }
+    transactions.push(...pageTransactions);
+    if (pageTransactions.length < RECOVERY_PAGE_SIZE) {
+      return transactions;
+    }
+    const nextCursor = pageTransactions.at(-1)?.id;
+    if (!nextCursor || !isValidUuid(nextCursor) || seenCursors.has(nextCursor)) {
+      throw new WalletProviderError(
+        "INVALID_REQUEST",
+        "Circle transaction recovery returned an invalid pagination cursor.",
+      );
+    }
+    seenCursors.add(nextCursor);
+    pageAfter = nextCursor;
+  }
+  throw new WalletProviderError(
+    "INVALID_REQUEST",
+    "Circle transaction recovery exceeded its bounded page limit.",
+  );
+}
+
+function matchesRecoveredTransfer(
+  intent: ApprovedTransferIntent,
+  transaction: ReturnedTransaction,
+  expected: { blockchain: string; sourceWalletId: string; usdcTokenAddress: string },
+): boolean {
+  return (
+    transaction.refId === intent.idempotencyKey &&
+    transaction.transactionType === "OUTBOUND" &&
+    transaction.operation === "TRANSFER" &&
+    transaction.walletId === expected.sourceWalletId &&
+    transaction.destinationAddress?.toLowerCase() === intent.destinationAddress.toLowerCase() &&
+    transaction.amounts?.length === 1 &&
+    transaction.amounts[0] === atomicToDecimal(intent.amountAtomic) &&
+    (transaction.blockchain === undefined || transaction.blockchain === expected.blockchain) &&
+    (transaction.contractAddress === undefined ||
+      transaction.contractAddress.toLowerCase() === expected.usdcTokenAddress.toLowerCase()) &&
+    (transaction.tokenAddress === undefined ||
+      transaction.tokenAddress.toLowerCase() === expected.usdcTokenAddress.toLowerCase()) &&
+    typeof transaction.id === "string" &&
+    isValidUuid(transaction.id)
+  );
+}
 
 function verifyReturnedTransaction(
   intent: ApprovedTransferIntent,
@@ -284,31 +375,40 @@ export class CircleWalletProvider implements ArcTestnetTransferProvider {
     const initialAuthorization = await this.authorizationStore.load(
       authorizationReferences(intent),
     );
-    const revalidation = await revalidateApprovedIntent(
-      intent,
-      initialAuthorization,
-      {
-        usdcTokenAddress: this.usdcTokenAddress,
-        sourceWalletId: this.sourceWalletId,
-      },
-    );
+    const recoveringConsumedSubmission =
+      initialAuthorization?.binding.status === "CONSUMED" &&
+      initialAuthorization.binding.consumedByTransactionId === intent.transactionRecordId;
+    const revalidation = recoveringConsumedSubmission
+      ? await revalidateSubmittedTransfer(intent, initialAuthorization, {
+          usdcTokenAddress: this.usdcTokenAddress,
+          sourceWalletId: this.sourceWalletId,
+        })
+      : await revalidateApprovedIntent(intent, initialAuthorization, {
+          usdcTokenAddress: this.usdcTokenAddress,
+          sourceWalletId: this.sourceWalletId,
+        });
     if (!revalidation.ok) {
       return failureResult(intent, "ARC_TESTNET", revalidation);
     }
     try {
-      const [source, destination, balance] = await Promise.all([
-        this.client.getWallet({ id: this.sourceWalletId }),
-        this.client.getWallet({ id: this.destinationWalletId }),
-        this.getBalance(),
-      ]);
-      if (source.data?.wallet?.id !== this.sourceWalletId) {
+      const source = await this.client.getWallet({ id: this.sourceWalletId });
+      if (
+        source.data?.wallet?.id !== this.sourceWalletId ||
+        source.data.wallet.blockchain !== this.blockchain
+      ) {
         return failureResult(intent, "ARC_TESTNET", {
           ok: false,
-          failureCode: "WALLET_MISMATCH",
+          failureCode:
+            source.data?.wallet?.id === this.sourceWalletId
+              ? "NETWORK_MISMATCH"
+              : "WALLET_MISMATCH",
           failureMessage:
-            "The configured source wallet does not match the exact approved transfer intent.",
+            source.data?.wallet?.id === this.sourceWalletId
+              ? "The configured source wallet is not on Arc Testnet."
+              : "The configured source wallet does not match the exact approved transfer intent.",
         });
       }
+      const destination = await this.client.getWallet({ id: this.destinationWalletId });
       const destinationAddress = destination.data?.wallet?.address;
       if (
         !destinationAddress ||
@@ -321,6 +421,61 @@ export class CircleWalletProvider implements ArcTestnetTransferProvider {
             "The destination address does not match the configured Arc Testnet destination wallet.",
         });
       }
+      if (recoveringConsumedSubmission) {
+        const lookupClient = this.client as unknown as CircleTransactionLookupClient;
+        const transactions = await listAllRecoveryTransactions(lookupClient, {
+          blockchain: this.blockchain,
+          walletIds: [this.sourceWalletId],
+          destinationAddress: intent.destinationAddress,
+        });
+        const sameExactIntent = transactions.filter(
+          (transaction) => transaction.refId === intent.idempotencyKey,
+        );
+        const exactMatches = sameExactIntent.filter((transaction) =>
+          matchesRecoveredTransfer(intent, transaction, {
+            blockchain: this.blockchain,
+            sourceWalletId: this.sourceWalletId,
+            usdcTokenAddress: this.usdcTokenAddress,
+          }),
+        );
+        if (sameExactIntent.length !== exactMatches.length || exactMatches.length > 1) {
+          throw new WalletProviderError(
+            "INVALID_REQUEST",
+            "Circle transaction recovery was ambiguous or did not match the exact approved intent.",
+          );
+        }
+        if (exactMatches.length === 1) {
+          const providerOperationId = exactMatches[0]?.id;
+          if (!providerOperationId) {
+            throw new WalletProviderError(
+              "INVALID_REQUEST",
+              "Circle transaction recovery did not return a valid provider operation id.",
+            );
+          }
+          this.submittedKeys.add(intent.proposalId);
+          this.submittedKeys.add(intent.idempotencyKey);
+          return {
+            proposalId: intent.proposalId,
+            idempotencyKey: intent.idempotencyKey,
+            mode: "ARC_TESTNET",
+            status: "SUBMITTED",
+            providerOperationId,
+            polledAt: new Date().toISOString(),
+          };
+        }
+        if (
+          initialAuthorization !== null &&
+          Date.parse(initialAuthorization.approval.expiresAt) <= Date.now()
+        ) {
+          return failureResult(intent, "ARC_TESTNET", {
+            ok: false,
+            failureCode: "APPROVAL_EXPIRED",
+            failureMessage:
+              "The approval expired before the unsubmitted Circle request could be retried.",
+          });
+        }
+      }
+      const balance = await this.getBalance();
       if (BigInt(balance.amountAtomic) < BigInt(intent.amountAtomic)) {
         return failureResult(intent, "ARC_TESTNET", {
           ok: false,
@@ -328,44 +483,58 @@ export class CircleWalletProvider implements ArcTestnetTransferProvider {
           failureMessage: "The configured source wallet has insufficient USDC for this transfer.",
         });
       }
-      const currentAuthorization = await this.authorizationStore.load(
-        authorizationReferences(intent),
-      );
-      if (currentAuthorization === null) {
+      let submissionAuthorization = initialAuthorization;
+      let submissionRevalidation: Revalidation;
+      if (!recoveringConsumedSubmission) {
+        const currentAuthorization = await this.authorizationStore.load(
+          authorizationReferences(intent),
+        );
+        if (currentAuthorization === null) {
+          return failureResult(intent, "ARC_TESTNET", {
+            ok: false,
+            failureCode: "AUTHORIZATION_UNAVAILABLE",
+            failureMessage: "The persisted transfer authorization is unavailable.",
+          });
+        }
+        const currentRevalidation = await revalidateApprovedIntent(
+          intent,
+          currentAuthorization,
+          {
+            usdcTokenAddress: this.usdcTokenAddress,
+            sourceWalletId: this.sourceWalletId,
+          },
+        );
+        if (!currentRevalidation.ok) {
+          return failureResult(intent, "ARC_TESTNET", currentRevalidation);
+        }
+        const consumedAt = new Date().toISOString();
+        submissionAuthorization = await this.authorizationStore.consume({
+          ...authorizationReferences(intent),
+          expectedExactIntentHash: currentAuthorization.binding.exactIntentHash,
+          idempotencyKey: intent.idempotencyKey,
+          asOf: consumedAt,
+        });
+        submissionRevalidation = await revalidateApprovedIntent(
+          intent,
+          submissionAuthorization,
+          {
+            usdcTokenAddress: this.usdcTokenAddress,
+            sourceWalletId: this.sourceWalletId,
+          },
+          new Date().toISOString(),
+        );
+      } else if (
+        submissionAuthorization?.binding.status !== "CONSUMED" ||
+        submissionAuthorization.binding.consumedByTransactionId !== intent.transactionRecordId
+      ) {
         return failureResult(intent, "ARC_TESTNET", {
           ok: false,
           failureCode: "AUTHORIZATION_UNAVAILABLE",
-          failureMessage: "The persisted transfer authorization is unavailable.",
+          failureMessage: "The consumed transfer authorization cannot be recovered safely.",
         });
+      } else {
+        submissionRevalidation = revalidation;
       }
-      const currentRevalidation = await revalidateApprovedIntent(
-        intent,
-        currentAuthorization,
-        {
-          usdcTokenAddress: this.usdcTokenAddress,
-          sourceWalletId: this.sourceWalletId,
-        },
-      );
-      if (!currentRevalidation.ok) {
-        return failureResult(intent, "ARC_TESTNET", currentRevalidation);
-      }
-      const consumedAt = new Date().toISOString();
-      const consumedAuthorization = await this.authorizationStore.consume({
-        ...authorizationReferences(intent),
-        expectedExactIntentHash: currentAuthorization.binding.exactIntentHash,
-        idempotencyKey: intent.idempotencyKey,
-        asOf: consumedAt,
-      });
-      const submissionAt = new Date().toISOString();
-      const submissionRevalidation = await revalidateApprovedIntent(
-        intent,
-        consumedAuthorization,
-        {
-          usdcTokenAddress: this.usdcTokenAddress,
-          sourceWalletId: this.sourceWalletId,
-        },
-        submissionAt,
-      );
       if (!submissionRevalidation.ok) {
         return failureResult(intent, "ARC_TESTNET", submissionRevalidation);
       }
@@ -376,7 +545,7 @@ export class CircleWalletProvider implements ArcTestnetTransferProvider {
         destinationAddress: intent.destinationAddress,
         fee: { type: "level", config: { feeLevel: "MEDIUM" } },
         idempotencyKey: intent.idempotencyKey,
-        refId: intent.proposalId,
+        refId: intent.idempotencyKey,
       });
       const transactionId = response.data?.id;
       if (!transactionId) {

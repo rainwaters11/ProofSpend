@@ -60,9 +60,10 @@ Issue #32 implements a small, server-only Verification Agent orchestrator for th
 - sanitized ordered activity trace labels (`AI`, `DETERMINISTIC`, `HUMAN`, `MOCK` or `ARC TESTNET`);
 - no silent fallback from live to mock mode, no stored OpenAI response, and no fabricated Arc hash/confirmation/explorer output in mock mode;
 - authenticated API access, unique live invocation keys, and a bounded per-actor live request rate;
-- server-owned run lookup, authenticated actor binding, proposal-expiry enforcement, and proposal-key deduplication before mock handoff;
-- a hard block on non-mock handoff until durable atomic persistence and the Issue #7 adapter are available.
+- server-owned run lookup, authenticated actor binding, proposal-expiry enforcement, and proposal-key deduplication;
+- a source-wallet-bound canonical intent hash displayed before approval, durable compare-and-consume authorization for the bounded single-instance Arc Testnet demo, and idempotent recovery or resumed polling if Circle accepted a request before the server recorded its response;
+- truthful `SUBMITTED`, `CONFIRMED`, and `FAILED` UI states, with a real explorer link only after Circle returns a confirmed Arc transaction hash.
 
 This runtime remains separate from Issue #13 identity governance and Issue #8 ERC-8183 settlement lifecycle ownership.
 
-Production persistence, generalized chat, arbitrary evidence uploads, wallet creation, full ERC-8183 lifecycle operations, and autonomous payment behavior remain out of scope.
+The file-backed authorization store is a bounded single-instance demo control, not a production multi-instance database. Production persistence, generalized chat, arbitrary evidence uploads, wallet creation, full ERC-8183 lifecycle operations, and autonomous payment behavior remain out of scope.

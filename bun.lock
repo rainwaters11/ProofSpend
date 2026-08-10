@@ -8,6 +8,7 @@
       "name": "@proofspend/web",
       "version": "0.1.0",
       "dependencies": {
+        "@proofspend/circle-adapter": "workspace:*",
         "@proofspend/domain": "workspace:*",
         "@proofspend/shared": "workspace:*",
         "@radix-ui/react-dialog": "^1.1.23",

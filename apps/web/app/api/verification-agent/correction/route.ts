@@ -28,7 +28,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "CORRECTION_RUN_NOT_FOUND" }, { status: 404 });
     }
     const scenario = createPawPovAiEvidenceScenario();
-    const result = resumeVerificationAgentAfterFounderCorrection({
+    const result = await resumeVerificationAgentAfterFounderCorrection({
       run: stored.run,
       authenticatedActorId: authorizedActorId,
       receipt: scenario.recoveryReceipt,

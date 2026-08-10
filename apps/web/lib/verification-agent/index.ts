@@ -1,5 +1,6 @@
 export * from "./access";
 export * from "./handoff";
+export * from "./live-handoff";
 export * from "./orchestrator";
 export * from "./provider";
 export * from "./schemas";

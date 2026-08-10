@@ -121,6 +121,8 @@ Projects, vaults, reserves, ledger entries, milestones, requirements, evidence i
 
 Be founder-first, accessible, responsive, and explicit. Display `ModeBadge` and role context on money/protocol screens. Visually distinguish AI observation, deterministic result, awaiting approval, approved intent, mock, Arc Testnet, prepared, submitted, confirmed, failed, rejected, refunded, and reconciled states. Never show a fabricated identifier as live. Explain every `REVIEW`/`FAIL` and why a milestone is not eligible. Separate private, shared, and onchain-public data.
 
+For the bounded judge path, the live activity view displays the latest server-persisted Arc Testnet result. It must show `1.00 USDC`, the network, and the Circle operation identifier when available. A transaction hash and Arcscan link appear only for a real confirmed result; failed states use an alert and make no confirmation claim.
+
 Issue #14 uses only the Phase A–D structure in `docs/roadmap.md`.
 
 ## Testing

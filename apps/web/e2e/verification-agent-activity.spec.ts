@@ -15,9 +15,13 @@ test.describe("verification agent activity", () => {
     await expect(page.getByText("DETERMINISTIC").first()).toBeVisible();
     await expect(page.getByText("HUMAN").first()).toBeVisible();
     await expect(visible(page.getByLabel("Application mode: MOCK"))).toBeVisible();
+    const exactIntentHash = page
+      .getByText("Exact intent hash", { exact: true })
+      .locator("xpath=following-sibling::dd");
+    await expect(exactIntentHash).toHaveText(/^sha256:[a-f0-9]{64}$/);
+    await expect(page.getByText(/^sha256:[a-f0-9]{64}$/)).toHaveCount(1);
 
     await expect(page.getByText("private://")).toHaveCount(0);
-    await expect(page.getByText("sha256:")).toHaveCount(0);
     await expect(page.getByText("sk-")).toHaveCount(0);
   });
 });

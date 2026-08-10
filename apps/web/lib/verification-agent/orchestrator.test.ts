@@ -4,6 +4,7 @@ import { createPawPovAiEvidenceScenario } from "@proofspend/domain";
 import {
   handoffApprovedProposal,
   persistApprovedHandoff,
+  reserveApprovedHandoff,
   resetVerificationAgentStoreForTest,
   resumeVerificationAgentAfterFounderCorrection,
   runVerificationAgent,
@@ -60,7 +61,7 @@ describe("runVerificationAgent", () => {
   it("accepts a validated founder correction before preparing a proposal", async () => {
     const initial = await runVerificationAgent({ now: "2026-01-21T00:00:00.000Z" });
     const scenario = createPawPovAiEvidenceScenario();
-    const result = resumeVerificationAgentAfterFounderCorrection({
+    const result = await resumeVerificationAgentAfterFounderCorrection({
       run: initial,
       authenticatedActorId: "founder:fictional",
       receipt: scenario.recoveryReceipt,
@@ -174,6 +175,7 @@ describe("handoffApprovedProposal", () => {
         decidedAt: "2026-01-21T00:00:00.000Z",
         expiresAt: "2026-01-21T00:00:01.000Z",
         idempotencyKey: run.proposal!.idempotencyKey,
+        exactIntentHash: run.proposal!.exactIntentHash,
       },
       authenticatedActorId: "founder:fictional",
       now: "2026-01-21T00:00:02.000Z",
@@ -195,6 +197,7 @@ describe("handoffApprovedProposal", () => {
       decidedAt: run.proposal!.preparedAt,
       expiresAt: run.proposal!.expiresAt,
       idempotencyKey: run.proposal!.idempotencyKey,
+      exactIntentHash: run.proposal!.exactIntentHash,
     };
 
     saveVerificationAgentRun({ authorizedActorId: "founder:fictional", run });
@@ -206,6 +209,7 @@ describe("handoffApprovedProposal", () => {
     });
 
     expect(first.status).toBe("HANDOFF_READY");
+    expect(reserveApprovedHandoff({ runId: run.runId, approval })).toBe(true);
     expect(
       persistApprovedHandoff({
         runId: run.runId,
@@ -222,7 +226,105 @@ describe("handoffApprovedProposal", () => {
     ).toBe(false);
   });
 
-  it("keeps consumed proposal keys after the approved run expires", async () => {
+  it("advances a same-approval recovery while rejecting changed or terminal replays", async () => {
+    const run = await createApprovalRun();
+    const approval = {
+      approvalId: "approval:recovery",
+      intentId: run.proposal!.intentId,
+      authorizedActorRole: "FOUNDER" as const,
+      authorizedActorId: "founder:fictional",
+      decision: "APPROVED" as const,
+      decidedAt: run.proposal!.preparedAt,
+      expiresAt: run.proposal!.expiresAt,
+      idempotencyKey: run.proposal!.idempotencyKey,
+      exactIntentHash: run.proposal!.exactIntentHash,
+    };
+    const submitted = {
+      status: "HANDOFF_SUBMITTED" as const,
+      adapterMode: "arc-testnet" as const,
+      execution: {
+        state: "SUBMITTED" as const,
+        providerOperationId: "11111111-1111-4111-8111-111111111111",
+        transactionHash: null,
+        confirmation: null,
+        explorerUrl: null,
+        failureCode: null,
+        failureMessage: null,
+      },
+      activityTrace: run.activityTrace,
+    };
+    const recoveryPending = {
+      ...submitted,
+      status: "HANDOFF_RECOVERY_PENDING" as const,
+      execution: {
+        ...submitted.execution,
+        state: "RECOVERY_PENDING" as const,
+        providerOperationId: null,
+        failureCode: "SUBMISSION_UNKNOWN",
+        failureMessage: "Circle acceptance is unknown.",
+      },
+    };
+    const confirmed = {
+      ...submitted,
+      status: "HANDOFF_CONFIRMED" as const,
+      execution: {
+        ...submitted.execution,
+        state: "CONFIRMED" as const,
+        transactionHash: `0x${"1".repeat(64)}`,
+        confirmation: "ARC_TESTNET_CONFIRMED",
+        explorerUrl: `https://testnet.arcscan.app/tx/0x${"1".repeat(64)}`,
+      },
+    };
+
+    saveVerificationAgentRun({ authorizedActorId: "founder:fictional", run });
+    expect(reserveApprovedHandoff({ runId: run.runId, approval })).toBe(true);
+    expect(
+      persistApprovedHandoff({ runId: run.runId, approval, result: recoveryPending }),
+    ).toBe(true);
+    expect(reserveApprovedHandoff({ runId: run.runId, approval })).toBe(true);
+    expect(
+      persistApprovedHandoff({ runId: run.runId, approval, result: submitted }),
+    ).toBe(true);
+    expect(
+      persistApprovedHandoff({
+        runId: run.runId,
+        approval: { ...approval, approvalId: "approval:changed" },
+        result: confirmed,
+      }),
+    ).toBe(false);
+    expect(reserveApprovedHandoff({ runId: run.runId, approval })).toBe(true);
+    expect(
+      persistApprovedHandoff({ runId: run.runId, approval, result: confirmed }),
+    ).toBe(true);
+    expect(
+      persistApprovedHandoff({ runId: run.runId, approval, result: confirmed }),
+    ).toBe(false);
+  });
+
+  it("rejects approval for a different canonical source-wallet intent", async () => {
+    const run = await createApprovalRun();
+    const result = handoffApprovedProposal({
+      run,
+      approval: {
+        approvalId: "approval:wrong-hash",
+        intentId: run.proposal!.intentId,
+        authorizedActorRole: "FOUNDER",
+        authorizedActorId: "founder:fictional",
+        decision: "APPROVED",
+        decidedAt: run.proposal!.preparedAt,
+        expiresAt: run.proposal!.expiresAt,
+        idempotencyKey: run.proposal!.idempotencyKey,
+        exactIntentHash: `sha256:${"0".repeat(64)}`,
+      },
+      authenticatedActorId: "founder:fictional",
+      now: "2026-01-21T00:01:01.000Z",
+    });
+
+    expect(result.status).toBe("HANDOFF_REJECTED");
+    expect(result.activityTrace.map((event) => event.code)).not.toContain("APPROVAL_ACCEPTED");
+  });
+
+  it("assigns a fresh deterministic key to a new exact intent after expiry", async () => {
     vi.useFakeTimers();
     try {
       vi.setSystemTime(new Date("2026-01-21T00:00:00.000Z"));
@@ -236,6 +338,7 @@ describe("handoffApprovedProposal", () => {
         decidedAt: firstRun.proposal!.preparedAt,
         expiresAt: firstRun.proposal!.expiresAt,
         idempotencyKey: firstRun.proposal!.idempotencyKey,
+        exactIntentHash: firstRun.proposal!.exactIntentHash,
       };
 
       saveVerificationAgentRun({
@@ -250,6 +353,9 @@ describe("handoffApprovedProposal", () => {
       });
       expect(firstResult.status).toBe("HANDOFF_READY");
       expect(
+        reserveApprovedHandoff({ runId: firstRun.runId, approval: firstApproval }),
+      ).toBe(true);
+      expect(
         persistApprovedHandoff({
           runId: firstRun.runId,
           approval: firstApproval,
@@ -262,7 +368,10 @@ describe("handoffApprovedProposal", () => {
       const laterApproval = {
         ...firstApproval,
         approvalId: "approval:after-expiry",
+        idempotencyKey: laterRun.proposal!.idempotencyKey,
+        exactIntentHash: laterRun.proposal!.exactIntentHash,
       };
+      expect(laterApproval.idempotencyKey).not.toBe(firstApproval.idempotencyKey);
       saveVerificationAgentRun({
         authorizedActorId: "founder:fictional",
         run: laterRun,
@@ -276,12 +385,15 @@ describe("handoffApprovedProposal", () => {
 
       expect(laterResult.status).toBe("HANDOFF_READY");
       expect(
+        reserveApprovedHandoff({ runId: laterRun.runId, approval: laterApproval }),
+      ).toBe(true);
+      expect(
         persistApprovedHandoff({
           runId: laterRun.runId,
           approval: laterApproval,
           result: laterResult,
         }),
-      ).toBe(false);
+      ).toBe(true);
     } finally {
       vi.useRealTimers();
     }
@@ -300,6 +412,7 @@ describe("handoffApprovedProposal", () => {
         decidedAt: "2026-01-21T00:16:00.000Z",
         expiresAt: "2026-01-21T01:00:00.000Z",
         idempotencyKey: run.proposal!.idempotencyKey,
+        exactIntentHash: run.proposal!.exactIntentHash,
       },
       authenticatedActorId: "founder:fictional",
       now: "2026-01-21T00:16:00.000Z",
@@ -321,6 +434,7 @@ describe("handoffApprovedProposal", () => {
         decidedAt: "2026-01-21T00:00:59.999Z",
         expiresAt: run.proposal!.expiresAt,
         idempotencyKey: run.proposal!.idempotencyKey,
+        exactIntentHash: run.proposal!.exactIntentHash,
       },
       authenticatedActorId: "founder:fictional",
       now: "2026-01-21T00:01:01.000Z",
@@ -343,7 +457,7 @@ describe("handoffApprovedProposal", () => {
 async function createApprovalRun() {
   const initial = await runVerificationAgent({ now: "2026-01-21T00:00:00.000Z" });
   const scenario = createPawPovAiEvidenceScenario();
-  return resumeVerificationAgentAfterFounderCorrection({
+  return await resumeVerificationAgentAfterFounderCorrection({
     run: initial,
     authenticatedActorId: "founder:fictional",
     receipt: scenario.recoveryReceipt,
