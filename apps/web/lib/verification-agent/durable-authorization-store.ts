@@ -701,34 +701,48 @@ export class FileTransferAuthorizationStore implements TransferAuthorizationStor
   }
 
   private async releaseOwnedLock(ownerToken: string): Promise<void> {
-    const releaseGuardToken = randomUUID();
-    const guard = await this.acquireReclaimGuard(releaseGuardToken);
-    if (guard === null) {
-      return;
-    }
-    const guardHeartbeat = setInterval(() => {
-      void this.renewReclaimGuard(guard).catch(() => undefined);
-    }, LOCK_HEARTBEAT_MS);
-    try {
-      await this.renewReclaimGuard(guard);
-      if (!(await this.reclaimGuardIsOwned(guard, releaseGuardToken))) {
-        return;
+    for (;;) {
+      const releaseGuardToken = randomUUID();
+      const guard = await this.acquireReclaimGuard(releaseGuardToken);
+      if (guard === null) {
+        await delay(LOCK_RETRY_MS);
+        continue;
       }
-      const metadata = parseLockMetadata(await readFile(this.lockPath, "utf8"));
-      if (
-        metadata?.ownerToken === ownerToken &&
-        (await this.reclaimGuardIsOwned(guard, releaseGuardToken))
-      ) {
-        await unlink(this.lockPath);
-      }
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      const guardHeartbeat = setInterval(() => {
+        void this.renewReclaimGuard(guard).catch(() => undefined);
+      }, LOCK_HEARTBEAT_MS);
+      let retry = false;
+      try {
+        await this.renewReclaimGuard(guard);
+        if (!(await this.reclaimGuardIsOwned(guard, releaseGuardToken))) {
+          retry = true;
+        } else {
+          const metadata = parseLockMetadata(
+            await readFile(this.lockPath, "utf8"),
+          );
+          if (metadata?.ownerToken !== ownerToken) {
+            return;
+          }
+          if (!(await this.reclaimGuardIsOwned(guard, releaseGuardToken))) {
+            retry = true;
+          } else {
+            await unlink(this.lockPath);
+            return;
+          }
+        }
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+          return;
+        }
         throw error;
+      } finally {
+        clearInterval(guardHeartbeat);
+        await guard.close();
+        await this.releaseReclaimGuard(releaseGuardToken);
       }
-    } finally {
-      clearInterval(guardHeartbeat);
-      await guard.close();
-      await this.releaseReclaimGuard(releaseGuardToken);
+      if (retry) {
+        await delay(LOCK_RETRY_MS);
+      }
     }
   }
 
