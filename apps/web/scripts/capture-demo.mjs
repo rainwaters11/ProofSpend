@@ -30,7 +30,7 @@ function validatedArcscanUrl(rawUrl) {
   const url = new URL(rawUrl);
   const validHost = url.hostname === "testnet.arcscan.app";
   const validPath = /^\/tx\/0x[a-fA-F0-9]{64}$/.test(url.pathname);
-  if (url.protocol !== "https:" || !validHost || !validPath || url.search || url.hash) {
+  if (url.protocol !== "https:" || !validHost || !validPath || url.search || url.hash || url.username || url.password) {
     throw new Error(
       "PROOFSPEND_DEMO_ARCSCAN_URL must be an exact https://testnet.arcscan.app/tx/0x… transaction URL.",
     );
@@ -107,7 +107,7 @@ async function captureApprovalAndSettlement(page) {
     await deliberateClick(page, page.getByRole("link", { name: state, exact: true }));
   }
 
-  await page.getByText("ARC TESTNET", { exact: true }).last().scrollIntoViewIfNeeded();
+  await page.getByRole("heading", { name: "Reconciled" }).scrollIntoViewIfNeeded();
   await deliberateMove(page, 760, 520);
   await pause(page, PAUSE.scene);
 }
@@ -140,6 +140,7 @@ async function assertSafeDemoServer() {
 
 async function captureClip(browser, filename, capture, arcscanUrl) {
   const context = await browser.newContext({
+    baseURL: BASE_URL,
     viewport: VIEWPORT,
     recordVideo: { dir: OUTPUT_DIR, size: VIEWPORT },
     reducedMotion: "reduce",
