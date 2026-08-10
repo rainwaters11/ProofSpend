@@ -30,7 +30,9 @@ describe("ActivityPage", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-08-09T12:00:00.000Z"));
 
-    const markup = renderToStaticMarkup(await ActivityPage());
+    const markup = renderToStaticMarkup(
+      await ActivityPage({ searchParams: Promise.resolve({}) }),
+    );
 
     expect(markup).toContain("Verification Agent Activity");
     expect(markup).toContain("Agent mode:");
@@ -45,5 +47,17 @@ describe("ActivityPage", () => {
     expect(markup).toContain("RECEIPT_COUNT_MET");
     expect(markup).toContain("2026-08-09T12:15:01.000Z");
     expect(markup).not.toContain("2026-01-21T00:16:00.000Z");
+  });
+
+  it("renders the evidence gap before the seeded founder correction", async () => {
+    const markup = renderToStaticMarkup(
+      await ActivityPage({ searchParams: Promise.resolve({ stage: "gap" }) }),
+    );
+
+    expect(markup).toContain("CORRECTION_REQUIRED");
+    expect(markup).toContain("before founder correction");
+    expect(markup).toContain("Evidence gap");
+    expect(markup).not.toContain("APPROVAL_REQUIRED");
+    expect(markup).not.toContain("Prepare release proposal");
   });
 });

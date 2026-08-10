@@ -9,6 +9,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:e2e": "playwright test",
+    "demo:record": "node scripts/capture-demo.mjs",
     "build": "next build",
     "start": "next start"
   },
