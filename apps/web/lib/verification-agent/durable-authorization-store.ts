@@ -62,7 +62,32 @@ const TransferResultSchema = z
   })
   .strict();
 
-const DurableStateSchema = z
+export const DurableReconciliationRecordSchema = z
+  .object({
+    reconciliationId: z.string().min(1),
+    proposalId: z.string().min(1),
+    idempotencyKey: z.string().min(1),
+    transactionRecordId: z.string().min(1),
+    mode: z.literal("ARC_TESTNET"),
+    status: z.literal("RECONCILED"),
+    network: z.literal("ARC-TESTNET"),
+    chainId: z.literal("5042002"),
+    asset: z.literal("USDC"),
+    amountAtomic: z.string().regex(/^[0-9]+$/),
+    providerOperationId: z.string().min(1),
+    transactionHash: z.string().regex(/^0x[a-fA-F0-9]{64}$/),
+    blockNumber: z.number().int().positive(),
+    blockHash: z.string().regex(/^0x[a-fA-F0-9]{64}$/),
+    explorerUrl: z.string().url(),
+    reconciledAt: z.string().datetime(),
+  })
+  .strict();
+
+export type DurableReconciliationRecord = z.infer<
+  typeof DurableReconciliationRecordSchema
+>;
+
+const LegacyDurableStateSchema = z
   .object({
     version: z.literal(1),
     authorizations: z.record(z.string(), DurableAuthorizationSchema),
@@ -72,14 +97,26 @@ const DurableStateSchema = z
   })
   .strict();
 
+const DurableStateSchema = z
+  .object({
+    version: z.literal(2),
+    authorizations: z.record(z.string(), DurableAuthorizationSchema),
+    resultHistory: z.record(z.string(), z.array(TransferResultSchema).min(1)),
+    latestResultKey: z.string().nullable(),
+    handoffHistory: z.array(HandoffResultSchema),
+    reconciliations: z.array(DurableReconciliationRecordSchema),
+  })
+  .strict();
+
 type DurableState = z.infer<typeof DurableStateSchema>;
 
 const EMPTY_STATE: DurableState = {
-  version: 1,
+  version: 2,
   authorizations: {},
-  results: {},
+  resultHistory: {},
   latestResultKey: null,
-  latestHandoff: null,
+  handoffHistory: [],
+  reconciliations: [],
 };
 
 const LOCK_RETRIES = 100;
@@ -96,6 +133,50 @@ function referencesMatch(
     snapshot.transaction.id === references.transactionRecordId &&
     snapshot.binding.intentId === references.intentId
   );
+}
+
+function sameValue(left: unknown, right: unknown): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function canAppendResult(history: TransferResult[], next: TransferResult): boolean {
+  const previous = history.at(-1);
+  if (previous === undefined || sameValue(previous, next)) {
+    return previous === undefined;
+  }
+  if (previous.status === "CONFIRMED" || previous.status === "FAILED") {
+    throw new Error("TRANSFER_RESULT_TERMINAL");
+  }
+  const allowed =
+    previous.status === "PREPARED"
+      ? ["SUBMITTED", "FAILED"]
+      : ["SUBMITTED", "CONFIRMED", "FAILED"];
+  if (!allowed.includes(next.status)) {
+    throw new Error("TRANSFER_RESULT_TRANSITION_INVALID");
+  }
+  return true;
+}
+
+function migrateState(value: unknown): DurableState {
+  const current = DurableStateSchema.safeParse(value);
+  if (current.success) {
+    return current.data;
+  }
+  const legacy = LegacyDurableStateSchema.safeParse(value);
+  if (!legacy.success) {
+    return DurableStateSchema.parse(value);
+  }
+  return DurableStateSchema.parse({
+    version: 2,
+    authorizations: legacy.data.authorizations,
+    resultHistory: Object.fromEntries(
+      Object.entries(legacy.data.results).map(([key, result]) => [key, [result]]),
+    ),
+    latestResultKey: legacy.data.latestResultKey,
+    handoffHistory:
+      legacy.data.latestHandoff === null ? [] : [legacy.data.latestHandoff],
+    reconciliations: [],
+  });
 }
 
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -180,11 +261,15 @@ export class FileTransferAuthorizationStore implements TransferAuthorizationStor
     if (!parsed.idempotencyKey) {
       throw new Error("TRANSFER_RESULT_IDEMPOTENCY_KEY_REQUIRED");
     }
+    const idempotencyKey = parsed.idempotencyKey;
     await this.withLock(async () => {
       const state = await this.readState();
-      state.results[parsed.idempotencyKey!] = parsed;
-      state.latestResultKey = parsed.idempotencyKey!;
-      await this.writeState(state);
+      const history = state.resultHistory[idempotencyKey] ?? [];
+      if (canAppendResult(history, parsed)) {
+        state.resultHistory[idempotencyKey] = [...history, parsed];
+        state.latestResultKey = idempotencyKey;
+        await this.writeState(state);
+      }
     });
   }
 
@@ -193,35 +278,92 @@ export class FileTransferAuthorizationStore implements TransferAuthorizationStor
     if (state.latestResultKey === null) {
       return null;
     }
-    const result = state.results[state.latestResultKey];
-    return result === undefined ? null : TransferResultSchema.parse(structuredClone(result));
+    return this.lastResult(state.resultHistory[state.latestResultKey]);
   }
 
   async loadResult(idempotencyKey: string): Promise<TransferResult | null> {
     const state = await this.readState();
-    const result = state.results[idempotencyKey];
-    return result === undefined ? null : TransferResultSchema.parse(structuredClone(result));
+    return this.lastResult(state.resultHistory[idempotencyKey]);
+  }
+
+  async loadResultHistory(idempotencyKey: string): Promise<TransferResult[]> {
+    const state = await this.readState();
+    return (state.resultHistory[idempotencyKey] ?? []).map((result) =>
+      TransferResultSchema.parse(structuredClone(result)),
+    );
+  }
+
+  async recordReconciliation(record: DurableReconciliationRecord): Promise<void> {
+    const parsed = DurableReconciliationRecordSchema.parse(structuredClone(record));
+    await this.withLock(async () => {
+      const state = await this.readState();
+      const confirmed = state.resultHistory[parsed.idempotencyKey]?.at(-1);
+      if (
+        confirmed?.status !== "CONFIRMED" ||
+        confirmed.proposalId !== parsed.proposalId ||
+        confirmed.providerOperationId !== parsed.providerOperationId ||
+        confirmed.transactionHash !== parsed.transactionHash ||
+        confirmed.blockNumber !== parsed.blockNumber ||
+        confirmed.blockHash !== parsed.blockHash ||
+        confirmed.explorerUrl !== parsed.explorerUrl
+      ) {
+        throw new Error("RECONCILIATION_CONFIRMATION_MISMATCH");
+      }
+      const existing = state.reconciliations.find(
+        (candidate) => candidate.idempotencyKey === parsed.idempotencyKey,
+      );
+      if (existing !== undefined) {
+        if (sameValue(existing, parsed)) {
+          return;
+        }
+        throw new Error("RECONCILIATION_ALREADY_RECORDED");
+      }
+      state.reconciliations.push(parsed);
+      await this.writeState(state);
+    });
+  }
+
+  async loadReconciliations(
+    idempotencyKey: string,
+  ): Promise<DurableReconciliationRecord[]> {
+    const state = await this.readState();
+    return state.reconciliations
+      .filter((record) => record.idempotencyKey === idempotencyKey)
+      .map((record) =>
+        DurableReconciliationRecordSchema.parse(structuredClone(record)),
+      );
   }
 
   async recordHandoff(result: HandoffResult): Promise<void> {
     const parsed = HandoffResultSchema.parse(structuredClone(result));
     await this.withLock(async () => {
       const state = await this.readState();
-      state.latestHandoff = parsed;
-      await this.writeState(state);
+      const previous = state.handoffHistory.at(-1);
+      if (!sameValue(previous, parsed)) {
+        state.handoffHistory.push(parsed);
+        await this.writeState(state);
+      }
     });
   }
 
   async loadLatestHandoff(): Promise<HandoffResult | null> {
     const state = await this.readState();
-    return state.latestHandoff === null
+    const latest = state.handoffHistory.at(-1);
+    return latest === undefined
       ? null
-      : HandoffResultSchema.parse(structuredClone(state.latestHandoff));
+      : HandoffResultSchema.parse(structuredClone(latest));
+  }
+
+  private lastResult(history: TransferResult[] | undefined): TransferResult | null {
+    const result = history?.at(-1);
+    return result === undefined
+      ? null
+      : TransferResultSchema.parse(structuredClone(result));
   }
 
   private async readState(): Promise<DurableState> {
     try {
-      return DurableStateSchema.parse(JSON.parse(await readFile(this.path, "utf8")));
+      return migrateState(JSON.parse(await readFile(this.path, "utf8")));
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") {
         return structuredClone(EMPTY_STATE);
