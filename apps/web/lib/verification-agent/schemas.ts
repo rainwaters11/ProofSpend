@@ -36,6 +36,7 @@ export const ActivityCodeSchema = z.enum([
   "HANDOFF_READY",
   "HANDOFF_EXECUTED",
   "TRANSACTION_PREPARED",
+  "TRANSACTION_RECOVERY_PENDING",
   "TRANSACTION_SUBMITTED",
   "TRANSACTION_CONFIRMED",
   "TRANSACTION_FAILED",
@@ -182,6 +183,7 @@ export const HandoffResultSchema = z
     status: z.enum([
       "HANDOFF_REJECTED",
       "HANDOFF_READY",
+      "HANDOFF_RECOVERY_PENDING",
       "HANDOFF_SUBMITTED",
       "HANDOFF_CONFIRMED",
       "HANDOFF_FAILED",
@@ -189,7 +191,14 @@ export const HandoffResultSchema = z
     adapterMode: AdapterModeSchema,
     execution: z
       .object({
-        state: z.enum(["NOT_SUBMITTED", "SKIPPED_MOCK", "SUBMITTED", "CONFIRMED", "FAILED"]),
+        state: z.enum([
+          "NOT_SUBMITTED",
+          "SKIPPED_MOCK",
+          "RECOVERY_PENDING",
+          "SUBMITTED",
+          "CONFIRMED",
+          "FAILED",
+        ]),
         idempotencyKey: z.string().uuid().optional(),
         providerOperationId: z.string().nullable().optional(),
         transactionHash: z.string().nullable(),

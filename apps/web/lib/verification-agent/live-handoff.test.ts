@@ -603,9 +603,17 @@ describe("executeLiveCircleHandoff", () => {
       dependencies: { store: context.store, providerFactory: () => firstProvider },
     });
     expect(uncertain).toMatchObject({
-      status: "HANDOFF_SUBMITTED",
-      execution: { state: "SUBMITTED", providerOperationId: null },
+      status: "HANDOFF_RECOVERY_PENDING",
+      execution: {
+        state: "RECOVERY_PENDING",
+        providerOperationId: null,
+        failureCode: "SUBMISSION_UNKNOWN",
+      },
     });
+    expect(uncertain.activityTrace.at(-1)).toMatchObject({
+      code: "TRANSACTION_RECOVERY_PENDING",
+    });
+    expect(uncertain.activityTrace.at(-1)?.message).not.toContain("accepted");
 
     const recovered = await executeLiveCircleHandoff({
       run: context.run,

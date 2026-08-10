@@ -227,7 +227,13 @@ function appendTransferEvent(
           code: "TRANSACTION_PREPARED" as const,
           message: "Server prepared the exact approved 1 USDC Arc Testnet transfer.",
         }
-      : result.status === "SUBMITTED"
+      : result.status === "RECOVERY_PENDING"
+        ? {
+            code: "TRANSACTION_RECOVERY_PENDING" as const,
+            message:
+              "Circle acceptance is unknown; recovery will look up the exact intent before retrying with the same idempotency key.",
+          }
+        : result.status === "SUBMITTED"
         ? {
             code: "TRANSACTION_SUBMITTED" as const,
             message: "Circle accepted the exact approved transfer for Arc Testnet submission.",
@@ -260,6 +266,8 @@ function handoffResult(
   const status =
     transfer.status === "CONFIRMED"
       ? "HANDOFF_CONFIRMED"
+      : transfer.status === "RECOVERY_PENDING"
+        ? "HANDOFF_RECOVERY_PENDING"
       : transfer.status === "SUBMITTED"
         ? "HANDOFF_SUBMITTED"
         : "HANDOFF_FAILED";
@@ -479,19 +487,29 @@ async function executeBoundLiveCircleHandoff(
     return finish(terminal);
   } catch (error) {
     const currentAuthorization = await store.load(intent);
-    const submissionMayHaveBeenAccepted =
-      currentAuthorization?.binding.status === "CONSUMED";
+    const authorizationConsumed = currentAuthorization?.binding.status === "CONSUMED";
+    const submissionAccepted =
+      lastResult?.status === "SUBMITTED" && lastResult.providerOperationId !== undefined;
+    const submissionUnknown = authorizationConsumed && !submissionAccepted;
     const outcome: TransferResult = {
       proposalId: intent.proposalId,
       idempotencyKey: intent.idempotencyKey,
       mode: "ARC_TESTNET",
-      status: submissionMayHaveBeenAccepted ? "SUBMITTED" : "FAILED",
-      failureCode: submissionMayHaveBeenAccepted
+      status: submissionAccepted
+        ? "SUBMITTED"
+        : submissionUnknown
+          ? "RECOVERY_PENDING"
+          : "FAILED",
+      failureCode: submissionAccepted
         ? "POLLING_TIMEOUT"
-        : "AUTHORIZATION_UNAVAILABLE",
-      failureMessage: submissionMayHaveBeenAccepted
-        ? "Circle submission needs recovery. Retry uses the same idempotency key or resumes polling; no confirmation is claimed."
-        : "The Circle transfer failed closed. No confirmation is claimed.",
+        : submissionUnknown
+          ? "SUBMISSION_UNKNOWN"
+          : "AUTHORIZATION_UNAVAILABLE",
+      failureMessage: submissionAccepted
+        ? "Circle accepted the transfer, but polling needs recovery. Polling resumes with the recorded operation id; no confirmation is claimed."
+        : submissionUnknown
+          ? "Circle acceptance is unknown. Recovery checks the exact intent before retrying with the same idempotency key; no submission or confirmation is claimed."
+          : "The Circle transfer failed closed. No confirmation is claimed.",
       providerOperationId: lastResult?.providerOperationId,
       transactionHash: lastResult?.transactionHash,
       explorerUrl: lastResult?.explorerUrl,

@@ -50,7 +50,12 @@ export const ARC_TESTNET_USDC_ADDRESS = "0x3600000000000000000000000000000000000
 
 export type TransferMode = "ARC_TESTNET" | "MOCK";
 
-export type TransferStatus = "PREPARED" | "SUBMITTED" | "CONFIRMED" | "FAILED";
+export type TransferStatus =
+  | "PREPARED"
+  | "RECOVERY_PENDING"
+  | "SUBMITTED"
+  | "CONFIRMED"
+  | "FAILED";
 
 export type TransferFailureCode =
   | "APPROVAL_MISSING"
@@ -63,6 +68,7 @@ export type TransferFailureCode =
   | "WALLET_MISMATCH"
   | "INSUFFICIENT_BALANCE"
   | "DUPLICATE_SUBMISSION"
+  | "SUBMISSION_UNKNOWN"
   | "POLLING_TIMEOUT"
   | "CONFIRMATION_INCOMPLETE";
 

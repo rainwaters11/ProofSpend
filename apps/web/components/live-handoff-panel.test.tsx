@@ -5,12 +5,14 @@ import { LiveHandoffPanel } from "./live-handoff-panel";
 import type { HandoffResult } from "@/lib/verification-agent";
 
 function result(
-  state: "SUBMITTED" | "CONFIRMED" | "FAILED",
+  state: "RECOVERY_PENDING" | "SUBMITTED" | "CONFIRMED" | "FAILED",
 ): HandoffResult {
   const confirmed = state === "CONFIRMED";
   return {
     status:
-      state === "SUBMITTED"
+      state === "RECOVERY_PENDING"
+        ? "HANDOFF_RECOVERY_PENDING"
+        : state === "SUBMITTED"
         ? "HANDOFF_SUBMITTED"
         : confirmed
           ? "HANDOFF_CONFIRMED"
@@ -32,10 +34,17 @@ function result(
             reconciledAt: "2026-08-09T12:00:01.000Z",
           }
         : null,
-      failureCode: state === "FAILED" ? "AUTHORIZATION_UNAVAILABLE" : null,
+      failureCode:
+        state === "FAILED"
+          ? "AUTHORIZATION_UNAVAILABLE"
+          : state === "RECOVERY_PENDING"
+            ? "SUBMISSION_UNKNOWN"
+            : null,
       failureMessage:
         state === "FAILED"
           ? "The transfer failed closed."
+          : state === "RECOVERY_PENDING"
+            ? "Circle acceptance is unknown; recovery will check the exact intent."
           : state === "SUBMITTED"
             ? "Circle is still confirming this transaction."
             : null,
@@ -46,7 +55,9 @@ function result(
         at: "2026-08-09T12:00:00.000Z",
         layer: "ARC TESTNET",
         code:
-          state === "SUBMITTED"
+          state === "RECOVERY_PENDING"
+            ? "TRANSACTION_RECOVERY_PENDING"
+            : state === "SUBMITTED"
             ? "TRANSACTION_SUBMITTED"
             : confirmed
               ? "TRANSACTION_CONFIRMED"
@@ -58,6 +69,16 @@ function result(
 }
 
 describe("LiveHandoffPanel", () => {
+  it("shows recovery pending without claiming Circle accepted the transfer", () => {
+    const markup = renderToStaticMarkup(
+      <LiveHandoffPanel result={result("RECOVERY_PENDING")} />,
+    );
+    expect(markup).toContain("Circle acceptance unknown");
+    expect(markup).toContain("recovery will check the exact intent");
+    expect(markup).not.toContain("Submitted to Circle");
+    expect(markup).not.toContain("View the real transaction on Arcscan");
+  });
+
   it("shows submitted without claiming confirmation", () => {
     const markup = renderToStaticMarkup(<LiveHandoffPanel result={result("SUBMITTED")} />);
     expect(markup).toContain("Submitted to Circle");

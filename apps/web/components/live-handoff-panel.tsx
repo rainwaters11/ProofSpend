@@ -3,6 +3,7 @@ import type { HandoffResult } from "@/lib/verification-agent";
 const stateCopy = {
   NOT_SUBMITTED: "Not submitted",
   SKIPPED_MOCK: "Mock only",
+  RECOVERY_PENDING: "Circle acceptance unknown",
   SUBMITTED: "Submitted to Circle",
   CONFIRMED: "Confirmed on Arc Testnet",
   FAILED: "Failed closed",
@@ -85,11 +86,12 @@ export function LiveHandoffPanel({ result }: { result: HandoffResult }) {
             </dl>
           </div>
         )}
-        {execution.state === "SUBMITTED" && execution.failureMessage && (
+        {["RECOVERY_PENDING", "SUBMITTED"].includes(execution.state) &&
+          execution.failureMessage && (
           <p role="status" className="text-sm text-muted-foreground">
             {execution.failureMessage}
           </p>
-        )}
+          )}
         {execution.state === "FAILED" && (
           <p role="alert" className="text-sm text-destructive">
             {execution.failureMessage ?? "The transfer failed closed. No confirmation is claimed."}

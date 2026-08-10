@@ -226,7 +226,7 @@ describe("handoffApprovedProposal", () => {
     ).toBe(false);
   });
 
-  it("returns a same-approval recovery while rejecting changed or terminal replays", async () => {
+  it("advances a same-approval recovery while rejecting changed or terminal replays", async () => {
     const run = await createApprovalRun();
     const approval = {
       approvalId: "approval:recovery",
@@ -253,6 +253,17 @@ describe("handoffApprovedProposal", () => {
       },
       activityTrace: run.activityTrace,
     };
+    const recoveryPending = {
+      ...submitted,
+      status: "HANDOFF_RECOVERY_PENDING" as const,
+      execution: {
+        ...submitted.execution,
+        state: "RECOVERY_PENDING" as const,
+        providerOperationId: null,
+        failureCode: "SUBMISSION_UNKNOWN",
+        failureMessage: "Circle acceptance is unknown.",
+      },
+    };
     const confirmed = {
       ...submitted,
       status: "HANDOFF_CONFIRMED" as const,
@@ -266,6 +277,10 @@ describe("handoffApprovedProposal", () => {
     };
 
     saveVerificationAgentRun({ authorizedActorId: "founder:fictional", run });
+    expect(reserveApprovedHandoff({ runId: run.runId, approval })).toBe(true);
+    expect(
+      persistApprovedHandoff({ runId: run.runId, approval, result: recoveryPending }),
+    ).toBe(true);
     expect(reserveApprovedHandoff({ runId: run.runId, approval })).toBe(true);
     expect(
       persistApprovedHandoff({ runId: run.runId, approval, result: submitted }),

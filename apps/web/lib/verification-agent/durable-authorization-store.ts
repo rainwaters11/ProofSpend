@@ -37,7 +37,13 @@ const TransferResultSchema = z
     proposalId: z.string().min(1).optional(),
     idempotencyKey: z.string().min(1).optional(),
     mode: z.enum(["ARC_TESTNET", "MOCK"]),
-    status: z.enum(["PREPARED", "SUBMITTED", "CONFIRMED", "FAILED"]),
+    status: z.enum([
+      "PREPARED",
+      "RECOVERY_PENDING",
+      "SUBMITTED",
+      "CONFIRMED",
+      "FAILED",
+    ]),
     failureCode: z
       .enum([
         "APPROVAL_MISSING",
@@ -50,6 +56,7 @@ const TransferResultSchema = z
         "WALLET_MISMATCH",
         "INSUFFICIENT_BALANCE",
         "DUPLICATE_SUBMISSION",
+        "SUBMISSION_UNKNOWN",
         "POLLING_TIMEOUT",
         "CONFIRMATION_INCOMPLETE",
       ])
@@ -229,8 +236,10 @@ function canAppendResult(
   }
   const allowed =
     previous.status === "PREPARED"
-      ? ["SUBMITTED", "FAILED"]
-      : ["SUBMITTED", "CONFIRMED", "FAILED"];
+      ? ["RECOVERY_PENDING", "SUBMITTED", "FAILED"]
+      : previous.status === "RECOVERY_PENDING"
+        ? ["RECOVERY_PENDING", "SUBMITTED", "FAILED"]
+        : ["SUBMITTED", "CONFIRMED", "FAILED"];
   if (!allowed.includes(next.status)) {
     throw new Error("TRANSFER_RESULT_TRANSITION_INVALID");
   }
