@@ -418,6 +418,114 @@ describe("FileTransferAuthorizationStore", () => {
     );
   });
 
+  it("does not reclaim an expired lease from the still-running process instance", async () => {
+    const directory = await mkdtemp(
+      join(tmpdir(), "proofspend-live-process-lease-"),
+    );
+    directories.push(directory);
+    const path = join(directory, "authorization.json");
+    const lockPath = `${path}.lock`;
+
+    type StoreInternals = {
+      reclaimStaleLock: () => Promise<boolean>;
+      withLock: <T>(operation: (ownerToken: string) => Promise<T>) => Promise<T>;
+    };
+    const ownerStore = new FileTransferAuthorizationStore(path);
+    const contenderStore = new FileTransferAuthorizationStore(path);
+    const owner = ownerStore as unknown as StoreInternals;
+    const contender = contenderStore as unknown as StoreInternals;
+    let signalOwnerEntered!: () => void;
+    let releaseOwner!: () => void;
+    const ownerEntered = new Promise<void>((resolve) => {
+      signalOwnerEntered = resolve;
+    });
+    const ownerRelease = new Promise<void>((resolve) => {
+      releaseOwner = resolve;
+    });
+
+    const ownerRun = owner.withLock(async () => {
+      signalOwnerEntered();
+      await ownerRelease;
+    });
+    await ownerEntered;
+
+    const metadata = JSON.parse(await readFile(lockPath, "utf8"));
+    expect(metadata.processIdentity).toEqual(expect.any(String));
+    const staleAt = new Date(Date.now() - 60_000);
+    await utimes(lockPath, staleAt, staleAt);
+
+    await expect(contender.reclaimStaleLock()).resolves.toBe(false);
+    await expect(readFile(lockPath, "utf8")).resolves.toContain(
+      metadata.ownerToken,
+    );
+
+    releaseOwner();
+    await expect(ownerRun).resolves.toBeUndefined();
+    await expect(readFile(lockPath, "utf8")).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
+  it("rejects a durable write after its owner token was replaced", async () => {
+    const directory = await mkdtemp(
+      join(tmpdir(), "proofspend-fenced-state-write-"),
+    );
+    directories.push(directory);
+    const path = join(directory, "authorization.json");
+    const lockPath = `${path}.lock`;
+    const newerState = {
+      version: 2 as const,
+      authorizations: {},
+      resultHistory: {
+        "newer-owner-result": [
+          {
+            idempotencyKey: "newer-owner-result",
+            mode: "MOCK" as const,
+            status: "PREPARED" as const,
+          },
+        ],
+      },
+      latestResultKey: "newer-owner-result",
+      handoffHistory: [],
+      reconciliations: [],
+    };
+    const staleState = {
+      version: 2 as const,
+      authorizations: {},
+      resultHistory: {},
+      latestResultKey: null,
+      handoffHistory: [],
+      reconciliations: [],
+    };
+    await writeFile(path, JSON.stringify(newerState), { mode: 0o600 });
+
+    type StoreInternals = {
+      withLock: <T>(operation: (ownerToken: string) => Promise<T>) => Promise<T>;
+      writeState: (state: unknown, ownerToken: string) => Promise<void>;
+    };
+    const store = new FileTransferAuthorizationStore(path);
+    const internal = store as unknown as StoreInternals;
+    await expect(
+      internal.withLock(async (ownerToken) => {
+        await writeFile(
+          lockPath,
+          JSON.stringify({
+            ownerToken: "22222222-2222-4222-8222-222222222222",
+            pid: process.pid,
+            processIdentity: "replacement-process",
+            createdAt: new Date().toISOString(),
+          }),
+          { mode: 0o600 },
+        );
+        await internal.writeState(staleState, ownerToken);
+      }),
+    ).rejects.toThrow("AUTHORIZATION_STORE_LOCK_LOST");
+
+    const persisted = JSON.parse(await readFile(path, "utf8"));
+    expect(persisted.latestResultKey).toBe("newer-owner-result");
+    expect(persisted.resultHistory["newer-owner-result"]).toHaveLength(1);
+  });
+
   it("reclaims an expired lease even when a restarted process reuses the owner PID", async () => {
     const directory = await mkdtemp(join(tmpdir(), "proofspend-reused-pid-lock-"));
     directories.push(directory);
@@ -435,6 +543,7 @@ describe("FileTransferAuthorizationStore", () => {
       JSON.stringify({
         ownerToken: "11111111-1111-4111-8111-111111111111",
         pid: process.pid,
+        processIdentity: "linux:previous-boot:previous-start",
         createdAt: "2026-08-09T00:00:00.000Z",
       }),
       { mode: 0o600 },
