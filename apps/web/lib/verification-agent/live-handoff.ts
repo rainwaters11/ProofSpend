@@ -27,7 +27,10 @@ import type {
   HandoffResult,
   VerificationAgentResult,
 } from "./schemas";
-import { FileTransferAuthorizationStore } from "./durable-authorization-store";
+import {
+  FileTransferAuthorizationStore,
+  type DurableReconciliationRecord,
+} from "./durable-authorization-store";
 
 const RELEASE_REQUEST_ID = "release:pawpovai:milestone-launch-ready";
 const PROOF_ID = "proof:pawpovai:recovered-receipt";
@@ -245,8 +248,10 @@ function appendTransferEvent(
 }
 
 function handoffResult(
+  intent: ApprovedTransferIntent,
   transfer: TransferResult,
   activityTrace: ActivityEvent[],
+  reconciliation: DurableReconciliationRecord | null,
 ): HandoffResult {
   const status =
     transfer.status === "CONFIRMED"
@@ -259,10 +264,19 @@ function handoffResult(
     adapterMode: "arc-testnet",
     execution: {
       state: transfer.status,
+      idempotencyKey: intent.idempotencyKey,
       providerOperationId: transfer.providerOperationId ?? null,
       transactionHash: transfer.transactionHash ?? null,
       confirmation: transfer.status === "CONFIRMED" ? "ARC_TESTNET_CONFIRMED" : null,
       explorerUrl: transfer.explorerUrl ?? null,
+      reconciliation:
+        reconciliation === null
+          ? null
+          : {
+              state: "RECONCILED",
+              reconciliationId: reconciliation.reconciliationId,
+              reconciledAt: reconciliation.reconciledAt,
+            },
       failureCode: transfer.failureCode ?? null,
       failureMessage: transfer.failureMessage ?? null,
     },
@@ -281,6 +295,28 @@ function bindResultToIntent(
   };
 }
 
+function handoffMatchesTerminal(
+  intent: ApprovedTransferIntent,
+  terminal: TransferResult,
+  handoff: HandoffResult | null,
+  reconciliation: DurableReconciliationRecord | null,
+): boolean {
+  const expectedStatus =
+    terminal.status === "CONFIRMED" ? "HANDOFF_CONFIRMED" : "HANDOFF_FAILED";
+  return (
+    handoff?.status === expectedStatus &&
+    handoff.execution.state === terminal.status &&
+    handoff.execution.idempotencyKey === intent.idempotencyKey &&
+    handoff.execution.providerOperationId === (terminal.providerOperationId ?? null) &&
+    handoff.execution.transactionHash === (terminal.transactionHash ?? null) &&
+    (terminal.status !== "CONFIRMED" ||
+      (reconciliation !== null &&
+        handoff.execution.reconciliation?.state === "RECONCILED" &&
+        handoff.execution.reconciliation.reconciliationId ===
+          reconciliation.reconciliationId))
+  );
+}
+
 export async function executeLiveCircleHandoff(args: {
   run: VerificationAgentResult;
   approval: ApprovalDecision;
@@ -296,23 +332,11 @@ export async function executeLiveCircleHandoff(args: {
   const persistedAuthorization = created ? authorization : await store.load(intent);
   if (persistedAuthorization === null) throw new Error("HANDOFF_DUPLICATE");
   const existingResult = created ? null : await store.loadResult(intent.idempotencyKey);
-  if (existingResult?.status === "CONFIRMED" || existingResult?.status === "FAILED") {
-    throw new Error("HANDOFF_DUPLICATE");
-  }
-  if (
-    !created &&
-    persistedAuthorization.binding.status !== "CONSUMED"
-  ) {
-    throw new Error("HANDOFF_DUPLICATE");
-  }
-
-  const provider =
-    args.dependencies?.providerFactory?.({ environment: args.environment, store }) ??
-    makeProvider({ environment: args.environment, store });
   const trace = structuredClone(args.initialActivityTrace);
   let lastResult: TransferResult | null = null;
   const finish = async (transfer: TransferResult): Promise<HandoffResult> => {
     const boundTransfer = bindResultToIntent(intent, transfer);
+    let reconciliation: DurableReconciliationRecord | null = null;
     if (boundTransfer.status === "CONFIRMED") {
       if (
         !boundTransfer.providerOperationId ||
@@ -323,29 +347,60 @@ export async function executeLiveCircleHandoff(args: {
       ) {
         throw new Error("CONFIRMED_TRANSFER_EVIDENCE_INCOMPLETE");
       }
-      await store.recordReconciliation({
-        reconciliationId: `reconciliation:${intent.transactionRecordId}`,
-        proposalId: intent.proposalId,
-        idempotencyKey: intent.idempotencyKey,
-        transactionRecordId: intent.transactionRecordId,
-        mode: "ARC_TESTNET",
-        status: "RECONCILED",
-        network: intent.network,
-        chainId: intent.chainId,
-        asset: intent.asset,
-        amountAtomic: intent.amountAtomic,
-        providerOperationId: boundTransfer.providerOperationId,
-        transactionHash: boundTransfer.transactionHash,
-        blockNumber: boundTransfer.blockNumber,
-        blockHash: boundTransfer.blockHash,
-        explorerUrl: boundTransfer.explorerUrl,
-        reconciledAt: boundTransfer.polledAt ?? new Date().toISOString(),
-      });
+      reconciliation =
+        (await store.loadReconciliations(intent.idempotencyKey)).at(-1) ?? null;
+      if (reconciliation === null) {
+        reconciliation = {
+          reconciliationId: `reconciliation:${intent.transactionRecordId}`,
+          proposalId: intent.proposalId,
+          idempotencyKey: intent.idempotencyKey,
+          transactionRecordId: intent.transactionRecordId,
+          mode: "ARC_TESTNET",
+          status: "RECONCILED",
+          network: intent.network,
+          chainId: intent.chainId,
+          asset: intent.asset,
+          amountAtomic: intent.amountAtomic,
+          providerOperationId: boundTransfer.providerOperationId,
+          transactionHash: boundTransfer.transactionHash,
+          blockNumber: boundTransfer.blockNumber,
+          blockHash: boundTransfer.blockHash,
+          explorerUrl: boundTransfer.explorerUrl,
+          reconciledAt: boundTransfer.polledAt ?? new Date().toISOString(),
+        };
+        await store.recordReconciliation(reconciliation);
+      }
     }
-    const result = handoffResult(boundTransfer, trace);
+    const result = handoffResult(intent, boundTransfer, trace, reconciliation);
     await store.recordHandoff(result);
     return result;
   };
+
+  if (existingResult?.status === "CONFIRMED" || existingResult?.status === "FAILED") {
+    const reconciliation =
+      existingResult.status === "CONFIRMED"
+        ? (await store.loadReconciliations(intent.idempotencyKey)).at(-1) ?? null
+        : null;
+    if (
+      handoffMatchesTerminal(
+        intent,
+        existingResult,
+        await store.loadLatestHandoff(),
+        reconciliation,
+      )
+    ) {
+      throw new Error("HANDOFF_DUPLICATE");
+    }
+    appendTransferEvent(trace, args.run.runId, existingResult);
+    return finish(existingResult);
+  }
+  if (!created && persistedAuthorization.binding.status !== "CONSUMED") {
+    throw new Error("HANDOFF_DUPLICATE");
+  }
+
+  const provider =
+    args.dependencies?.providerFactory?.({ environment: args.environment, store }) ??
+    makeProvider({ environment: args.environment, store });
   try {
     if (!created && existingResult?.status === "SUBMITTED" && existingResult.providerOperationId) {
       lastResult = bindResultToIntent(intent, existingResult);
