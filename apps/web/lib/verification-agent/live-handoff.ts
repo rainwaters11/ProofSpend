@@ -522,6 +522,7 @@ function recoveryApprovalMatches(args: {
     authorization.approval.id === approval.approvalId &&
     authorization.approval.intentId === approval.intentId &&
     authorization.approval.decision === approval.decision &&
+    authorization.approval.approver !== null &&
     authorization.approval.approver.actorId === authenticatedActorId &&
     authorization.approval.approver.actorId === approval.authorizedActorId &&
     authorization.approval.approver.actorType === approval.authorizedActorRole &&
