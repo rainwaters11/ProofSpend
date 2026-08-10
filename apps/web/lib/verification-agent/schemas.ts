@@ -116,6 +116,8 @@ export const ReleaseProposalSchema = z
     asset: z.literal("USDC"),
     chain: z.literal("ARC_TESTNET"),
     destination: z.string().min(1),
+    sourceWalletId: z.string().min(1),
+    exactIntentHash: z.string().regex(/^sha256:[a-f0-9]{64}$/),
     authorizedRole: z.literal("FOUNDER"),
     preparedAt: z.string().datetime(),
     expiresAt: z.string().datetime(),
@@ -170,6 +172,7 @@ export const ApprovalDecisionSchema = z
     decidedAt: BoundedHandoffTimestampSchema,
     expiresAt: BoundedHandoffTimestampSchema,
     idempotencyKey: BoundedHandoffIdentifierSchema,
+    exactIntentHash: z.string().regex(/^sha256:[a-f0-9]{64}$/),
   })
   .strict();
 export type ApprovalDecision = z.infer<typeof ApprovalDecisionSchema>;

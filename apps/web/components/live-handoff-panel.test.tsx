@@ -64,9 +64,14 @@ describe("LiveHandoffPanel", () => {
   });
 
   it("shows failed closed without a confirmation or explorer link", () => {
-    const markup = renderToStaticMarkup(<LiveHandoffPanel result={result("FAILED")} />);
+    const failed = result("FAILED");
+    failed.execution.transactionHash = `0x${"2b".repeat(32)}`;
+    failed.execution.explorerUrl =
+      `https://testnet.arcscan.app/tx/0x${"2b".repeat(32)}`;
+    const markup = renderToStaticMarkup(<LiveHandoffPanel result={failed} />);
     expect(markup).toContain("Failed closed");
     expect(markup).toContain("The transfer failed closed.");
     expect(markup).not.toContain("View the real transaction on Arcscan");
+    expect(markup).not.toContain(`0x${"2b".repeat(32)}`);
   });
 });

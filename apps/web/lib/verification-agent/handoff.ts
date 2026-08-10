@@ -46,13 +46,16 @@ export function handoffApprovedProposal(args: {
     });
   }
 
-  if (approval.intentId !== run.proposal.intentId) {
+  if (
+    approval.intentId !== run.proposal.intentId ||
+    approval.exactIntentHash !== run.proposal.exactIntentHash
+  ) {
     appendActivity(trace, {
       id: `${run.runId}:handoff:reject:intent`,
       at: now,
       layer: "DETERMINISTIC",
       code: "HANDOFF_REJECTED",
-      message: "Handoff rejected because approval intent does not match proposal intent.",
+      message: "Handoff rejected because approval does not match the exact presented intent.",
     });
     return HandoffResultSchema.parse({
       status: "HANDOFF_REJECTED",

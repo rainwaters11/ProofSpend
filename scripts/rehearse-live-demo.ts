@@ -58,6 +58,8 @@ if (
 console.log("\nExact action awaiting human approval:");
 console.log("  Amount: 1.00 USDC (1000000 atomic units)");
 console.log(`  Destination: ${stringField(proposal, "destination")}`);
+console.log(`  Source wallet: ${stringField(proposal, "sourceWalletId")}`);
+console.log(`  Exact intent hash: ${stringField(proposal, "exactIntentHash")}`);
 console.log("  Network: ARC TESTNET");
 const prompt = createInterface({ input: stdin, output: stdout });
 const answer = await prompt.question("Type APPROVE 1 USDC to submit this exact intent: ");
@@ -74,6 +76,7 @@ const approval = {
   decidedAt,
   expiresAt: stringField(proposal, "expiresAt"),
   idempotencyKey: stringField(proposal, "idempotencyKey"),
+  exactIntentHash: stringField(proposal, "exactIntentHash"),
 };
 const handoffResponse = await post("/api/verification-agent/handoff", { runId, approval });
 assertStatus(handoffResponse, 200, "Circle handoff");

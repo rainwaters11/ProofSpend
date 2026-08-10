@@ -3,9 +3,11 @@ import { randomUUID } from "node:crypto";
 import "server-only";
 
 import {
+  CanonicalExecutionIntentSchema,
   applyMissingReceiptRecovery,
   createPawPovAiEvidenceScenario,
   evaluateEvidenceEngine,
+  hashCanonicalExecutionIntent,
   type EvidenceItem,
   type EvidenceMatch,
 } from "@proofspend/domain";
@@ -35,6 +37,13 @@ const PAWPOVAI_JUDGE_DEMO_AMOUNT = "1000000";
 const PROPOSAL_INTENT_ID = "intent:release:pawpovai:milestone-launch-ready";
 const PROPOSAL_IDEMPOTENCY_KEY = "release:pawpovai:milestone-launch-ready:1usdc";
 const PROPOSAL_DESTINATION = "mock:destination:pawpovai-operating-wallet";
+const MOCK_SOURCE_WALLET_ID = "mock:source:pawpovai-treasury-wallet";
+const ARC_TESTNET_CHAIN_ID = "5042002";
+const RELEASE_REQUEST_ID = "release:pawpovai:milestone-launch-ready";
+
+function proposalTransactionRecordId(runId: string): string {
+  return `transaction:${runId}`;
+}
 
 function deterministicRequirementOutcomes(
   evaluation: ReturnType<typeof evaluateEvidenceEngine>["evaluation"],
@@ -76,11 +85,14 @@ function redactMessage(message: string): string {
     .replaceAll(/sk-[A-Za-z0-9_-]+/g, "[REDACTED_SECRET]");
 }
 
-function buildProposal(
+async function buildProposal(
   reason: string,
   now: string,
+  runId: string,
   amount: ReturnType<typeof createPawPovAiEvidenceScenario>["milestone"]["proposedAmount"],
   destination: string,
+  sourceWalletId: string,
+  isMock: boolean,
 ) {
   const nowMs = Date.parse(now);
   if (!Number.isFinite(nowMs)) {
@@ -89,6 +101,27 @@ function buildProposal(
   if (amount.asset !== "USDC" || amount.atomicUnits !== PAWPOVAI_JUDGE_DEMO_AMOUNT) {
     throw new Error("AGENT_INVALID_JUDGE_DEMO_AMOUNT");
   }
+  const scenario = createPawPovAiEvidenceScenario();
+  const executionIntent = CanonicalExecutionIntentSchema.parse({
+    version: 1,
+    actionKind: "RELEASE_APPROVAL",
+    projectId: scenario.milestone.projectId,
+    releaseRequestId: RELEASE_REQUEST_ID,
+    transactionRecordId: proposalTransactionRecordId(runId),
+    intentId: PROPOSAL_INTENT_ID,
+    asset: "USDC",
+    atomicAmount: amount.atomicUnits,
+    operationType: "SETTLEMENT",
+    protocolTarget: {
+      kind: "DESTINATION",
+      destination,
+      sourceWalletId,
+      network: "ARC_TESTNET",
+      chainId: isMock ? "mock:chain:arc-testnet" : ARC_TESTNET_CHAIN_ID,
+      isMock,
+    },
+  });
+  const exactIntentHash = await hashCanonicalExecutionIntent(executionIntent);
   return ReleaseProposalSchema.parse({
     action: "PREPARE_RELEASE_PROPOSAL",
     state: "APPROVAL_REQUIRED",
@@ -98,6 +131,8 @@ function buildProposal(
     asset: "USDC",
     chain: "ARC_TESTNET",
     destination,
+    sourceWalletId,
+    exactIntentHash,
     authorizedRole: "FOUNDER",
     preparedAt: now,
     expiresAt: new Date(nowMs + RELEASE_TTL_MS).toISOString(),
@@ -227,13 +262,13 @@ export async function runVerificationAgent(
   });
 }
 
-export function resumeVerificationAgentAfterFounderCorrection(args: {
+export async function resumeVerificationAgentAfterFounderCorrection(args: {
   run: VerificationAgentResult;
   authenticatedActorId: string;
   receipt: EvidenceItem;
   acceptedMatch: EvidenceMatch;
   now?: string;
-}): VerificationAgentResult {
+}): Promise<VerificationAgentResult> {
   const environment = getEnvironment();
   const run = VerificationAgentResultSchema.parse(args.run);
   if (run.status !== "CORRECTION_REQUIRED" || run.proposal !== null) {
@@ -280,13 +315,17 @@ export function resumeVerificationAgentAfterFounderCorrection(args: {
     message: `Milestone re-evaluated with status ${recovered.evaluation.status}.`,
   });
 
-  const proposal = buildProposal(
+  const liveMode = environment.PROOFSPEND_ADAPTER_MODE === "arc-testnet";
+  const proposal = await buildProposal(
     "Seeded deterministic evaluation passed after one founder receipt correction.",
     now,
+    run.runId,
     scenario.milestone.proposedAmount,
-    environment.PROOFSPEND_ADAPTER_MODE === "arc-testnet"
+    liveMode
       ? environment.CIRCLE_DESTINATION_WALLET_ADDRESS
       : PROPOSAL_DESTINATION,
+    liveMode ? environment.CIRCLE_SOURCE_WALLET_ID : MOCK_SOURCE_WALLET_ID,
+    !liveMode,
   );
 
   appendEvent(trace, {

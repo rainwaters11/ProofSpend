@@ -197,6 +197,12 @@ export class FileTransferAuthorizationStore implements TransferAuthorizationStor
     return result === undefined ? null : TransferResultSchema.parse(structuredClone(result));
   }
 
+  async loadResult(idempotencyKey: string): Promise<TransferResult | null> {
+    const state = await this.readState();
+    const result = state.results[idempotencyKey];
+    return result === undefined ? null : TransferResultSchema.parse(structuredClone(result));
+  }
+
   async recordHandoff(result: HandoffResult): Promise<void> {
     const parsed = HandoffResultSchema.parse(structuredClone(result));
     await this.withLock(async () => {

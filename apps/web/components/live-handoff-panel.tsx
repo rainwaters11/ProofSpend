@@ -41,7 +41,7 @@ export function LiveHandoffPanel({ result }: { result: HandoffResult }) {
               </dd>
             </div>
           )}
-          {execution.transactionHash && (
+          {execution.state === "CONFIRMED" && execution.transactionHash && (
             <div className="sm:col-span-2">
               <dt className="text-muted-foreground">Arc transaction hash</dt>
               <dd className="break-all font-mono text-xs text-foreground">
@@ -50,7 +50,7 @@ export function LiveHandoffPanel({ result }: { result: HandoffResult }) {
             </div>
           )}
         </dl>
-        {execution.explorerUrl && execution.transactionHash && (
+        {execution.state === "CONFIRMED" && execution.explorerUrl && execution.transactionHash && (
           <a
             className="w-fit text-sm font-medium text-primary underline underline-offset-4"
             href={execution.explorerUrl}

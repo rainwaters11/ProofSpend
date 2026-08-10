@@ -91,7 +91,7 @@ async function approvalRun(environment: ReturnType<typeof liveEnvironment>) {
       now: "2026-08-09T00:00:00.000Z",
     });
     const scenario = createPawPovAiEvidenceScenario();
-    return resumeVerificationAgentAfterFounderCorrection({
+    return await resumeVerificationAgentAfterFounderCorrection({
       run: initial,
       authenticatedActorId: scenario.authorizedFounder.actorId,
       receipt: scenario.recoveryReceipt,
@@ -113,6 +113,7 @@ function approvalFor(run: Awaited<ReturnType<typeof approvalRun>>) {
     decidedAt: "2026-08-09T00:01:01.000Z",
     expiresAt: run.proposal!.expiresAt,
     idempotencyKey: run.proposal!.idempotencyKey,
+    exactIntentHash: run.proposal!.exactIntentHash,
   };
 }
 

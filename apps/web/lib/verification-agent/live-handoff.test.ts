@@ -15,7 +15,7 @@ import {
   runVerificationAgent,
 } from "./orchestrator";
 import { FileTransferAuthorizationStore } from "./durable-authorization-store";
-import { executeLiveCircleHandoff } from "./live-handoff";
+import { buildLiveTransferAuthorization, executeLiveCircleHandoff } from "./live-handoff";
 
 const directories: string[] = [];
 
@@ -89,6 +89,66 @@ describe("executeLiveCircleHandoff", () => {
     expect(providerFactory).not.toHaveBeenCalled();
   });
 
+  it("recovers a consumed Circle submission with the same idempotency key", async () => {
+    const context = await liveContext();
+    const { intent, authorization } = await buildLiveTransferAuthorization({
+      run: context.run,
+      approval: context.approval,
+      environment: context.environment,
+    });
+    await context.store.persist(authorization);
+    await context.store.recordResult({
+      proposalId: intent.proposalId,
+      idempotencyKey: intent.idempotencyKey,
+      mode: "ARC_TESTNET",
+      status: "PREPARED",
+    });
+    await context.store.consume({
+      releaseRequestId: intent.releaseRequestId,
+      approvalId: intent.approvalId,
+      authorizationBindingId: intent.authorizationBindingId,
+      transactionRecordId: intent.transactionRecordId,
+      intentId: intent.intentId,
+      expectedExactIntentHash: authorization.binding.exactIntentHash,
+      idempotencyKey: intent.idempotencyKey,
+      asOf: "2026-08-09T00:01:02.000Z",
+    });
+    const prepareTransfer = vi.fn();
+    const provider = fakeProvider([], { prepareTransfer });
+
+    const result = await executeLiveCircleHandoff({
+      run: context.run,
+      approval: context.approval,
+      environment: context.environment,
+      initialActivityTrace: context.run.activityTrace,
+      dependencies: { store: context.store, providerFactory: () => provider },
+    });
+
+    expect(prepareTransfer).not.toHaveBeenCalled();
+    expect(result.status).toBe("HANDOFF_CONFIRMED");
+    await expect(context.store.loadResult(intent.idempotencyKey)).resolves.toMatchObject({
+      proposalId: intent.proposalId,
+      idempotencyKey: intent.idempotencyKey,
+      status: "CONFIRMED",
+    });
+  });
+
+  it("rejects a source wallet change after the exact intent is presented", async () => {
+    const context = await liveContext();
+    await expect(
+      executeLiveCircleHandoff({
+        run: context.run,
+        approval: context.approval,
+        environment: {
+          ...context.environment,
+          CIRCLE_SOURCE_WALLET_ID: "66666666-6666-4666-8666-666666666666",
+        },
+        initialActivityTrace: context.run.activityTrace,
+        dependencies: { store: context.store, providerFactory: () => fakeProvider([]) },
+      }),
+    ).rejects.toThrow("LIVE_HANDOFF_PROPOSAL_INVALID");
+  });
+
   it("fails closed and never fabricates a transaction hash when the provider rejects", async () => {
     const context = await liveContext();
     const provider = fakeProvider([], {
@@ -115,9 +175,28 @@ describe("executeLiveCircleHandoff", () => {
     });
   });
 
-  it("retains the Circle operation id when polling fails after submission", async () => {
+  it("retains a recoverable Circle operation when polling is interrupted", async () => {
     const context = await liveContext();
     const provider = fakeProvider([], {
+      async submitTransfer(intent) {
+        const authorization = await context.store.load(intent);
+        if (authorization === null) throw new Error("authorization missing");
+        await context.store.consume({
+          releaseRequestId: intent.releaseRequestId,
+          approvalId: intent.approvalId,
+          authorizationBindingId: intent.authorizationBindingId,
+          transactionRecordId: intent.transactionRecordId,
+          intentId: intent.intentId,
+          expectedExactIntentHash: authorization.binding.exactIntentHash,
+          idempotencyKey: intent.idempotencyKey,
+          asOf: "2026-08-09T00:01:02.000Z",
+        });
+        return {
+          mode: "ARC_TESTNET",
+          status: "SUBMITTED",
+          providerOperationId: "11111111-1111-4111-8111-111111111111",
+        };
+      },
       pollTransfer: async () => {
         throw new Error("poll unavailable");
       },
@@ -132,13 +211,55 @@ describe("executeLiveCircleHandoff", () => {
     });
 
     expect(result).toMatchObject({
-      status: "HANDOFF_FAILED",
+      status: "HANDOFF_SUBMITTED",
       execution: {
-        state: "FAILED",
+        state: "SUBMITTED",
         providerOperationId: "11111111-1111-4111-8111-111111111111",
         transactionHash: null,
       },
     });
+  });
+
+  it("recovers when Circle may accept a request before its response is recorded", async () => {
+    const context = await liveContext();
+    const firstProvider = fakeProvider([], {
+      async submitTransfer(intent) {
+        const authorization = await context.store.load(intent);
+        if (authorization === null) throw new Error("authorization missing");
+        await context.store.consume({
+          releaseRequestId: intent.releaseRequestId,
+          approvalId: intent.approvalId,
+          authorizationBindingId: intent.authorizationBindingId,
+          transactionRecordId: intent.transactionRecordId,
+          intentId: intent.intentId,
+          expectedExactIntentHash: authorization.binding.exactIntentHash,
+          idempotencyKey: intent.idempotencyKey,
+          asOf: "2026-08-09T00:01:02.000Z",
+        });
+        throw new Error("Circle response lost");
+      },
+    });
+
+    const uncertain = await executeLiveCircleHandoff({
+      run: context.run,
+      approval: context.approval,
+      environment: context.environment,
+      initialActivityTrace: context.run.activityTrace,
+      dependencies: { store: context.store, providerFactory: () => firstProvider },
+    });
+    expect(uncertain).toMatchObject({
+      status: "HANDOFF_SUBMITTED",
+      execution: { state: "SUBMITTED", providerOperationId: null },
+    });
+
+    const recovered = await executeLiveCircleHandoff({
+      run: context.run,
+      approval: context.approval,
+      environment: context.environment,
+      initialActivityTrace: context.run.activityTrace,
+      dependencies: { store: context.store, providerFactory: () => fakeProvider([]) },
+    });
+    expect(recovered.status).toBe("HANDOFF_CONFIRMED");
   });
 });
 
@@ -148,9 +269,7 @@ function fakeProvider(
 ): ArcTestnetTransferProvider {
   const operationId = "11111111-1111-4111-8111-111111111111";
   const transactionHash = `0x${"1a".repeat(32)}`;
-  const result = (intent: ApprovedTransferIntent, status: TransferResult["status"]): TransferResult => ({
-    proposalId: intent.proposalId,
-    idempotencyKey: intent.idempotencyKey,
+  const result = (_intent: ApprovedTransferIntent, status: TransferResult["status"]): TransferResult => ({
     mode: "ARC_TESTNET",
     status,
     providerOperationId: status === "PREPARED" ? undefined : operationId,
@@ -213,7 +332,7 @@ async function liveContext() {
     now: "2026-08-09T00:00:00.000Z",
   });
   const scenario = createPawPovAiEvidenceScenario();
-  const run = resumeVerificationAgentAfterFounderCorrection({
+  const run = await resumeVerificationAgentAfterFounderCorrection({
     run: initial,
     authenticatedActorId: scenario.authorizedFounder.actorId,
     receipt: scenario.recoveryReceipt,
@@ -232,6 +351,7 @@ async function liveContext() {
       decidedAt: "2026-08-09T00:01:01.000Z",
       expiresAt: run.proposal!.expiresAt,
       idempotencyKey: run.proposal!.idempotencyKey,
+      exactIntentHash: run.proposal!.exactIntentHash,
     },
     store: new FileTransferAuthorizationStore(environment.PROOFSPEND_AUTH_STORE_PATH),
   };

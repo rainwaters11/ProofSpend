@@ -216,6 +216,18 @@ class FakeAuthorizationStore implements TransferAuthorizationStore {
       binding: { ...this.current.binding, status: "REVOKED" },
     };
   }
+
+  markConsumed(): void {
+    this.current = {
+      ...this.current,
+      binding: {
+        ...this.current.binding,
+        status: "CONSUMED",
+        consumedAt: "2026-08-08T00:01:00.000Z",
+        consumedByTransactionId: baseIntent.transactionRecordId,
+      },
+    };
+  }
 }
 
 function makeProvider(overrides: Partial<CircleWalletProviderConfig> = {}): CircleWalletProvider {
@@ -481,6 +493,28 @@ describe("CircleWalletProvider", () => {
       providerOperationId: OPERATION_ID_1,
       polledAt: expect.any(String),
     });
+  });
+
+  it("recovers an accepted submission by retrying the same Circle idempotency key", async () => {
+    const authorizationStore = new FakeAuthorizationStore();
+    authorizationStore.markConsumed();
+    mockWallets();
+    mockedClient.createTransaction.mockResolvedValue({
+      data: { id: OPERATION_ID_1, state: "SENT" },
+    });
+
+    const result = await makeProvider({ authorizationStore }).submitTransfer(validIntent());
+
+    expect(result).toMatchObject({
+      status: "SUBMITTED",
+      providerOperationId: OPERATION_ID_1,
+      idempotencyKey: baseIntent.idempotencyKey,
+    });
+    expect(authorizationStore.consumeCalls).toBe(0);
+    expect(mockedClient.getWalletTokenBalance).not.toHaveBeenCalled();
+    expect(mockedClient.createTransaction).toHaveBeenCalledWith(
+      expect.objectContaining({ idempotencyKey: baseIntent.idempotencyKey }),
+    );
   });
 
   it("rejects a duplicate submission without touching the network again", async () => {

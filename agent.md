@@ -61,7 +61,7 @@ Issue #32 implements a small, server-only Verification Agent orchestrator for th
 - no silent fallback from live to mock mode, no stored OpenAI response, and no fabricated Arc hash/confirmation/explorer output in mock mode;
 - authenticated API access, unique live invocation keys, and a bounded per-actor live request rate;
 - server-owned run lookup, authenticated actor binding, proposal-expiry enforcement, and proposal-key deduplication;
-- durable compare-and-consume authorization for the bounded single-instance Arc Testnet demo, followed by the typed Circle adapter's separate prepare, submit, and poll operations;
+- a source-wallet-bound canonical intent hash displayed before approval, durable compare-and-consume authorization for the bounded single-instance Arc Testnet demo, and idempotent recovery or resumed polling if Circle accepted a request before the server recorded its response;
 - truthful `SUBMITTED`, `CONFIRMED`, and `FAILED` UI states, with a real explorer link only after Circle returns a confirmed Arc transaction hash.
 
 This runtime remains separate from Issue #13 identity governance and Issue #8 ERC-8183 settlement lifecycle ownership.

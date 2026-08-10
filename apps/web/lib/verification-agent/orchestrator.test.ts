@@ -60,7 +60,7 @@ describe("runVerificationAgent", () => {
   it("accepts a validated founder correction before preparing a proposal", async () => {
     const initial = await runVerificationAgent({ now: "2026-01-21T00:00:00.000Z" });
     const scenario = createPawPovAiEvidenceScenario();
-    const result = resumeVerificationAgentAfterFounderCorrection({
+    const result = await resumeVerificationAgentAfterFounderCorrection({
       run: initial,
       authenticatedActorId: "founder:fictional",
       receipt: scenario.recoveryReceipt,
@@ -174,6 +174,7 @@ describe("handoffApprovedProposal", () => {
         decidedAt: "2026-01-21T00:00:00.000Z",
         expiresAt: "2026-01-21T00:00:01.000Z",
         idempotencyKey: run.proposal!.idempotencyKey,
+        exactIntentHash: run.proposal!.exactIntentHash,
       },
       authenticatedActorId: "founder:fictional",
       now: "2026-01-21T00:00:02.000Z",
@@ -195,6 +196,7 @@ describe("handoffApprovedProposal", () => {
       decidedAt: run.proposal!.preparedAt,
       expiresAt: run.proposal!.expiresAt,
       idempotencyKey: run.proposal!.idempotencyKey,
+      exactIntentHash: run.proposal!.exactIntentHash,
     };
 
     saveVerificationAgentRun({ authorizedActorId: "founder:fictional", run });
@@ -222,6 +224,29 @@ describe("handoffApprovedProposal", () => {
     ).toBe(false);
   });
 
+  it("rejects approval for a different canonical source-wallet intent", async () => {
+    const run = await createApprovalRun();
+    const result = handoffApprovedProposal({
+      run,
+      approval: {
+        approvalId: "approval:wrong-hash",
+        intentId: run.proposal!.intentId,
+        authorizedActorRole: "FOUNDER",
+        authorizedActorId: "founder:fictional",
+        decision: "APPROVED",
+        decidedAt: run.proposal!.preparedAt,
+        expiresAt: run.proposal!.expiresAt,
+        idempotencyKey: run.proposal!.idempotencyKey,
+        exactIntentHash: `sha256:${"0".repeat(64)}`,
+      },
+      authenticatedActorId: "founder:fictional",
+      now: "2026-01-21T00:01:01.000Z",
+    });
+
+    expect(result.status).toBe("HANDOFF_REJECTED");
+    expect(result.activityTrace.map((event) => event.code)).not.toContain("APPROVAL_ACCEPTED");
+  });
+
   it("keeps consumed proposal keys after the approved run expires", async () => {
     vi.useFakeTimers();
     try {
@@ -236,6 +261,7 @@ describe("handoffApprovedProposal", () => {
         decidedAt: firstRun.proposal!.preparedAt,
         expiresAt: firstRun.proposal!.expiresAt,
         idempotencyKey: firstRun.proposal!.idempotencyKey,
+        exactIntentHash: firstRun.proposal!.exactIntentHash,
       };
 
       saveVerificationAgentRun({
@@ -262,6 +288,7 @@ describe("handoffApprovedProposal", () => {
       const laterApproval = {
         ...firstApproval,
         approvalId: "approval:after-expiry",
+        exactIntentHash: laterRun.proposal!.exactIntentHash,
       };
       saveVerificationAgentRun({
         authorizedActorId: "founder:fictional",
@@ -300,6 +327,7 @@ describe("handoffApprovedProposal", () => {
         decidedAt: "2026-01-21T00:16:00.000Z",
         expiresAt: "2026-01-21T01:00:00.000Z",
         idempotencyKey: run.proposal!.idempotencyKey,
+        exactIntentHash: run.proposal!.exactIntentHash,
       },
       authenticatedActorId: "founder:fictional",
       now: "2026-01-21T00:16:00.000Z",
@@ -321,6 +349,7 @@ describe("handoffApprovedProposal", () => {
         decidedAt: "2026-01-21T00:00:59.999Z",
         expiresAt: run.proposal!.expiresAt,
         idempotencyKey: run.proposal!.idempotencyKey,
+        exactIntentHash: run.proposal!.exactIntentHash,
       },
       authenticatedActorId: "founder:fictional",
       now: "2026-01-21T00:01:01.000Z",
@@ -343,7 +372,7 @@ describe("handoffApprovedProposal", () => {
 async function createApprovalRun() {
   const initial = await runVerificationAgent({ now: "2026-01-21T00:00:00.000Z" });
   const scenario = createPawPovAiEvidenceScenario();
-  return resumeVerificationAgentAfterFounderCorrection({
+  return await resumeVerificationAgentAfterFounderCorrection({
     run: initial,
     authenticatedActorId: "founder:fictional",
     receipt: scenario.recoveryReceipt,

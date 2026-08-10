@@ -91,7 +91,7 @@ export default async function ActivityPage() {
       now: now.toISOString(),
     });
     const scenario = createPawPovAiEvidenceScenario();
-    run = resumeVerificationAgentAfterFounderCorrection({
+    run = await resumeVerificationAgentAfterFounderCorrection({
       run: initialRun,
       authenticatedActorId: scenario.authorizedFounder.actorId,
       receipt: scenario.recoveryReceipt,
@@ -165,6 +165,18 @@ export default async function ActivityPage() {
                 <dt className="text-muted-foreground">Destination</dt>
                 <dd className="break-all font-mono text-xs text-foreground">
                   {run.proposal.destination}
+                </dd>
+              </div>
+              <div className="sm:col-span-2">
+                <dt className="text-muted-foreground">Approved source wallet</dt>
+                <dd className="break-all font-mono text-xs text-foreground">
+                  {run.proposal.sourceWalletId}
+                </dd>
+              </div>
+              <div className="sm:col-span-2">
+                <dt className="text-muted-foreground">Exact intent hash</dt>
+                <dd className="break-all font-mono text-xs text-foreground">
+                  {run.proposal.exactIntentHash}
                 </dd>
               </div>
               <div>

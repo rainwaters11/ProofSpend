@@ -67,8 +67,10 @@ export async function buildLiveTransferAuthorization(args: {
     run.status !== "APPROVAL_REQUIRED" ||
     run.proposal === null ||
     run.proposal.amount.atomicUnits !== "1000000" ||
+    run.proposal.sourceWalletId !== environment.CIRCLE_SOURCE_WALLET_ID ||
     run.proposal.destination.toLowerCase() !==
-      environment.CIRCLE_DESTINATION_WALLET_ADDRESS.toLowerCase()
+      environment.CIRCLE_DESTINATION_WALLET_ADDRESS.toLowerCase() ||
+    approval.exactIntentHash !== run.proposal.exactIntentHash
   ) {
     throw new Error("LIVE_HANDOFF_PROPOSAL_INVALID");
   }
@@ -88,14 +90,17 @@ export async function buildLiveTransferAuthorization(args: {
     operationType: "SETTLEMENT",
     protocolTarget: {
       kind: "DESTINATION",
-      destination: environment.CIRCLE_DESTINATION_WALLET_ADDRESS,
-      sourceWalletId: environment.CIRCLE_SOURCE_WALLET_ID,
+      destination: run.proposal.destination,
+      sourceWalletId: run.proposal.sourceWalletId,
       network: "ARC_TESTNET",
       chainId: ARC_TESTNET_CHAIN_ID,
       isMock: false,
     },
   });
   const exactIntentHash = await hashCanonicalExecutionIntent(executionIntent);
+  if (exactIntentHash !== run.proposal.exactIntentHash) {
+    throw new Error("LIVE_HANDOFF_INTENT_HASH_MISMATCH");
+  }
 
   const approvalRecord = ApprovalRecordSchema.parse({
     id: approval.approvalId,
@@ -132,7 +137,7 @@ export async function buildLiveTransferAuthorization(args: {
     projectId: seed.project.id,
     releaseRequestId: RELEASE_REQUEST_ID,
     intentId: run.proposal.intentId,
-    destinationReference: environment.CIRCLE_DESTINATION_WALLET_ADDRESS,
+    destinationReference: run.proposal.destination,
     approvalId: approval.approvalId,
     approvalBindingId: bindingId,
     reconciliationId: null,
@@ -181,8 +186,8 @@ export async function buildLiveTransferAuthorization(args: {
       asset: "USDC",
       tokenContractAddress: ARC_TESTNET_USDC_ADDRESS,
       amountAtomic: run.proposal.amount.atomicUnits,
-      sourceWalletId: environment.CIRCLE_SOURCE_WALLET_ID,
-      destinationAddress: environment.CIRCLE_DESTINATION_WALLET_ADDRESS,
+      sourceWalletId: run.proposal.sourceWalletId,
+      destinationAddress: run.proposal.destination,
     },
     authorization: { approval: approvalRecord, release, transaction, binding },
   };
@@ -265,6 +270,17 @@ function handoffResult(
   });
 }
 
+function bindResultToIntent(
+  intent: ApprovedTransferIntent,
+  result: TransferResult,
+): TransferResult {
+  return {
+    ...result,
+    proposalId: intent.proposalId,
+    idempotencyKey: intent.idempotencyKey,
+  };
+}
+
 export async function executeLiveCircleHandoff(args: {
   run: VerificationAgentResult;
   approval: ApprovalDecision;
@@ -276,7 +292,17 @@ export async function executeLiveCircleHandoff(args: {
     args.dependencies?.store ??
     new FileTransferAuthorizationStore(args.environment.PROOFSPEND_AUTH_STORE_PATH);
   const { intent, authorization } = await buildLiveTransferAuthorization(args);
-  if (!(await store.persist(authorization))) {
+  const created = await store.persist(authorization);
+  const persistedAuthorization = created ? authorization : await store.load(intent);
+  if (persistedAuthorization === null) throw new Error("HANDOFF_DUPLICATE");
+  const existingResult = created ? null : await store.loadResult(intent.idempotencyKey);
+  if (existingResult?.status === "CONFIRMED" || existingResult?.status === "FAILED") {
+    throw new Error("HANDOFF_DUPLICATE");
+  }
+  if (
+    !created &&
+    persistedAuthorization.binding.status !== "CONSUMED"
+  ) {
     throw new Error("HANDOFF_DUPLICATE");
   }
 
@@ -286,20 +312,35 @@ export async function executeLiveCircleHandoff(args: {
   const trace = structuredClone(args.initialActivityTrace);
   let lastResult: TransferResult | null = null;
   const finish = async (transfer: TransferResult): Promise<HandoffResult> => {
-    const result = handoffResult(transfer, trace);
+    const result = handoffResult(bindResultToIntent(intent, transfer), trace);
     await store.recordHandoff(result);
     return result;
   };
   try {
-    const prepared = await provider.prepareTransfer(intent);
-    lastResult = prepared;
-    appendTransferEvent(trace, args.run.runId, prepared);
-    await store.recordResult(prepared);
-    if (prepared.status !== "PREPARED") {
-      return finish(prepared);
+    if (!created && existingResult?.status === "SUBMITTED" && existingResult.providerOperationId) {
+      lastResult = bindResultToIntent(intent, existingResult);
+      appendTransferEvent(trace, args.run.runId, lastResult);
+      const terminal = bindResultToIntent(
+        intent,
+        await provider.pollTransfer(intent, existingResult.providerOperationId),
+      );
+      lastResult = terminal;
+      appendTransferEvent(trace, args.run.runId, terminal);
+      await store.recordResult(terminal);
+      return finish(terminal);
     }
 
-    const submitted = await provider.submitTransfer(intent);
+    if (created) {
+      const prepared = bindResultToIntent(intent, await provider.prepareTransfer(intent));
+      lastResult = prepared;
+      appendTransferEvent(trace, args.run.runId, prepared);
+      await store.recordResult(prepared);
+      if (prepared.status !== "PREPARED") {
+        return finish(prepared);
+      }
+    }
+
+    const submitted = bindResultToIntent(intent, await provider.submitTransfer(intent));
     lastResult = submitted;
     appendTransferEvent(trace, args.run.runId, submitted);
     await store.recordResult(submitted);
@@ -307,27 +348,37 @@ export async function executeLiveCircleHandoff(args: {
       return finish(submitted);
     }
 
-    const terminal = await provider.pollTransfer(intent, submitted.providerOperationId);
+    const terminal = bindResultToIntent(
+      intent,
+      await provider.pollTransfer(intent, submitted.providerOperationId),
+    );
     lastResult = terminal;
     appendTransferEvent(trace, args.run.runId, terminal);
     await store.recordResult(terminal);
     return finish(terminal);
   } catch {
-    const failed: TransferResult = {
+    const currentAuthorization = await store.load(intent);
+    const submissionMayHaveBeenAccepted =
+      currentAuthorization?.binding.status === "CONSUMED";
+    const outcome: TransferResult = {
       proposalId: intent.proposalId,
       idempotencyKey: intent.idempotencyKey,
       mode: "ARC_TESTNET",
-      status: "FAILED",
-      failureCode: "AUTHORIZATION_UNAVAILABLE",
-      failureMessage: "The Circle transfer failed closed. No confirmation is claimed.",
+      status: submissionMayHaveBeenAccepted ? "SUBMITTED" : "FAILED",
+      failureCode: submissionMayHaveBeenAccepted
+        ? "POLLING_TIMEOUT"
+        : "AUTHORIZATION_UNAVAILABLE",
+      failureMessage: submissionMayHaveBeenAccepted
+        ? "Circle submission needs recovery. Retry uses the same idempotency key or resumes polling; no confirmation is claimed."
+        : "The Circle transfer failed closed. No confirmation is claimed.",
       providerOperationId: lastResult?.providerOperationId,
       transactionHash: lastResult?.transactionHash,
       explorerUrl: lastResult?.explorerUrl,
       polledAt: new Date().toISOString(),
     };
-    appendTransferEvent(trace, args.run.runId, failed);
-    await store.recordResult(failed);
-    return finish(failed);
+    appendTransferEvent(trace, args.run.runId, outcome);
+    await store.recordResult(outcome);
+    return finish(outcome);
   }
 }
 

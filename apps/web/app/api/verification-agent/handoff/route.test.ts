@@ -67,6 +67,7 @@ describe("POST /api/verification-agent/handoff", () => {
           decidedAt,
           expiresAt: run.proposal.expiresAt,
           idempotencyKey: run.proposal.idempotencyKey,
+          exactIntentHash: run.proposal.exactIntentHash,
         },
       }),
     });
@@ -119,6 +120,7 @@ describe("POST /api/verification-agent/handoff", () => {
           decidedAt,
           expiresAt: run.proposal.expiresAt,
           idempotencyKey: run.proposal.idempotencyKey,
+          exactIntentHash: run.proposal.exactIntentHash,
         },
       }),
     });
@@ -200,6 +202,7 @@ describe("POST /api/verification-agent/handoff", () => {
             decidedAt: new Date().toISOString(),
             expiresAt: run.proposal.expiresAt,
             idempotencyKey: run.proposal.idempotencyKey,
+            exactIntentHash: run.proposal.exactIntentHash,
           },
         }),
       }),
@@ -238,6 +241,7 @@ describe("POST /api/verification-agent/handoff", () => {
               decidedAt: new Date().toISOString(),
               expiresAt: run.proposal.expiresAt,
               idempotencyKey: run.proposal.idempotencyKey,
+              exactIntentHash: run.proposal.exactIntentHash,
             },
           }),
         }),
