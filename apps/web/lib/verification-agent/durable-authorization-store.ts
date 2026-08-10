@@ -1,7 +1,7 @@
 import "server-only";
 
 import { randomUUID } from "node:crypto";
-import { mkdir, open, readFile, rename, unlink } from "node:fs/promises";
+import { mkdir, open, readFile, rename, stat, unlink } from "node:fs/promises";
 import { dirname } from "node:path";
 
 import {
@@ -87,6 +87,22 @@ export type DurableReconciliationRecord = z.infer<
   typeof DurableReconciliationRecordSchema
 >;
 
+const LockMetadataSchema = z
+  .object({
+    ownerToken: z.string().uuid(),
+    pid: z.number().int().positive(),
+    createdAt: z.string().datetime(),
+  })
+  .strict();
+
+type LockMetadata = z.infer<typeof LockMetadataSchema>;
+
+type StaleLockSnapshot = {
+  device: number;
+  inode: number;
+  raw: string;
+};
+
 const LegacyDurableStateSchema = z
   .object({
     version: z.literal(1),
@@ -121,6 +137,7 @@ const EMPTY_STATE: DurableState = {
 
 const LOCK_RETRIES = 100;
 const LOCK_RETRY_MS = 10;
+const LOCK_STALE_MS = 30_000;
 
 function referencesMatch(
   snapshot: PersistedTransferAuthorization,
@@ -180,6 +197,24 @@ function migrateState(value: unknown): DurableState {
 }
 
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+function parseLockMetadata(raw: string): LockMetadata | null {
+  try {
+    const parsed = LockMetadataSchema.safeParse(JSON.parse(raw));
+    return parsed.success ? parsed.data : null;
+  } catch {
+    return null;
+  }
+}
+
+function processIsAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== "ESRCH";
+  }
+}
 
 export class FileTransferAuthorizationStore implements TransferAuthorizationStore {
   readonly path: string;
@@ -385,22 +420,121 @@ export class FileTransferAuthorizationStore implements TransferAuthorizationStor
     await rename(temporaryPath, this.path);
   }
 
+  private async inspectStaleLock(): Promise<StaleLockSnapshot | null> {
+    try {
+      const [lockStat, raw] = await Promise.all([
+        stat(this.lockPath),
+        readFile(this.lockPath, "utf8"),
+      ]);
+      const metadata = parseLockMetadata(raw);
+      const createdAt = metadata === null ? lockStat.mtimeMs : Date.parse(metadata.createdAt);
+      if (Date.now() - createdAt < LOCK_STALE_MS) {
+        return null;
+      }
+      if (metadata !== null && processIsAlive(metadata.pid)) {
+        return null;
+      }
+      return {
+        device: lockStat.dev,
+        inode: lockStat.ino,
+        raw,
+      };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        return null;
+      }
+      throw error;
+    }
+  }
+
+  private async reclaimStaleLock(): Promise<boolean> {
+    const snapshot = await this.inspectStaleLock();
+    if (snapshot === null) {
+      return false;
+    }
+    const quarantinePath = `${this.lockPath}.stale.${randomUUID()}`;
+    try {
+      await rename(this.lockPath, quarantinePath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        return false;
+      }
+      throw error;
+    }
+
+    const [quarantinedStat, quarantinedRaw] = await Promise.all([
+      stat(quarantinePath),
+      readFile(quarantinePath, "utf8"),
+    ]);
+    if (
+      quarantinedStat.dev !== snapshot.device ||
+      quarantinedStat.ino !== snapshot.inode ||
+      quarantinedRaw !== snapshot.raw
+    ) {
+      try {
+        await rename(quarantinePath, this.lockPath);
+      } catch {
+        throw new Error("AUTHORIZATION_STORE_LOCK_RECLAIM_RACE");
+      }
+      return false;
+    }
+    await unlink(quarantinePath);
+    return true;
+  }
+
+  private async releaseOwnedLock(ownerToken: string): Promise<void> {
+    try {
+      const metadata = parseLockMetadata(await readFile(this.lockPath, "utf8"));
+      if (metadata?.ownerToken === ownerToken) {
+        await unlink(this.lockPath);
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw error;
+      }
+    }
+  }
+
   private async withLock<T>(operation: () => Promise<T>): Promise<T> {
     await mkdir(dirname(this.path), { recursive: true, mode: 0o700 });
+    const ownerToken = randomUUID();
     for (let attempt = 0; attempt < LOCK_RETRIES; attempt += 1) {
+      let lock;
       try {
-        const lock = await open(this.lockPath, "wx", 0o600);
-        try {
-          return await operation();
-        } finally {
-          await lock.close();
-          await unlink(this.lockPath).catch(() => undefined);
-        }
+        lock = await open(this.lockPath, "wx", 0o600);
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
           throw error;
         }
-        await delay(LOCK_RETRY_MS);
+        if (!(await this.reclaimStaleLock())) {
+          await delay(LOCK_RETRY_MS);
+        }
+        continue;
+      }
+
+      try {
+        await lock.writeFile(
+          JSON.stringify(
+            LockMetadataSchema.parse({
+              ownerToken,
+              pid: process.pid,
+              createdAt: new Date().toISOString(),
+            }),
+          ),
+          "utf8",
+        );
+        await lock.sync();
+      } catch (error) {
+        await lock.close();
+        await unlink(this.lockPath).catch(() => undefined);
+        throw error;
+      }
+
+      try {
+        return await operation();
+      } finally {
+        await lock.close();
+        await this.releaseOwnedLock(ownerToken);
       }
     }
     throw new Error("AUTHORIZATION_STORE_LOCK_TIMEOUT");
