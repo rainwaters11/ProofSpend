@@ -4,6 +4,7 @@ import { createPawPovAiEvidenceScenario } from "@proofspend/domain";
 import {
   handoffApprovedProposal,
   persistApprovedHandoff,
+  reserveApprovedHandoff,
   resetVerificationAgentStoreForTest,
   resumeVerificationAgentAfterFounderCorrection,
   runVerificationAgent,
@@ -208,6 +209,7 @@ describe("handoffApprovedProposal", () => {
     });
 
     expect(first.status).toBe("HANDOFF_READY");
+    expect(reserveApprovedHandoff({ runId: run.runId, approval })).toBe(true);
     expect(
       persistApprovedHandoff({
         runId: run.runId,
@@ -264,6 +266,7 @@ describe("handoffApprovedProposal", () => {
     };
 
     saveVerificationAgentRun({ authorizedActorId: "founder:fictional", run });
+    expect(reserveApprovedHandoff({ runId: run.runId, approval })).toBe(true);
     expect(
       persistApprovedHandoff({ runId: run.runId, approval, result: submitted }),
     ).toBe(true);
@@ -274,6 +277,7 @@ describe("handoffApprovedProposal", () => {
         result: confirmed,
       }),
     ).toBe(false);
+    expect(reserveApprovedHandoff({ runId: run.runId, approval })).toBe(true);
     expect(
       persistApprovedHandoff({ runId: run.runId, approval, result: confirmed }),
     ).toBe(true);
@@ -334,6 +338,9 @@ describe("handoffApprovedProposal", () => {
       });
       expect(firstResult.status).toBe("HANDOFF_READY");
       expect(
+        reserveApprovedHandoff({ runId: firstRun.runId, approval: firstApproval }),
+      ).toBe(true);
+      expect(
         persistApprovedHandoff({
           runId: firstRun.runId,
           approval: firstApproval,
@@ -360,6 +367,9 @@ describe("handoffApprovedProposal", () => {
       });
 
       expect(laterResult.status).toBe("HANDOFF_READY");
+      expect(
+        reserveApprovedHandoff({ runId: laterRun.runId, approval: laterApproval }),
+      ).toBe(false);
       expect(
         persistApprovedHandoff({
           runId: laterRun.runId,
