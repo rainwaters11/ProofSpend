@@ -18,11 +18,19 @@ function result(
     adapterMode: "arc-testnet",
     execution: {
       state,
+      idempotencyKey: "handoff:panel-test",
       providerOperationId: "11111111-1111-4111-8111-111111111111",
       transactionHash: confirmed ? `0x${"1a".repeat(32)}` : null,
       confirmation: confirmed ? "ARC_TESTNET_CONFIRMED" : null,
       explorerUrl: confirmed
         ? `https://testnet.arcscan.app/tx/0x${"1a".repeat(32)}`
+        : null,
+      reconciliation: confirmed
+        ? {
+            state: "RECONCILED",
+            reconciliationId: "reconciliation:panel-test",
+            reconciledAt: "2026-08-09T12:00:01.000Z",
+          }
         : null,
       failureCode: state === "FAILED" ? "AUTHORIZATION_UNAVAILABLE" : null,
       failureMessage:
@@ -61,6 +69,9 @@ describe("LiveHandoffPanel", () => {
     const markup = renderToStaticMarkup(<LiveHandoffPanel result={result("CONFIRMED")} />);
     expect(markup).toContain("Confirmed on Arc Testnet");
     expect(markup).toContain("https://testnet.arcscan.app/tx/0x");
+    expect(markup).toContain("Reconciled");
+    expect(markup).toContain("reconciliation:panel-test");
+    expect(markup).toContain("2026-08-09T12:00:01.000Z");
   });
 
   it("shows failed closed without a confirmation or explorer link", () => {
