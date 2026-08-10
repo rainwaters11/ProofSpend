@@ -10,12 +10,14 @@ import {
   ReleaseRequestSchema,
   TransactionRecordSchema,
 } from "@proofspend/domain";
-import type {
-  PersistedTransferAuthorization,
-  TransferAuthorizationReferences,
-  TransferAuthorizationStore,
-  ConsumeTransferAuthorizationInput,
-  TransferResult,
+import {
+  ARC_TESTNET_USDC_ADDRESS,
+  type ApprovedTransferIntent,
+  type PersistedTransferAuthorization,
+  type TransferAuthorizationReferences,
+  type TransferAuthorizationStore,
+  type ConsumeTransferAuthorizationInput,
+  type TransferResult,
 } from "@proofspend/circle-adapter";
 import { z } from "zod";
 
@@ -123,6 +125,19 @@ const DurableStateSchema = z
     latestResultKey: z.string().nullable(),
     handoffHistory: z.array(HandoffResultSchema),
     reconciliations: z.array(DurableReconciliationRecordSchema),
+    retryClaims: z
+      .record(
+        z.string(),
+        z
+          .object({
+            claimToken: z.string().uuid(),
+            proposalId: z.string().min(1),
+            authorizationBindingId: z.string().min(1),
+            claimedAt: z.string().datetime(),
+          })
+          .strict(),
+      )
+      .default({}),
   })
   .strict();
 
@@ -135,6 +150,7 @@ const EMPTY_STATE: DurableState = {
   latestResultKey: null,
   handoffHistory: [],
   reconciliations: [],
+  retryClaims: {},
 };
 
 const LOCK_RETRIES = 100;
@@ -152,6 +168,30 @@ function referencesMatch(
     snapshot.binding.id === references.authorizationBindingId &&
     snapshot.transaction.id === references.transactionRecordId &&
     snapshot.binding.intentId === references.intentId
+  );
+}
+
+function authorizationMatchesIntent(
+  authorization: PersistedTransferAuthorization,
+  intent: ApprovedTransferIntent,
+): boolean {
+  const executionIntent = authorization.binding.executionIntent;
+  const target = executionIntent.protocolTarget;
+  return (
+    referencesMatch(authorization, intent) &&
+    authorization.transaction.idempotencyKey === intent.idempotencyKey &&
+    authorization.release.id === intent.proposalId &&
+    executionIntent.atomicAmount === intent.amountAtomic &&
+    executionIntent.asset === intent.asset &&
+    intent.tokenContractAddress.toLowerCase() ===
+      ARC_TESTNET_USDC_ADDRESS.toLowerCase() &&
+    target.kind === "DESTINATION" &&
+    !target.isMock &&
+    target.network === "ARC_TESTNET" &&
+    intent.network === "ARC-TESTNET" &&
+    target.chainId === intent.chainId &&
+    target.sourceWalletId === intent.sourceWalletId &&
+    target.destination.toLowerCase() === intent.destinationAddress.toLowerCase()
   );
 }
 
@@ -213,6 +253,7 @@ function migrateState(value: unknown): DurableState {
     handoffHistory:
       legacy.data.latestHandoff === null ? [] : [legacy.data.latestHandoff],
     reconciliations: [],
+    retryClaims: {},
   });
 }
 
@@ -381,6 +422,83 @@ export class FileTransferAuthorizationStore implements TransferAuthorizationStor
         state.latestResultKey = idempotencyKey;
         await this.writeState(state, ownerToken);
       }
+    });
+  }
+
+  async claimPreSubmissionRetry(
+    intent: ApprovedTransferIntent,
+  ): Promise<string | null> {
+    return this.withLock(async (ownerToken) => {
+      const state = await this.readState();
+      const authorization = state.authorizations[intent.authorizationBindingId];
+      const history = state.resultHistory[intent.idempotencyKey] ?? [];
+      const previous = history.at(-1);
+      if (
+        authorization === undefined ||
+        !authorizationMatchesIntent(authorization, intent) ||
+        authorization.binding.status !== "ACTIVE" ||
+        previous?.status !== "FAILED" ||
+        previous.providerOperationId !== undefined ||
+        history.some((result) => result.providerOperationId !== undefined) ||
+        state.retryClaims[intent.idempotencyKey] !== undefined
+      ) {
+        return null;
+      }
+      const claimToken = randomUUID();
+      state.retryClaims[intent.idempotencyKey] = {
+        claimToken,
+        proposalId: intent.proposalId,
+        authorizationBindingId: intent.authorizationBindingId,
+        claimedAt: new Date().toISOString(),
+      };
+      await this.writeState(state, ownerToken);
+      return claimToken;
+    });
+  }
+
+  async completePreSubmissionRetryClaim(
+    claimToken: string,
+    result: TransferResult,
+  ): Promise<void> {
+    const parsed = TransferResultSchema.parse(structuredClone(result));
+    if (!parsed.idempotencyKey) {
+      throw new Error("TRANSFER_RESULT_IDEMPOTENCY_KEY_REQUIRED");
+    }
+    const idempotencyKey = parsed.idempotencyKey;
+    await this.withLock(async (ownerToken) => {
+      const state = await this.readState();
+      const claim = state.retryClaims[idempotencyKey];
+      const history = state.resultHistory[idempotencyKey] ?? [];
+      const authorization = Object.values(state.authorizations).find(
+        (candidate) => candidate.transaction.idempotencyKey === parsed.idempotencyKey,
+      );
+      if (
+        claim?.claimToken !== claimToken ||
+        claim.proposalId !== parsed.proposalId ||
+        claim.authorizationBindingId !== authorization?.binding.id ||
+        !["PREPARED", "FAILED"].includes(parsed.status) ||
+        parsed.providerOperationId !== undefined
+      ) {
+        throw new Error("PRE_SUBMISSION_RETRY_CLAIM_LOST");
+      }
+      if (parsed.status === "PREPARED") {
+        if (!canAppendResult(history, parsed, authorization)) {
+          throw new Error("TRANSFER_RESULT_TRANSITION_INVALID");
+        }
+      } else {
+        const previous = history.at(-1);
+        if (
+          previous?.status !== "FAILED" ||
+          history.some((candidate) => candidate.providerOperationId !== undefined) ||
+          authorization?.binding.status !== "ACTIVE"
+        ) {
+          throw new Error("TRANSFER_RESULT_TERMINAL");
+        }
+      }
+      state.resultHistory[idempotencyKey] = [...history, parsed];
+      state.latestResultKey = idempotencyKey;
+      delete state.retryClaims[idempotencyKey];
+      await this.writeState(state, ownerToken);
     });
   }
 

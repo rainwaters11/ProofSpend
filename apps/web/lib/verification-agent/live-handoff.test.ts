@@ -334,6 +334,97 @@ describe("executeLiveCircleHandoff", () => {
     expect(history[0]).not.toHaveProperty("providerOperationId");
   });
 
+  it("atomically claims a pre-submission retry across independent requests", async () => {
+    const context = await liveContext();
+    await executeLiveCircleHandoff({
+      run: context.run,
+      approval: context.approval,
+      environment: context.environment,
+      initialActivityTrace: context.run.activityTrace,
+      dependencies: {
+        store: context.store,
+        providerFactory: () =>
+          fakeProvider([], {
+            prepareTransfer: async () => {
+              throw new Error("temporary provider outage");
+            },
+          }),
+      },
+    });
+
+    let releasePreparation!: () => void;
+    const preparationReleased = new Promise<void>((resolve) => {
+      releasePreparation = resolve;
+    });
+    let preparationStarted!: () => void;
+    const preparationDidStart = new Promise<void>((resolve) => {
+      preparationStarted = resolve;
+    });
+    const authorizationConsumptions = vi.fn();
+    const providerSubmissions = vi.fn();
+    const providerFactory = vi.fn(
+      ({ store }: { store: FileTransferAuthorizationStore }) => {
+        const provider = fakeProvider([]);
+        return fakeProvider([], {
+          async prepareTransfer(intent) {
+            preparationStarted();
+            await preparationReleased;
+            return provider.prepareTransfer(intent);
+          },
+          async submitTransfer(intent) {
+            providerSubmissions();
+            const authorization = await store.load(intent);
+            if (authorization === null) throw new Error("authorization missing");
+            const consumed = await store.consume({
+              releaseRequestId: intent.releaseRequestId,
+              approvalId: intent.approvalId,
+              authorizationBindingId: intent.authorizationBindingId,
+              transactionRecordId: intent.transactionRecordId,
+              intentId: intent.intentId,
+              expectedExactIntentHash: authorization.binding.exactIntentHash,
+              idempotencyKey: intent.idempotencyKey,
+              asOf: "2026-08-09T00:01:02.000Z",
+            });
+            if (consumed === null) throw new Error("authorization unavailable");
+            authorizationConsumptions();
+            return provider.submitTransfer(intent);
+          },
+        });
+      },
+    );
+    const request = (store: FileTransferAuthorizationStore) =>
+      executeLiveCircleHandoff({
+        run: context.run,
+        approval: context.approval,
+        environment: context.environment,
+        initialActivityTrace: context.run.activityTrace,
+        dependencies: { store, providerFactory },
+      });
+
+    const winner = request(
+      new FileTransferAuthorizationStore(context.environment.PROOFSPEND_AUTH_STORE_PATH),
+    );
+    await preparationDidStart;
+    const loser = request(
+      new FileTransferAuthorizationStore(context.environment.PROOFSPEND_AUTH_STORE_PATH),
+    );
+    await expect(loser).rejects.toThrow("HANDOFF_DUPLICATE");
+    releasePreparation();
+    await expect(winner).resolves.toMatchObject({ status: "HANDOFF_CONFIRMED" });
+
+    expect(providerFactory).toHaveBeenCalledTimes(1);
+    expect(authorizationConsumptions).toHaveBeenCalledTimes(1);
+    expect(providerSubmissions).toHaveBeenCalledTimes(1);
+    await expect(
+      context.store.loadResultHistory(context.run.proposal!.idempotencyKey),
+    ).resolves.toMatchObject([
+      { status: "FAILED" },
+      { status: "PREPARED" },
+      { status: "SUBMITTED" },
+      { status: "CONFIRMED" },
+    ]);
+  });
+
   it("rejects a retry after a failed submitted operation exists", async () => {
     const context = await liveContext();
     const operationId = "11111111-1111-4111-8111-111111111111";

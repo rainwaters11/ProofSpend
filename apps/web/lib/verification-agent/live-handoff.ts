@@ -394,6 +394,14 @@ async function executeBoundLiveCircleHandoff(
     existingResult.providerOperationId === undefined &&
     existingHistory.every((result) => result.providerOperationId === undefined) &&
     persistedAuthorization.binding.status === "ACTIVE";
+  const retryClaimToken = canRetryPreSubmissionFailure
+    ? await store.claimPreSubmissionRetry(intent)
+    : null;
+  let retryClaimCompleted = false;
+
+  if (canRetryPreSubmissionFailure && retryClaimToken === null) {
+    throw new Error("HANDOFF_DUPLICATE");
+  }
 
   if (
     existingResult?.status === "CONFIRMED" ||
@@ -438,7 +446,12 @@ async function executeBoundLiveCircleHandoff(
       const prepared = bindResultToIntent(intent, await provider.prepareTransfer(intent));
       lastResult = prepared;
       appendTransferEvent(trace, args.runId, prepared);
-      await store.recordResult(prepared);
+      if (retryClaimToken === null) {
+        await store.recordResult(prepared);
+      } else {
+        await store.completePreSubmissionRetryClaim(retryClaimToken, prepared);
+        retryClaimCompleted = true;
+      }
       if (prepared.status !== "PREPARED") {
         return finish(prepared);
       }
@@ -460,7 +473,7 @@ async function executeBoundLiveCircleHandoff(
     appendTransferEvent(trace, args.runId, terminal);
     await store.recordResult(terminal);
     return finish(terminal);
-  } catch {
+  } catch (error) {
     const currentAuthorization = await store.load(intent);
     const submissionMayHaveBeenAccepted =
       currentAuthorization?.binding.status === "CONSUMED";
@@ -481,7 +494,15 @@ async function executeBoundLiveCircleHandoff(
       polledAt: new Date().toISOString(),
     };
     appendTransferEvent(trace, args.runId, outcome);
-    await store.recordResult(outcome);
+    if (retryClaimToken !== null && !retryClaimCompleted && lastResult !== null) {
+      throw error;
+    }
+    if (retryClaimToken !== null && !retryClaimCompleted) {
+      await store.completePreSubmissionRetryClaim(retryClaimToken, outcome);
+      retryClaimCompleted = true;
+    } else {
+      await store.recordResult(outcome);
+    }
     return finish(outcome);
   }
 }
