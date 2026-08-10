@@ -159,12 +159,29 @@ function sameValue(left: unknown, right: unknown): boolean {
   return JSON.stringify(left) === JSON.stringify(right);
 }
 
-function canAppendResult(history: TransferResult[], next: TransferResult): boolean {
+function canAppendResult(
+  history: TransferResult[],
+  next: TransferResult,
+  authorization: PersistedTransferAuthorization | undefined,
+): boolean {
   const previous = history.at(-1);
   if (previous === undefined || sameValue(previous, next)) {
     return previous === undefined;
   }
-  if (previous.status === "CONFIRMED" || previous.status === "FAILED") {
+  if (previous.status === "FAILED") {
+    const isSafePreSubmissionRetry =
+      next.status === "PREPARED" &&
+      previous.providerOperationId === undefined &&
+      history.every((result) => result.providerOperationId === undefined) &&
+      authorization?.binding.status === "ACTIVE" &&
+      authorization.transaction.idempotencyKey === next.idempotencyKey &&
+      authorization.release.id === next.proposalId;
+    if (isSafePreSubmissionRetry) {
+      return true;
+    }
+    throw new Error("TRANSFER_RESULT_TERMINAL");
+  }
+  if (previous.status === "CONFIRMED") {
     throw new Error("TRANSFER_RESULT_TERMINAL");
   }
   const allowed =
@@ -356,7 +373,10 @@ export class FileTransferAuthorizationStore implements TransferAuthorizationStor
     await this.withLock(async (ownerToken) => {
       const state = await this.readState();
       const history = state.resultHistory[idempotencyKey] ?? [];
-      if (canAppendResult(history, parsed)) {
+      const authorization = Object.values(state.authorizations).find(
+        (candidate) => candidate.transaction.idempotencyKey === idempotencyKey,
+      );
+      if (canAppendResult(history, parsed, authorization)) {
         state.resultHistory[idempotencyKey] = [...history, parsed];
         state.latestResultKey = idempotencyKey;
         await this.writeState(state, ownerToken);

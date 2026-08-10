@@ -386,7 +386,19 @@ async function executeBoundLiveCircleHandoff(
     return result;
   };
 
-  if (existingResult?.status === "CONFIRMED" || existingResult?.status === "FAILED") {
+  const existingHistory = created
+    ? []
+    : await store.loadResultHistory(intent.idempotencyKey);
+  const canRetryPreSubmissionFailure =
+    existingResult?.status === "FAILED" &&
+    existingResult.providerOperationId === undefined &&
+    existingHistory.every((result) => result.providerOperationId === undefined) &&
+    persistedAuthorization.binding.status === "ACTIVE";
+
+  if (
+    existingResult?.status === "CONFIRMED" ||
+    (existingResult?.status === "FAILED" && !canRetryPreSubmissionFailure)
+  ) {
     const reconciliation =
       existingResult.status === "CONFIRMED"
         ? (await store.loadReconciliations(intent.idempotencyKey)).at(-1) ?? null
@@ -422,7 +434,7 @@ async function executeBoundLiveCircleHandoff(
       return finish(terminal);
     }
 
-    if (created) {
+    if (created || canRetryPreSubmissionFailure) {
       const prepared = bindResultToIntent(intent, await provider.prepareTransfer(intent));
       lastResult = prepared;
       appendTransferEvent(trace, args.runId, prepared);

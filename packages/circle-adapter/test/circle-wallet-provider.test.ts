@@ -244,7 +244,7 @@ function makeProvider(overrides: Partial<CircleWalletProviderConfig> = {}): Circ
 function mockWallets(): void {
   mockedClient.getWallet
     .mockResolvedValueOnce({
-      data: { wallet: { id: SOURCE_WALLET_ID, address: "0x0000000000000000000000000000000000000003" } },
+      data: { wallet: { id: SOURCE_WALLET_ID, blockchain: "ARC-TESTNET", address: "0x0000000000000000000000000000000000000003" } },
     })
     .mockResolvedValueOnce({
       data: { wallet: { id: "wallet-dest", address: baseIntent.destinationAddress } },
@@ -554,7 +554,7 @@ describe("CircleWalletProvider", () => {
 
   it("rejects submission when the destination does not match the configured destination wallet", async () => {
     mockedClient.getWallet.mockResolvedValueOnce({
-      data: { wallet: { id: SOURCE_WALLET_ID, address: "0x0000000000000000000000000000000000000003" } },
+      data: { wallet: { id: SOURCE_WALLET_ID, blockchain: "ARC-TESTNET", address: "0x0000000000000000000000000000000000000003" } },
     });
     mockedClient.getWallet.mockResolvedValueOnce({
       data: { wallet: { id: "wallet-dest", address: "0x0000000000000000000000000000000000000002" } },
@@ -585,6 +585,27 @@ describe("CircleWalletProvider", () => {
 
     expect(result.status).toBe("FAILED");
     expect(result.failureCode).toBe("WALLET_MISMATCH");
+    expect(mockedClient.createTransaction).not.toHaveBeenCalled();
+  });
+
+  it("rejects a non-Arc source wallet before authorization consumption or value movement", async () => {
+    const authorizationStore = new FakeAuthorizationStore();
+    mockedClient.getWallet.mockResolvedValueOnce({
+      data: {
+        wallet: {
+          id: SOURCE_WALLET_ID,
+          blockchain: "ETH-SEPOLIA",
+          address: "0x0000000000000000000000000000000000000003",
+        },
+      },
+    });
+
+    const result = await makeProvider({ authorizationStore }).submitTransfer(validIntent());
+
+    expect(result).toMatchObject({ status: "FAILED", failureCode: "NETWORK_MISMATCH" });
+    expect(authorizationStore.consumeCalls).toBe(0);
+    expect(mockedClient.getWallet).toHaveBeenCalledTimes(1);
+    expect(mockedClient.getWalletTokenBalance).not.toHaveBeenCalled();
     expect(mockedClient.createTransaction).not.toHaveBeenCalled();
   });
 
@@ -622,7 +643,7 @@ describe("CircleWalletProvider", () => {
   it("fails closed when authorization is revoked during destination lookup", async () => {
     const authorizationStore = new FakeAuthorizationStore();
     mockedClient.getWallet.mockImplementationOnce(async () => ({
-      data: { wallet: { id: SOURCE_WALLET_ID, address: "0x0000000000000000000000000000000000000003" } },
+      data: { wallet: { id: SOURCE_WALLET_ID, blockchain: "ARC-TESTNET", address: "0x0000000000000000000000000000000000000003" } },
     })).mockImplementationOnce(async () => {
       authorizationStore.revoke();
       return {

@@ -92,7 +92,9 @@ export function reserveApprovedHandoff(args: {
   const approval = ApprovalDecisionSchema.parse(structuredClone(args.approval));
   if (stored.handoff !== null) {
     const canRecover =
-      stored.handoff.result.status === "HANDOFF_SUBMITTED" &&
+      ["HANDOFF_SUBMITTED", "HANDOFF_FAILED"].includes(
+        stored.handoff.result.status,
+      ) &&
       stored.handoff.result.adapterMode === "arc-testnet" &&
       approvalsMatch(stored.handoff.approval, approval);
     if (!canRecover) {
@@ -145,7 +147,9 @@ export function persistApprovedHandoff(args: {
   const handoff = parseHandoffAttempt(args);
   if (stored.handoff !== null) {
     const isSafeRecovery =
-      stored.handoff.result.status === "HANDOFF_SUBMITTED" &&
+      ["HANDOFF_SUBMITTED", "HANDOFF_FAILED"].includes(
+        stored.handoff.result.status,
+      ) &&
       stored.handoff.result.adapterMode === "arc-testnet" &&
       handoff.result.adapterMode === "arc-testnet" &&
       ["HANDOFF_SUBMITTED", "HANDOFF_CONFIRMED", "HANDOFF_FAILED"].includes(

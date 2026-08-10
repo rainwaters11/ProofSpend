@@ -312,19 +312,27 @@ export class CircleWalletProvider implements ArcTestnetTransferProvider {
       });
     }
     try {
-      const [source, destination, balance] = await Promise.all([
-        this.client.getWallet({ id: this.sourceWalletId }),
+      const source = await this.client.getWallet({ id: this.sourceWalletId });
+      if (
+        source.data?.wallet?.id !== this.sourceWalletId ||
+        source.data.wallet.blockchain !== this.blockchain
+      ) {
+        return failureResult(intent, "ARC_TESTNET", {
+          ok: false,
+          failureCode:
+            source.data?.wallet?.id === this.sourceWalletId
+              ? "NETWORK_MISMATCH"
+              : "WALLET_MISMATCH",
+          failureMessage:
+            source.data?.wallet?.id === this.sourceWalletId
+              ? "The configured source wallet is not on Arc Testnet."
+              : "The configured source wallet does not match the exact approved transfer intent.",
+        });
+      }
+      const [destination, balance] = await Promise.all([
         this.client.getWallet({ id: this.destinationWalletId }),
         recoveringConsumedSubmission ? Promise.resolve(null) : this.getBalance(),
       ]);
-      if (source.data?.wallet?.id !== this.sourceWalletId) {
-        return failureResult(intent, "ARC_TESTNET", {
-          ok: false,
-          failureCode: "WALLET_MISMATCH",
-          failureMessage:
-            "The configured source wallet does not match the exact approved transfer intent.",
-        });
-      }
       const destinationAddress = destination.data?.wallet?.address;
       if (
         !destinationAddress ||

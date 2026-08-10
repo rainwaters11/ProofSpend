@@ -285,6 +285,93 @@ describe("executeLiveCircleHandoff", () => {
     });
   });
 
+  it("retries the same approval and idempotency key after a pre-submission failure", async () => {
+    const context = await liveContext();
+    const first = await executeLiveCircleHandoff({
+      run: context.run,
+      approval: context.approval,
+      environment: context.environment,
+      initialActivityTrace: context.run.activityTrace,
+      dependencies: {
+        store: context.store,
+        providerFactory: () =>
+          fakeProvider([], {
+            prepareTransfer: async () => {
+              throw new Error("temporary provider outage");
+            },
+          }),
+      },
+    });
+    expect(first).toMatchObject({
+      status: "HANDOFF_FAILED",
+      execution: { state: "FAILED", providerOperationId: null },
+    });
+
+    const recovered = await executeLiveCircleHandoff({
+      run: context.run,
+      approval: context.approval,
+      environment: context.environment,
+      initialActivityTrace: context.run.activityTrace,
+      dependencies: { store: context.store, providerFactory: () => fakeProvider([]) },
+    });
+
+    expect(recovered).toMatchObject({
+      status: "HANDOFF_CONFIRMED",
+      execution: {
+        state: "CONFIRMED",
+        idempotencyKey: context.run.proposal!.idempotencyKey,
+      },
+    });
+    const history = await context.store.loadResultHistory(
+      context.run.proposal!.idempotencyKey,
+    );
+    expect(history).toMatchObject([
+      { status: "FAILED" },
+      { status: "PREPARED" },
+      { status: "SUBMITTED" },
+      { status: "CONFIRMED" },
+    ]);
+    expect(history[0]).not.toHaveProperty("providerOperationId");
+  });
+
+  it("rejects a retry after a failed submitted operation exists", async () => {
+    const context = await liveContext();
+    const operationId = "11111111-1111-4111-8111-111111111111";
+    const failingProvider = fakeProvider([], {
+      pollTransfer: async () => ({
+        mode: "ARC_TESTNET",
+        status: "FAILED",
+        providerOperationId: operationId,
+        failureCode: "POLLING_TIMEOUT",
+        failureMessage: "The submitted operation failed.",
+      }),
+    });
+
+    const failed = await executeLiveCircleHandoff({
+      run: context.run,
+      approval: context.approval,
+      environment: context.environment,
+      initialActivityTrace: context.run.activityTrace,
+      dependencies: { store: context.store, providerFactory: () => failingProvider },
+    });
+    expect(failed).toMatchObject({
+      status: "HANDOFF_FAILED",
+      execution: { state: "FAILED", providerOperationId: operationId },
+    });
+
+    const providerFactory = vi.fn(() => fakeProvider([]));
+    await expect(
+      executeLiveCircleHandoff({
+        run: context.run,
+        approval: context.approval,
+        environment: context.environment,
+        initialActivityTrace: context.run.activityTrace,
+        dependencies: { store: context.store, providerFactory },
+      }),
+    ).rejects.toThrow("HANDOFF_DUPLICATE");
+    expect(providerFactory).not.toHaveBeenCalled();
+  });
+
   it("retains a recoverable Circle operation when polling is interrupted", async () => {
     const context = await liveContext();
     const provider = fakeProvider([], {
