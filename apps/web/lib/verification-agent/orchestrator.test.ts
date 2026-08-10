@@ -224,6 +224,64 @@ describe("handoffApprovedProposal", () => {
     ).toBe(false);
   });
 
+  it("returns a same-approval recovery while rejecting changed or terminal replays", async () => {
+    const run = await createApprovalRun();
+    const approval = {
+      approvalId: "approval:recovery",
+      intentId: run.proposal!.intentId,
+      authorizedActorRole: "FOUNDER" as const,
+      authorizedActorId: "founder:fictional",
+      decision: "APPROVED" as const,
+      decidedAt: run.proposal!.preparedAt,
+      expiresAt: run.proposal!.expiresAt,
+      idempotencyKey: run.proposal!.idempotencyKey,
+      exactIntentHash: run.proposal!.exactIntentHash,
+    };
+    const submitted = {
+      status: "HANDOFF_SUBMITTED" as const,
+      adapterMode: "arc-testnet" as const,
+      execution: {
+        state: "SUBMITTED" as const,
+        providerOperationId: "11111111-1111-4111-8111-111111111111",
+        transactionHash: null,
+        confirmation: null,
+        explorerUrl: null,
+        failureCode: null,
+        failureMessage: null,
+      },
+      activityTrace: run.activityTrace,
+    };
+    const confirmed = {
+      ...submitted,
+      status: "HANDOFF_CONFIRMED" as const,
+      execution: {
+        ...submitted.execution,
+        state: "CONFIRMED" as const,
+        transactionHash: `0x${"1".repeat(64)}`,
+        confirmation: "ARC_TESTNET_CONFIRMED",
+        explorerUrl: `https://testnet.arcscan.app/tx/0x${"1".repeat(64)}`,
+      },
+    };
+
+    saveVerificationAgentRun({ authorizedActorId: "founder:fictional", run });
+    expect(
+      persistApprovedHandoff({ runId: run.runId, approval, result: submitted }),
+    ).toBe(true);
+    expect(
+      persistApprovedHandoff({
+        runId: run.runId,
+        approval: { ...approval, approvalId: "approval:changed" },
+        result: confirmed,
+      }),
+    ).toBe(false);
+    expect(
+      persistApprovedHandoff({ runId: run.runId, approval, result: confirmed }),
+    ).toBe(true);
+    expect(
+      persistApprovedHandoff({ runId: run.runId, approval, result: confirmed }),
+    ).toBe(false);
+  });
+
   it("rejects approval for a different canonical source-wallet intent", async () => {
     const run = await createApprovalRun();
     const result = handoffApprovedProposal({

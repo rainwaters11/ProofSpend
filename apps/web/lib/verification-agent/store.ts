@@ -81,15 +81,32 @@ export function persistApprovedHandoff(args: {
 }): boolean {
   discardExpiredRuns();
   const stored = runs.get(args.runId);
-  if (
-    stored === undefined ||
-    stored.handoff !== null ||
-    stored.run.proposal === null ||
-    consumedProposalKeys.has(stored.run.proposal.idempotencyKey)
-  ) {
+  if (stored === undefined || stored.run.proposal === null) {
     return false;
   }
   const handoff = parseHandoffAttempt(args);
+  if (stored.handoff !== null) {
+    const isSafeRecovery =
+      stored.handoff.result.status === "HANDOFF_SUBMITTED" &&
+      stored.handoff.result.adapterMode === "arc-testnet" &&
+      handoff.result.adapterMode === "arc-testnet" &&
+      ["HANDOFF_SUBMITTED", "HANDOFF_CONFIRMED", "HANDOFF_FAILED"].includes(
+        handoff.result.status,
+      ) &&
+      approvalsMatch(stored.handoff.approval, handoff.approval);
+    if (!isSafeRecovery) {
+      return false;
+    }
+    runs.set(args.runId, {
+      ...stored,
+      handoff,
+      handoffAttempts: appendHandoffAttempt(stored.handoffAttempts, handoff),
+    });
+    return true;
+  }
+  if (consumedProposalKeys.has(stored.run.proposal.idempotencyKey)) {
+    return false;
+  }
   runs.set(args.runId, {
     ...stored,
     handoff,
@@ -97,6 +114,20 @@ export function persistApprovedHandoff(args: {
   });
   consumedProposalKeys.add(stored.run.proposal.idempotencyKey);
   return true;
+}
+
+function approvalsMatch(left: ApprovalDecision, right: ApprovalDecision): boolean {
+  return (
+    left.approvalId === right.approvalId &&
+    left.intentId === right.intentId &&
+    left.authorizedActorRole === right.authorizedActorRole &&
+    left.authorizedActorId === right.authorizedActorId &&
+    left.decision === right.decision &&
+    left.decidedAt === right.decidedAt &&
+    left.expiresAt === right.expiresAt &&
+    left.idempotencyKey === right.idempotencyKey &&
+    left.exactIntentHash === right.exactIntentHash
+  );
 }
 
 export function recordRejectedHandoff(args: {
