@@ -213,7 +213,7 @@ describe("FileTransferAuthorizationStore", () => {
   it("renews and preserves the reclaim guard during long validation", async () => {
     vi.useFakeTimers();
     try {
-      vi.setSystemTime(new Date("2026-08-09T00:02:00.000Z"));
+      vi.setSystemTime(new Date());
       const directory = await mkdtemp(
         join(tmpdir(), "proofspend-reclaim-heartbeat-"),
       );
