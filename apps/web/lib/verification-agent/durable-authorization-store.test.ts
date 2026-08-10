@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -55,6 +55,27 @@ describe("FileTransferAuthorizationStore", () => {
     expect(await readFile(path, "utf8")).not.toContain(environment.CIRCLE_API_KEY);
     expect(await readFile(path, "utf8")).not.toContain(environment.CIRCLE_ENTITY_SECRET);
   });
+  it("reclaims a confirmed-stale legacy lock after a process crash", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "proofspend-stale-lock-"));
+    directories.push(directory);
+    const path = join(directory, "authorization.json");
+    const lockPath = `${path}.lock`;
+    const environment = liveEnvironment(path);
+    const run = await approvalRun(environment);
+    const { authorization } = await buildLiveTransferAuthorization({
+      run,
+      approval: approvalFor(run),
+      environment,
+    });
+    await writeFile(lockPath, "", { mode: 0o600 });
+    const staleAt = new Date(Date.now() - 60_000);
+    await utimes(lockPath, staleAt, staleAt);
+
+    const restartedProcess = new FileTransferAuthorizationStore(path);
+    await expect(restartedProcess.persist(authorization)).resolves.toBe(true);
+    await expect(readFile(lockPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it("appends prepared, submitted, confirmed, and reconciliation evidence", async () => {
     const directory = await mkdtemp(join(tmpdir(), "proofspend-lifecycle-"));
     directories.push(directory);
