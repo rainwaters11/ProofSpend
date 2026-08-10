@@ -100,6 +100,7 @@ type LockMetadata = z.infer<typeof LockMetadataSchema>;
 type StaleLockSnapshot = {
   device: number;
   inode: number;
+  mtimeMs: number;
   raw: string;
 };
 
@@ -440,6 +441,7 @@ export class FileTransferAuthorizationStore implements TransferAuthorizationStor
       return {
         device: lockStat.dev,
         inode: lockStat.ino,
+        mtimeMs: lockStat.mtimeMs,
         raw,
       };
     } catch (error) {
@@ -472,7 +474,9 @@ export class FileTransferAuthorizationStore implements TransferAuthorizationStor
     if (
       quarantinedStat.dev !== snapshot.device ||
       quarantinedStat.ino !== snapshot.inode ||
-      quarantinedRaw !== snapshot.raw
+      quarantinedStat.mtimeMs !== snapshot.mtimeMs ||
+      quarantinedRaw !== snapshot.raw ||
+      Date.now() - quarantinedStat.mtimeMs < LOCK_STALE_MS
     ) {
       try {
         await rename(quarantinePath, this.lockPath);
