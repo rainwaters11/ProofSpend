@@ -352,7 +352,11 @@ export class FileTransferAuthorizationStore implements TransferAuthorizationStor
         (candidate) => candidate.idempotencyKey === parsed.idempotencyKey,
       );
       if (existing !== undefined) {
-        if (sameValue(existing, parsed)) {
+        const { reconciledAt: existingAt, ...existingEvidence } = existing;
+        const { reconciledAt: parsedAt, ...parsedEvidence } = parsed;
+        void existingAt;
+        void parsedAt;
+        if (sameValue(existingEvidence, parsedEvidence)) {
           return;
         }
         throw new Error("RECONCILIATION_ALREADY_RECORDED");
