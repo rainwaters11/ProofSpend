@@ -116,7 +116,7 @@ export function persistApprovedHandoff(args: {
   return true;
 }
 
-function approvalsMatch(left: ApprovalDecision, right: ApprovalDecision): boolean {
+export function approvalsMatch(left: ApprovalDecision, right: ApprovalDecision): boolean {
   return (
     left.approvalId === right.approvalId &&
     left.intentId === right.intentId &&
