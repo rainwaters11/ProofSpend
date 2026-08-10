@@ -60,6 +60,22 @@ describe("executeLiveCircleHandoff", () => {
         "TRANSACTION_CONFIRMED",
       ]),
     );
+    await expect(
+      context.store.loadResultHistory(context.run.proposal!.idempotencyKey),
+    ).resolves.toMatchObject([
+      { status: "PREPARED" },
+      { status: "SUBMITTED" },
+      { status: "CONFIRMED" },
+    ]);
+    await expect(
+      context.store.loadReconciliations(context.run.proposal!.idempotencyKey),
+    ).resolves.toMatchObject([
+      {
+        status: "RECONCILED",
+        amountAtomic: "1000000",
+        transactionHash: `0x${"1a".repeat(32)}`,
+      },
+    ]);
   });
 
   it("rejects a replay from a new store instance before provider submission", async () => {
@@ -274,6 +290,8 @@ function fakeProvider(
     status,
     providerOperationId: status === "PREPARED" ? undefined : operationId,
     transactionHash: status === "CONFIRMED" ? transactionHash : undefined,
+    blockNumber: status === "CONFIRMED" ? 42 : undefined,
+    blockHash: status === "CONFIRMED" ? `0x${"2b".repeat(32)}` : undefined,
     explorerUrl:
       status === "CONFIRMED"
         ? `https://testnet.arcscan.app/tx/${transactionHash}`
