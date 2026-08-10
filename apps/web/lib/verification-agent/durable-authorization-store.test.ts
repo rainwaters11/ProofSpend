@@ -190,7 +190,12 @@ describe("FileTransferAuthorizationStore", () => {
     const reclaim = reclaimer.reclaimStaleLock();
     await quarantineReady;
 
-    await expect(owner.releaseOwnedLock(ownerToken)).resolves.toBeUndefined();
+    let ownerReleaseCompleted = false;
+    const ownerRelease = owner.releaseOwnedLock(ownerToken).then(() => {
+      ownerReleaseCompleted = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(ownerReleaseCompleted).toBe(false);
     await expect(readFile(lockPath, "utf8")).resolves.toContain(ownerToken);
 
     let contenderEntered = false;
@@ -203,6 +208,8 @@ describe("FileTransferAuthorizationStore", () => {
 
     releaseValidation();
     await expect(reclaim).resolves.toBe(true);
+    await expect(ownerRelease).resolves.toBeUndefined();
+    expect(ownerReleaseCompleted).toBe(true);
     await expect(contenderRun).resolves.toBeUndefined();
     expect(contenderEntered).toBe(true);
     await expect(readFile(lockPath, "utf8")).rejects.toMatchObject({
