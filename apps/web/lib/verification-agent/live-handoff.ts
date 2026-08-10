@@ -317,17 +317,22 @@ function handoffMatchesTerminal(
   );
 }
 
-export async function executeLiveCircleHandoff(args: {
-  run: VerificationAgentResult;
-  approval: ApprovalDecision;
+type BoundLiveHandoffArgs = {
+  runId: string;
+  intent: ApprovedTransferIntent;
+  authorization: PersistedTransferAuthorization;
   environment: IntegratedLiveEnvironment;
   initialActivityTrace: ActivityEvent[];
   dependencies?: LiveHandoffDependencies;
-}): Promise<HandoffResult> {
+};
+
+async function executeBoundLiveCircleHandoff(
+  args: BoundLiveHandoffArgs,
+): Promise<HandoffResult> {
   const store =
     args.dependencies?.store ??
     new FileTransferAuthorizationStore(args.environment.PROOFSPEND_AUTH_STORE_PATH);
-  const { intent, authorization } = await buildLiveTransferAuthorization(args);
+  const { intent, authorization } = args;
   const created = await store.persist(authorization);
   const persistedAuthorization = created ? authorization : await store.load(intent);
   if (persistedAuthorization === null) throw new Error("HANDOFF_DUPLICATE");
@@ -366,7 +371,7 @@ export async function executeLiveCircleHandoff(args: {
           blockNumber: boundTransfer.blockNumber,
           blockHash: boundTransfer.blockHash,
           explorerUrl: boundTransfer.explorerUrl,
-          reconciledAt: boundTransfer.polledAt ?? new Date().toISOString(),
+          reconciledAt: new Date().toISOString(),
         };
         await store.recordReconciliation(reconciliation);
       }
@@ -391,11 +396,8 @@ export async function executeLiveCircleHandoff(args: {
     ) {
       throw new Error("HANDOFF_DUPLICATE");
     }
-    appendTransferEvent(trace, args.run.runId, existingResult);
+    appendTransferEvent(trace, args.runId, existingResult);
     return finish(existingResult);
-  }
-  if (!created && persistedAuthorization.binding.status !== "CONSUMED") {
-    throw new Error("HANDOFF_DUPLICATE");
   }
 
   const provider =
@@ -404,13 +406,13 @@ export async function executeLiveCircleHandoff(args: {
   try {
     if (!created && existingResult?.status === "SUBMITTED" && existingResult.providerOperationId) {
       lastResult = bindResultToIntent(intent, existingResult);
-      appendTransferEvent(trace, args.run.runId, lastResult);
+      appendTransferEvent(trace, args.runId, lastResult);
       const terminal = bindResultToIntent(
         intent,
         await provider.pollTransfer(intent, existingResult.providerOperationId),
       );
       lastResult = terminal;
-      appendTransferEvent(trace, args.run.runId, terminal);
+      appendTransferEvent(trace, args.runId, terminal);
       await store.recordResult(terminal);
       return finish(terminal);
     }
@@ -418,7 +420,7 @@ export async function executeLiveCircleHandoff(args: {
     if (created) {
       const prepared = bindResultToIntent(intent, await provider.prepareTransfer(intent));
       lastResult = prepared;
-      appendTransferEvent(trace, args.run.runId, prepared);
+      appendTransferEvent(trace, args.runId, prepared);
       await store.recordResult(prepared);
       if (prepared.status !== "PREPARED") {
         return finish(prepared);
@@ -427,7 +429,7 @@ export async function executeLiveCircleHandoff(args: {
 
     const submitted = bindResultToIntent(intent, await provider.submitTransfer(intent));
     lastResult = submitted;
-    appendTransferEvent(trace, args.run.runId, submitted);
+    appendTransferEvent(trace, args.runId, submitted);
     await store.recordResult(submitted);
     if (submitted.status !== "SUBMITTED" || !submitted.providerOperationId) {
       return finish(submitted);
@@ -438,7 +440,7 @@ export async function executeLiveCircleHandoff(args: {
       await provider.pollTransfer(intent, submitted.providerOperationId),
     );
     lastResult = terminal;
-    appendTransferEvent(trace, args.run.runId, terminal);
+    appendTransferEvent(trace, args.runId, terminal);
     await store.recordResult(terminal);
     return finish(terminal);
   } catch {
@@ -461,10 +463,126 @@ export async function executeLiveCircleHandoff(args: {
       explorerUrl: lastResult?.explorerUrl,
       polledAt: new Date().toISOString(),
     };
-    appendTransferEvent(trace, args.run.runId, outcome);
+    appendTransferEvent(trace, args.runId, outcome);
     await store.recordResult(outcome);
     return finish(outcome);
   }
+}
+
+function restoreApprovedIntent(
+  authorization: PersistedTransferAuthorization,
+): ApprovedTransferIntent {
+  const executionIntent = authorization.binding.executionIntent;
+  const target = executionIntent.protocolTarget;
+  if (
+    executionIntent.actionKind !== "RELEASE_APPROVAL" ||
+    executionIntent.operationType !== "SETTLEMENT" ||
+    executionIntent.asset !== "USDC" ||
+    target.kind !== "DESTINATION" ||
+    target.isMock ||
+    target.network !== "ARC_TESTNET" ||
+    target.chainId !== ARC_TESTNET_CHAIN_ID ||
+    authorization.transaction.releaseRequestId !== authorization.release.id ||
+    authorization.transaction.approvalId !== authorization.approval.id ||
+    authorization.transaction.approvalBindingId !== authorization.binding.id ||
+    authorization.transaction.intentId !== authorization.binding.intentId ||
+    authorization.transaction.amount.atomicUnits !== executionIntent.atomicAmount ||
+    authorization.transaction.destinationReference.toLowerCase() !==
+      target.destination.toLowerCase()
+  ) {
+    throw new Error("LIVE_HANDOFF_RECOVERY_CONTEXT_INVALID");
+  }
+  return {
+    proposalId: authorization.release.id,
+    releaseRequestId: authorization.release.id,
+    approvalId: authorization.approval.id,
+    authorizationBindingId: authorization.binding.id,
+    transactionRecordId: authorization.transaction.id,
+    intentId: authorization.binding.intentId,
+    idempotencyKey: authorization.transaction.idempotencyKey,
+    network: "ARC-TESTNET",
+    chainId: ARC_TESTNET_CHAIN_ID,
+    asset: "USDC",
+    tokenContractAddress: ARC_TESTNET_USDC_ADDRESS,
+    amountAtomic: executionIntent.atomicAmount,
+    sourceWalletId: target.sourceWalletId,
+    destinationAddress: target.destination,
+  };
+}
+
+function recoveryApprovalMatches(args: {
+  authorization: PersistedTransferAuthorization;
+  approval: ApprovalDecision;
+  authenticatedActorId: string;
+  runId: string;
+}): boolean {
+  const { authorization, approval, authenticatedActorId, runId } = args;
+  return (
+    authorization.transaction.id === transactionRecordId(runId) &&
+    authorization.approval.id === approval.approvalId &&
+    authorization.approval.intentId === approval.intentId &&
+    authorization.approval.decision === approval.decision &&
+    authorization.approval.approver.actorId === authenticatedActorId &&
+    authorization.approval.approver.actorId === approval.authorizedActorId &&
+    authorization.approval.approver.actorType === approval.authorizedActorRole &&
+    authorization.approval.authorizedActorId === approval.authorizedActorId &&
+    authorization.approval.authorizedActorType === approval.authorizedActorRole &&
+    authorization.approval.decidedAt === approval.decidedAt &&
+    authorization.approval.expiresAt === approval.expiresAt &&
+    authorization.approval.idempotencyKey === `approval:${approval.idempotencyKey}` &&
+    authorization.approval.exactIntentHash === approval.exactIntentHash &&
+    authorization.transaction.idempotencyKey === approval.idempotencyKey &&
+    authorization.binding.exactIntentHash === approval.exactIntentHash &&
+    authorization.binding.approvalId === approval.approvalId &&
+    authorization.release.approvalId === approval.approvalId
+  );
+}
+
+export async function recoverPersistedLiveCircleHandoff(args: {
+  runId: string;
+  approval: ApprovalDecision;
+  authenticatedActorId: string;
+  environment: IntegratedLiveEnvironment;
+  dependencies?: LiveHandoffDependencies;
+}): Promise<HandoffResult | null> {
+  const store =
+    args.dependencies?.store ??
+    new FileTransferAuthorizationStore(args.environment.PROOFSPEND_AUTH_STORE_PATH);
+  const authorization = await store.loadAuthorizationByTransactionRecordId(
+    transactionRecordId(args.runId),
+  );
+  if (authorization === null) {
+    return null;
+  }
+  if (!recoveryApprovalMatches({ ...args, authorization })) {
+    throw new Error("HANDOFF_DUPLICATE");
+  }
+  return executeBoundLiveCircleHandoff({
+    runId: args.runId,
+    intent: restoreApprovedIntent(authorization),
+    authorization,
+    environment: args.environment,
+    initialActivityTrace: [],
+    dependencies: { ...args.dependencies, store },
+  });
+}
+
+export async function executeLiveCircleHandoff(args: {
+  run: VerificationAgentResult;
+  approval: ApprovalDecision;
+  environment: IntegratedLiveEnvironment;
+  initialActivityTrace: ActivityEvent[];
+  dependencies?: LiveHandoffDependencies;
+}): Promise<HandoffResult> {
+  const { intent, authorization } = await buildLiveTransferAuthorization(args);
+  return executeBoundLiveCircleHandoff({
+    runId: args.run.runId,
+    intent,
+    authorization,
+    environment: args.environment,
+    initialActivityTrace: args.initialActivityTrace,
+    dependencies: args.dependencies,
+  });
 }
 
 export async function loadLatestLiveTransferResult(
