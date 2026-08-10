@@ -76,6 +76,41 @@ describe("FileTransferAuthorizationStore", () => {
     await expect(readFile(lockPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
   });
 
+  it("does not reclaim a lease renewed after stale inspection", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "proofspend-renewed-lock-"));
+    directories.push(directory);
+    const path = join(directory, "authorization.json");
+    const lockPath = `${path}.lock`;
+    const ownerToken = "11111111-1111-4111-8111-111111111111";
+    await writeFile(
+      lockPath,
+      JSON.stringify({
+        ownerToken,
+        pid: process.pid,
+        createdAt: "2026-08-09T00:00:00.000Z",
+      }),
+      { mode: 0o600 },
+    );
+    const staleAt = new Date(Date.now() - 60_000);
+    await utimes(lockPath, staleAt, staleAt);
+
+    const store = new FileTransferAuthorizationStore(path);
+    const internals = store as unknown as {
+      inspectStaleLock: () => Promise<unknown>;
+      reclaimStaleLock: () => Promise<boolean>;
+    };
+    const inspectStaleLock = internals.inspectStaleLock.bind(store);
+    internals.inspectStaleLock = async () => {
+      const snapshot = await inspectStaleLock();
+      const renewedAt = new Date();
+      await utimes(lockPath, renewedAt, renewedAt);
+      return snapshot;
+    };
+
+    await expect(internals.reclaimStaleLock()).resolves.toBe(false);
+    await expect(readFile(lockPath, "utf8")).resolves.toContain(ownerToken);
+  });
+
   it("reclaims an expired lease even when a restarted process reuses the owner PID", async () => {
     const directory = await mkdtemp(join(tmpdir(), "proofspend-reused-pid-lock-"));
     directories.push(directory);
