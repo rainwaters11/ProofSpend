@@ -14,6 +14,8 @@ import {
   loadVerificationAgentRun,
   persistApprovedHandoff,
   recordRejectedHandoff,
+  releaseApprovedHandoffReservation,
+  reserveApprovedHandoff,
 } from "@/lib/verification-agent";
 import { z } from "zod";
 
@@ -60,28 +62,43 @@ export async function POST(request: Request) {
       });
       return NextResponse.json({ error: "HANDOFF_REJECTED" }, { status: 422 });
     }
-    const result =
-      environment.PROOFSPEND_ADAPTER_MODE === "arc-testnet"
-        ? await executeLiveCircleHandoff({
-            run: stored.run,
-            approval: parsedBody.approval,
-            environment,
-            initialActivityTrace: [
-              ...stored.run.activityTrace,
-              ...approvalResult.activityTrace,
-            ],
-          })
-        : approvalResult;
     if (
-      !persistApprovedHandoff({
+      !reserveApprovedHandoff({
         runId: stored.run.runId,
         approval: parsedBody.approval,
-        result,
       })
     ) {
       return NextResponse.json({ error: "HANDOFF_DUPLICATE" }, { status: 409 });
     }
-    return NextResponse.json(result);
+    try {
+      const result =
+        environment.PROOFSPEND_ADAPTER_MODE === "arc-testnet"
+          ? await executeLiveCircleHandoff({
+              run: stored.run,
+              approval: parsedBody.approval,
+              environment,
+              initialActivityTrace: [
+                ...stored.run.activityTrace,
+                ...approvalResult.activityTrace,
+              ],
+            })
+          : approvalResult;
+      if (
+        !persistApprovedHandoff({
+          runId: stored.run.runId,
+          approval: parsedBody.approval,
+          result,
+        })
+      ) {
+        return NextResponse.json({ error: "HANDOFF_DUPLICATE" }, { status: 409 });
+      }
+      return NextResponse.json(result);
+    } finally {
+      releaseApprovedHandoffReservation({
+        runId: stored.run.runId,
+        approval: parsedBody.approval,
+      });
+    }
   } catch (error) {
     if (error instanceof AgentApiAccessError) {
       return NextResponse.json({ error: error.message }, { status: error.status });
