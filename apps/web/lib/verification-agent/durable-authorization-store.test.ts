@@ -210,6 +210,69 @@ describe("FileTransferAuthorizationStore", () => {
     });
   });
 
+  it("retries owner release while the namespace guard is briefly busy", async () => {
+    const directory = await mkdtemp(
+      join(tmpdir(), "proofspend-release-guard-contention-"),
+    );
+    directories.push(directory);
+    const path = join(directory, "authorization.json");
+    const lockPath = `${path}.lock`;
+    const ownerToken = "11111111-1111-4111-8111-111111111111";
+    const guardOwnerToken = "22222222-2222-4222-8222-222222222222";
+    await writeFile(
+      lockPath,
+      JSON.stringify({
+        ownerToken,
+        pid: process.pid,
+        createdAt: new Date().toISOString(),
+      }),
+      { mode: 0o600 },
+    );
+
+    type StoreInternals = {
+      acquireReclaimGuard: (
+        token: string,
+      ) => Promise<Awaited<ReturnType<typeof import("node:fs/promises").open>> | null>;
+      releaseReclaimGuard: (token: string) => Promise<void>;
+      releaseOwnedLock: (token: string) => Promise<void>;
+      withLock: <T>(operation: () => Promise<T>) => Promise<T>;
+    };
+    const guardStore = new FileTransferAuthorizationStore(path);
+    const ownerStore = new FileTransferAuthorizationStore(path);
+    const contenderStore = new FileTransferAuthorizationStore(path);
+    const guardInternal = guardStore as unknown as StoreInternals;
+    const owner = ownerStore as unknown as StoreInternals;
+    const contender = contenderStore as unknown as StoreInternals;
+    const heldGuard =
+      await guardInternal.acquireReclaimGuard(guardOwnerToken);
+    expect(heldGuard).not.toBeNull();
+
+    let releaseCompleted = false;
+    const release = owner.releaseOwnedLock(ownerToken).then(() => {
+      releaseCompleted = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 25));
+
+    expect(releaseCompleted).toBe(false);
+    await expect(readFile(lockPath, "utf8")).resolves.toContain(ownerToken);
+
+    await heldGuard!.close();
+    await guardInternal.releaseReclaimGuard(guardOwnerToken);
+    await expect(release).resolves.toBeUndefined();
+    expect(releaseCompleted).toBe(true);
+    await expect(readFile(lockPath, "utf8")).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+
+    let contenderEntered = false;
+    await expect(
+      contender.withLock(async () => {
+        contenderEntered = true;
+      }),
+    ).resolves.toBeUndefined();
+    expect(contenderEntered).toBe(true);
+  });
+
   it("renews and preserves the reclaim guard during long validation", async () => {
     vi.useFakeTimers();
     try {
