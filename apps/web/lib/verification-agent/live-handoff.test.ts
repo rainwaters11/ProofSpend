@@ -15,7 +15,11 @@ import {
   runVerificationAgent,
 } from "./orchestrator";
 import { FileTransferAuthorizationStore } from "./durable-authorization-store";
-import { buildLiveTransferAuthorization, executeLiveCircleHandoff } from "./live-handoff";
+import {
+  buildLiveTransferAuthorization,
+  executeLiveCircleHandoff,
+  recoverPersistedLiveCircleHandoff,
+} from "./live-handoff";
 
 const directories: string[] = [];
 
@@ -105,7 +109,7 @@ describe("executeLiveCircleHandoff", () => {
     expect(providerFactory).not.toHaveBeenCalled();
   });
 
-  it("resumes missing reconciliation from a persisted confirmation without calling Circle", async () => {
+  it("recovers a persisted confirmation through the restart path without calling Circle", async () => {
     const context = await liveContext();
     const { intent, authorization } = await buildLiveTransferAuthorization({
       run: context.run,
@@ -157,11 +161,11 @@ describe("executeLiveCircleHandoff", () => {
     });
     const providerFactory = vi.fn(() => fakeProvider([]));
 
-    const recovered = await executeLiveCircleHandoff({
-      run: context.run,
+    const recovered = await recoverPersistedLiveCircleHandoff({
+      runId: context.run.runId,
       approval: context.approval,
+      authenticatedActorId: context.approval.authorizedActorId,
       environment: context.environment,
-      initialActivityTrace: context.run.activityTrace,
       dependencies: { store: context.store, providerFactory },
     });
 
@@ -174,18 +178,21 @@ describe("executeLiveCircleHandoff", () => {
         reconciliation: {
           state: "RECONCILED",
           reconciliationId: `reconciliation:${intent.transactionRecordId}`,
-          reconciledAt: "2026-08-09T00:01:04.000Z",
+          reconciledAt: expect.any(String),
         },
       },
     });
+    expect(recovered?.execution.reconciliation?.reconciledAt).not.toBe(
+      "2026-08-09T00:01:04.000Z",
+    );
     await expect(context.store.loadReconciliations(intent.idempotencyKey)).resolves.toHaveLength(1);
 
     await expect(
-      executeLiveCircleHandoff({
-        run: context.run,
+      recoverPersistedLiveCircleHandoff({
+        runId: context.run.runId,
         approval: context.approval,
+        authenticatedActorId: context.approval.authorizedActorId,
         environment: context.environment,
-        initialActivityTrace: context.run.activityTrace,
         dependencies: { store: context.store, providerFactory },
       }),
     ).rejects.toThrow("HANDOFF_DUPLICATE");
