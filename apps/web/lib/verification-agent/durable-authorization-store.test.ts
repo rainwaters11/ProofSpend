@@ -1,8 +1,8 @@
-import { mkdtemp, readFile, rm, utimes, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createPawPovAiEvidenceScenario } from "@proofspend/domain";
 import { buildLiveTransferAuthorization } from "./live-handoff";
@@ -136,6 +136,216 @@ describe("FileTransferAuthorizationStore", () => {
     await expect(readFile(`${lockPath}.reclaim`, "utf8")).rejects.toMatchObject({
       code: "ENOENT",
     });
+  });
+
+  it("fences owner release and normal acquisition while reclamation validates", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "proofspend-fenced-reclaim-"));
+    directories.push(directory);
+    const path = join(directory, "authorization.json");
+    const lockPath = `${path}.lock`;
+    const ownerToken = "11111111-1111-4111-8111-111111111111";
+    await writeFile(
+      lockPath,
+      JSON.stringify({
+        ownerToken,
+        pid: process.pid,
+        createdAt: "2026-08-09T00:00:00.000Z",
+      }),
+      { mode: 0o600 },
+    );
+    const staleAt = new Date(Date.now() - 60_000);
+    await utimes(lockPath, staleAt, staleAt);
+
+    type StoreInternals = {
+      quarantinedLockStillStale: (
+        snapshot: unknown,
+        quarantinePath: string,
+      ) => Promise<boolean>;
+      reclaimStaleLock: () => Promise<boolean>;
+      releaseOwnedLock: (token: string) => Promise<void>;
+      withLock: <T>(operation: () => Promise<T>) => Promise<T>;
+    };
+    const reclaimerStore = new FileTransferAuthorizationStore(path);
+    const ownerStore = new FileTransferAuthorizationStore(path);
+    const contenderStore = new FileTransferAuthorizationStore(path);
+    const reclaimer = reclaimerStore as unknown as StoreInternals;
+    const owner = ownerStore as unknown as StoreInternals;
+    const contender = contenderStore as unknown as StoreInternals;
+    const validateQuarantine =
+      reclaimer.quarantinedLockStillStale.bind(reclaimerStore);
+    let signalQuarantineReady!: () => void;
+    let releaseValidation!: () => void;
+    const quarantineReady = new Promise<void>((resolve) => {
+      signalQuarantineReady = resolve;
+    });
+    const validationRelease = new Promise<void>((resolve) => {
+      releaseValidation = resolve;
+    });
+    reclaimer.quarantinedLockStillStale = async (snapshot, quarantinePath) => {
+      signalQuarantineReady();
+      await validationRelease;
+      return validateQuarantine(snapshot, quarantinePath);
+    };
+
+    const reclaim = reclaimer.reclaimStaleLock();
+    await quarantineReady;
+
+    await expect(owner.releaseOwnedLock(ownerToken)).resolves.toBeUndefined();
+    await expect(readFile(lockPath, "utf8")).resolves.toContain(ownerToken);
+
+    let contenderEntered = false;
+    const contenderRun = contender.withLock(async () => {
+      contenderEntered = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(contenderEntered).toBe(false);
+    await expect(readFile(lockPath, "utf8")).resolves.toContain(ownerToken);
+
+    releaseValidation();
+    await expect(reclaim).resolves.toBe(true);
+    await expect(contenderRun).resolves.toBeUndefined();
+    expect(contenderEntered).toBe(true);
+    await expect(readFile(lockPath, "utf8")).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
+  it("renews and preserves the reclaim guard during long validation", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-08-09T00:02:00.000Z"));
+      const directory = await mkdtemp(
+        join(tmpdir(), "proofspend-reclaim-heartbeat-"),
+      );
+      directories.push(directory);
+      const path = join(directory, "authorization.json");
+      const lockPath = `${path}.lock`;
+      const reclaimPath = `${lockPath}.reclaim`;
+      await writeFile(
+        lockPath,
+        JSON.stringify({
+          ownerToken: "11111111-1111-4111-8111-111111111111",
+          pid: process.pid,
+          createdAt: "2026-08-09T00:00:00.000Z",
+        }),
+        { mode: 0o600 },
+      );
+      const staleAt = new Date(Date.now() - 60_000);
+      await utimes(lockPath, staleAt, staleAt);
+
+      type StoreInternals = {
+        acquireReclaimGuard: (
+          token: string,
+        ) => Promise<Awaited<ReturnType<typeof import("node:fs/promises").open>> | null>;
+        quarantinedLockStillStale: (
+          snapshot: unknown,
+          quarantinePath: string,
+        ) => Promise<boolean>;
+        reclaimStaleLock: () => Promise<boolean>;
+      };
+      const firstStore = new FileTransferAuthorizationStore(path);
+      const secondStore = new FileTransferAuthorizationStore(path);
+      const first = firstStore as unknown as StoreInternals;
+      const second = secondStore as unknown as StoreInternals;
+      const validateQuarantine =
+        first.quarantinedLockStillStale.bind(firstStore);
+      let signalQuarantineReady!: () => void;
+      let releaseValidation!: () => void;
+      const quarantineReady = new Promise<void>((resolve) => {
+        signalQuarantineReady = resolve;
+      });
+      const validationRelease = new Promise<void>((resolve) => {
+        releaseValidation = resolve;
+      });
+      first.quarantinedLockStillStale = async (snapshot, quarantinePath) => {
+        signalQuarantineReady();
+        await validationRelease;
+        return validateQuarantine(snapshot, quarantinePath);
+      };
+
+      const reclaim = first.reclaimStaleLock();
+      await quarantineReady;
+      const initialGuard = await readFile(reclaimPath, "utf8");
+      const initialMtime = (await stat(reclaimPath)).mtimeMs;
+
+      await vi.advanceTimersByTimeAsync(10_000);
+
+      expect((await stat(reclaimPath)).mtimeMs).toBeGreaterThan(initialMtime);
+      await expect(
+        second.acquireReclaimGuard(
+          "22222222-2222-4222-8222-222222222222",
+        ),
+      ).resolves.toBeNull();
+      await expect(readFile(reclaimPath, "utf8")).resolves.toBe(initialGuard);
+
+      releaseValidation();
+      await expect(reclaim).resolves.toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not remove a reclaim guard whose owner token changed", async () => {
+    const directory = await mkdtemp(
+      join(tmpdir(), "proofspend-reclaim-owner-token-"),
+    );
+    directories.push(directory);
+    const path = join(directory, "authorization.json");
+    const reclaimPath = `${path}.lock.reclaim`;
+    const originalOwner = "11111111-1111-4111-8111-111111111111";
+    const replacementOwner = "22222222-2222-4222-8222-222222222222";
+    await writeFile(
+      reclaimPath,
+      JSON.stringify({
+        ownerToken: originalOwner,
+        pid: process.pid,
+        createdAt: "2026-08-09T00:00:00.000Z",
+      }),
+      { mode: 0o600 },
+    );
+    const staleAt = new Date(Date.now() - 60_000);
+    await utimes(reclaimPath, staleAt, staleAt);
+
+    type GuardSnapshot = {
+      device: number;
+      inode: number;
+      mtimeMs: number;
+      raw: string;
+      ownerToken: string | null;
+    };
+    type StoreInternals = {
+      acquireReclaimGuard: (
+        token: string,
+      ) => Promise<Awaited<ReturnType<typeof import("node:fs/promises").open>> | null>;
+      staleReclaimGuardIsUnchanged: (
+        snapshot: GuardSnapshot,
+      ) => Promise<boolean>;
+    };
+    const store = new FileTransferAuthorizationStore(path);
+    const internal = store as unknown as StoreInternals;
+    const validateGuard =
+      internal.staleReclaimGuardIsUnchanged.bind(store);
+    internal.staleReclaimGuardIsUnchanged = async (snapshot) => {
+      await writeFile(
+        reclaimPath,
+        JSON.stringify({
+          ownerToken: replacementOwner,
+          pid: process.pid,
+          createdAt: new Date().toISOString(),
+        }),
+        { mode: 0o600 },
+      );
+      return validateGuard(snapshot);
+    };
+
+    await expect(
+      internal.acquireReclaimGuard(
+        "33333333-3333-4333-8333-333333333333",
+      ),
+    ).resolves.toBeNull();
+    await expect(readFile(reclaimPath, "utf8")).resolves.toContain(
+      replacementOwner,
+    );
   });
 
   it("reclaims an expired lease even when a restarted process reuses the owner PID", async () => {
