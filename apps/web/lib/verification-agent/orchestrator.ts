@@ -31,8 +31,9 @@ import {
 const MAX_MODEL_CALLS = 1;
 const MAX_ACTIVITY_EVENTS = 10;
 const RELEASE_TTL_MS = 15 * 60 * 1000;
+const PAWPOVAI_JUDGE_DEMO_AMOUNT = "1000000";
 const PROPOSAL_INTENT_ID = "intent:release:pawpovai:milestone-launch-ready";
-const PROPOSAL_IDEMPOTENCY_KEY = "release:pawpovai:milestone-launch-ready:250usdc";
+const PROPOSAL_IDEMPOTENCY_KEY = "release:pawpovai:milestone-launch-ready:1usdc";
 const PROPOSAL_DESTINATION = "mock:destination:pawpovai-operating-wallet";
 
 function deterministicRequirementOutcomes(
@@ -75,17 +76,24 @@ function redactMessage(message: string): string {
     .replaceAll(/sk-[A-Za-z0-9_-]+/g, "[REDACTED_SECRET]");
 }
 
-function buildProposal(reason: string, now: string) {
+function buildProposal(
+  reason: string,
+  now: string,
+  amount: ReturnType<typeof createPawPovAiEvidenceScenario>["milestone"]["proposedAmount"],
+) {
   const nowMs = Date.parse(now);
   if (!Number.isFinite(nowMs)) {
     throw new Error("AGENT_INVALID_RUN_TIME");
+  }
+  if (amount.asset !== "USDC" || amount.atomicUnits !== PAWPOVAI_JUDGE_DEMO_AMOUNT) {
+    throw new Error("AGENT_INVALID_JUDGE_DEMO_AMOUNT");
   }
   return ReleaseProposalSchema.parse({
     action: "PREPARE_RELEASE_PROPOSAL",
     state: "APPROVAL_REQUIRED",
     intentId: PROPOSAL_INTENT_ID,
     idempotencyKey: PROPOSAL_IDEMPOTENCY_KEY,
-    amount: { asset: "USDC", atomicUnits: "250000000" },
+    amount,
     asset: "USDC",
     chain: "ARC_TESTNET",
     destination: PROPOSAL_DESTINATION,
@@ -273,6 +281,7 @@ export function resumeVerificationAgentAfterFounderCorrection(args: {
   const proposal = buildProposal(
     "Seeded deterministic evaluation passed after one founder receipt correction.",
     now,
+    scenario.milestone.proposedAmount,
   );
 
   appendEvent(trace, {
@@ -280,7 +289,7 @@ export function resumeVerificationAgentAfterFounderCorrection(args: {
     at: now,
     layer: "DETERMINISTIC",
     code: "PROPOSAL_PREPARED",
-    message: "Prepared exact non-authorizing 250 USDC release proposal.",
+    message: "Prepared exact non-authorizing 1 USDC release proposal.",
   });
 
   appendEvent(trace, {

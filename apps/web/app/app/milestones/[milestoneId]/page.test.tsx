@@ -8,7 +8,7 @@ import MilestoneDetailPage from "./page";
 describe("MilestoneDetailPage", () => {
   const scenario = buildReleaseScenario();
 
-  it("shows the 250 test USDC proposed release amount, not the 150 test USDC spend limit", async () => {
+  it("shows the 1 test USDC proposed release amount, not the 150 test USDC spend limit", async () => {
     const markup = renderToStaticMarkup(
       await MilestoneDetailPage({
         params: Promise.resolve({ milestoneId: scenario.milestone.id }),
@@ -16,7 +16,7 @@ describe("MilestoneDetailPage", () => {
       }),
     );
 
-    expect(markup).toContain("250.00 USDC");
+    expect(markup).toContain("1.00 USDC");
     expect(markup).toContain("150 test USDC eligible-spend limit");
   });
 
@@ -92,7 +92,7 @@ describe("MilestoneDetailPage", () => {
     );
 
     expect(markup).toContain("Insufficient balance");
-    expect(markup).toContain("Available: 50.00 USDC");
+    expect(markup).toContain("Available: 0.50 USDC");
   });
 
   it("ignores an unrecognized ?view= value and falls back to the lifecycle panels", async () => {

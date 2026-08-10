@@ -13,6 +13,17 @@ function adapterBadgeMode(adapterMode: "mock" | "arc-testnet") {
   return adapterMode === "mock" ? "mock" : "arc-testnet";
 }
 
+function formatCircleDecimal(atomicUnits: string): string {
+  try {
+    const value = BigInt(atomicUnits);
+    const whole = value / 1_000_000n;
+    const fraction = (value % 1_000_000n).toString().padStart(6, "0").replace(/0+$/, "");
+    return fraction ? `${whole}.${fraction}` : whole.toString();
+  } catch {
+    return "—";
+  }
+}
+
 export default async function ActivityPage() {
   let run: VerificationAgentResult;
   try {
@@ -74,6 +85,13 @@ export default async function ActivityPage() {
               <div>
                 <dt className="text-muted-foreground">Amount</dt>
                 <dd className="font-medium text-foreground">{formatMoney(run.proposal.amount)}</dd>
+              </div>
+              <div>
+                <dt className="text-muted-foreground">Atomic / Circle amount</dt>
+                <dd className="font-medium text-foreground">
+                  {run.proposal.amount.atomicUnits} atomic /{" "}
+                  {formatCircleDecimal(run.proposal.amount.atomicUnits)} USDC
+                </dd>
               </div>
               <div>
                 <dt className="text-muted-foreground">Asset and chain</dt>

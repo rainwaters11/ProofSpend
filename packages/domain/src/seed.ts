@@ -16,7 +16,7 @@ export function createPawPovAiSeed(): PawPovAiSeed {
     project: { id: "project:pawpovai", name: "PawPOVAI InvestFest Soft Launch", founderId: "founder:fictional", description: "Fictional LaunchVault demonstration project.", createdAt: NOW },
     vault: { id: "vault:pawpovai", projectId: "project:pawpovai", asset: "USDC", totalCapital: usdc("1000000000"), mode: "MOCK", createdAt: NOW }, reserves,
     allocationRules: reserves.map((reserve) => ({ id: `rule:${reserve.id}`, reserveId: reserve.id, purpose: reserve.name, maximum: reserve.allocated, requiresApproval: true })),
-    milestone: { id: "milestone:launch-ready", projectId: "project:pawpovai", title: "Launch identity and outreach ready", proposedAmount: usdc("250000000"), status: "INCOMPLETE", requirementIds: requirements.map((r) => r.id), dueAt: null }, requirements,
+    milestone: { id: "milestone:launch-ready", projectId: "project:pawpovai", title: "Launch identity and outreach ready", proposedAmount: usdc("1000000"), status: "INCOMPLETE", requirementIds: requirements.map((r) => r.id), dueAt: null }, requirements,
     disclosurePreferences: { projectId: "project:pawpovai", discloseCapitalSummary: true, discloseRequirementOutcomes: false, discloseProofRecords: false, discloseSettlementState: false, approvedProofIds: [], updatedAt: NOW },
   };
   return structuredClone(seed);

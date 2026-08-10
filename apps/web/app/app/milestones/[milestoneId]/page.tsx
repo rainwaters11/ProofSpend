@@ -62,6 +62,11 @@ export default async function MilestoneDetailPage({
   const { milestoneId: rawMilestoneId } = await params;
   const { state: requestedState, view: requestedView } = await searchParams;
   const scenario = buildReleaseScenario();
+  const insufficientBalanceRequired = scenario.milestone.proposedAmount;
+  const insufficientBalanceAvailable = {
+    asset: insufficientBalanceRequired.asset,
+    atomicUnits: (BigInt(insufficientBalanceRequired.atomicUnits) / 2n).toString(),
+  };
 
   let milestoneId: string;
   try {
@@ -106,8 +111,8 @@ export default async function MilestoneDetailPage({
         {activeView === "config-missing" && <ConfigurationMissingState />}
         {activeView === "insufficient-balance" && (
           <InsufficientBalanceState
-            available={{ atomicUnits: "50000000", asset: "USDC" }}
-            required={{ atomicUnits: "250000000", asset: "USDC" }}
+            available={insufficientBalanceAvailable}
+            required={insufficientBalanceRequired}
           />
         )}
       </div>
