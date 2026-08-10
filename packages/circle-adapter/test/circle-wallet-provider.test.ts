@@ -495,10 +495,11 @@ describe("CircleWalletProvider", () => {
     });
   });
 
-  it("recovers an accepted submission by retrying the same Circle idempotency key", async () => {
+  it("revalidates current balance before retrying a consumed operation-less submission", async () => {
     const authorizationStore = new FakeAuthorizationStore();
     authorizationStore.markConsumed();
     mockWallets();
+    mockSufficientBalance();
     mockedClient.createTransaction.mockResolvedValue({
       data: { id: OPERATION_ID_1, state: "SENT" },
     });
@@ -511,10 +512,37 @@ describe("CircleWalletProvider", () => {
       idempotencyKey: baseIntent.idempotencyKey,
     });
     expect(authorizationStore.consumeCalls).toBe(0);
-    expect(mockedClient.getWalletTokenBalance).not.toHaveBeenCalled();
+    expect(mockedClient.getWalletTokenBalance).toHaveBeenCalledTimes(1);
     expect(mockedClient.createTransaction).toHaveBeenCalledWith(
       expect.objectContaining({ idempotencyKey: baseIntent.idempotencyKey }),
     );
+  });
+
+  it("rejects consumed operation-less recovery when the current balance is below 1 USDC", async () => {
+    const authorizationStore = new FakeAuthorizationStore();
+    authorizationStore.markConsumed();
+    mockWallets();
+    mockedClient.getWalletTokenBalance.mockResolvedValue({
+      data: {
+        tokenBalances: [{
+          amount: "0.5",
+          token: { tokenAddress: circleEnvironment.CIRCLE_USDC_TOKEN_ADDRESS },
+        }],
+      },
+    });
+
+    const result = await makeProvider({ authorizationStore }).submitTransfer(
+      validIntent(),
+    );
+
+    expect(result).toMatchObject({
+      status: "FAILED",
+      failureCode: "INSUFFICIENT_BALANCE",
+    });
+    expect(authorizationStore.consumeCalls).toBe(0);
+    expect(mockedClient.getWallet).toHaveBeenCalledTimes(2);
+    expect(mockedClient.getWalletTokenBalance).toHaveBeenCalledTimes(1);
+    expect(mockedClient.createTransaction).not.toHaveBeenCalled();
   });
 
   it("rejects an expired consumed approval before retrying an unsubmitted Circle request", async () => {

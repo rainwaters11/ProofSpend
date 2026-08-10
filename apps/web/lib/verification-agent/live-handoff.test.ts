@@ -506,6 +506,19 @@ describe("executeLiveCircleHandoff", () => {
         transactionHash: null,
       },
     });
+
+    const submitTransfer = vi.fn();
+    const pollingProvider = fakeProvider([], { submitTransfer });
+    const recovered = await executeLiveCircleHandoff({
+      run: context.run,
+      approval: context.approval,
+      environment: context.environment,
+      initialActivityTrace: context.run.activityTrace,
+      dependencies: { store: context.store, providerFactory: () => pollingProvider },
+    });
+
+    expect(recovered.status).toBe("HANDOFF_CONFIRMED");
+    expect(submitTransfer).not.toHaveBeenCalled();
   });
 
   it("recovers when Circle may accept a request before its response is recorded", async () => {

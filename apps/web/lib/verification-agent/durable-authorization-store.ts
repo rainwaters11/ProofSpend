@@ -134,6 +134,8 @@ const DurableStateSchema = z
             proposalId: z.string().min(1),
             authorizationBindingId: z.string().min(1),
             claimedAt: z.string().datetime(),
+            resultHistoryLength: z.number().int().positive().optional(),
+            failedResult: TransferResultSchema.optional(),
           })
           .strict(),
       )
@@ -157,6 +159,7 @@ const LOCK_RETRIES = 100;
 const LOCK_RETRY_MS = 10;
 const LOCK_STALE_MS = 30_000;
 const LOCK_HEARTBEAT_MS = 10_000;
+const PRE_SUBMISSION_RETRY_CLAIM_LEASE_MS = 30_000;
 
 function referencesMatch(
   snapshot: PersistedTransferAuthorization,
@@ -433,6 +436,18 @@ export class FileTransferAuthorizationStore implements TransferAuthorizationStor
       const authorization = state.authorizations[intent.authorizationBindingId];
       const history = state.resultHistory[intent.idempotencyKey] ?? [];
       const previous = history.at(-1);
+      const existingClaim = state.retryClaims[intent.idempotencyKey];
+      const now = new Date();
+      const reclaimingExpiredClaim =
+        existingClaim !== undefined &&
+        Date.parse(existingClaim.claimedAt) + PRE_SUBMISSION_RETRY_CLAIM_LEASE_MS <=
+          now.getTime() &&
+        existingClaim.proposalId === intent.proposalId &&
+        existingClaim.authorizationBindingId === intent.authorizationBindingId &&
+        existingClaim.resultHistoryLength === history.length &&
+        existingClaim.failedResult !== undefined &&
+        previous !== undefined &&
+        sameValue(existingClaim.failedResult, previous);
       if (
         authorization === undefined ||
         !authorizationMatchesIntent(authorization, intent) ||
@@ -440,7 +455,7 @@ export class FileTransferAuthorizationStore implements TransferAuthorizationStor
         previous?.status !== "FAILED" ||
         previous.providerOperationId !== undefined ||
         history.some((result) => result.providerOperationId !== undefined) ||
-        state.retryClaims[intent.idempotencyKey] !== undefined
+        (existingClaim !== undefined && !reclaimingExpiredClaim)
       ) {
         return null;
       }
@@ -449,7 +464,9 @@ export class FileTransferAuthorizationStore implements TransferAuthorizationStor
         claimToken,
         proposalId: intent.proposalId,
         authorizationBindingId: intent.authorizationBindingId,
-        claimedAt: new Date().toISOString(),
+        claimedAt: now.toISOString(),
+        resultHistoryLength: history.length,
+        failedResult: previous,
       };
       await this.writeState(state, ownerToken);
       return claimToken;
@@ -476,6 +493,9 @@ export class FileTransferAuthorizationStore implements TransferAuthorizationStor
         claim?.claimToken !== claimToken ||
         claim.proposalId !== parsed.proposalId ||
         claim.authorizationBindingId !== authorization?.binding.id ||
+        claim.resultHistoryLength !== history.length ||
+        claim.failedResult === undefined ||
+        !sameValue(claim.failedResult, history.at(-1)) ||
         !["PREPARED", "FAILED"].includes(parsed.status) ||
         parsed.providerOperationId !== undefined
       ) {

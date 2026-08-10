@@ -640,6 +640,77 @@ describe("FileTransferAuthorizationStore", () => {
     expect(state.reconciliations).toHaveLength(1);
   });
 
+  it("atomically reclaims an abandoned retry claim and fences the stale claimant", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-08-09T00:02:00.000Z"));
+      const directory = await mkdtemp(join(tmpdir(), "proofspend-retry-lease-"));
+      directories.push(directory);
+      const path = join(directory, "authorization.json");
+      const environment = liveEnvironment(path);
+      const run = await approvalRun(environment);
+      const { intent, authorization } = await buildLiveTransferAuthorization({
+        run,
+        approval: approvalFor(run),
+        environment,
+      });
+      const abandonedProcess = new FileTransferAuthorizationStore(path);
+      const restartedProcess = new FileTransferAuthorizationStore(path);
+      await abandonedProcess.persist(authorization);
+      const failed = {
+        proposalId: intent.proposalId,
+        idempotencyKey: intent.idempotencyKey,
+        mode: "ARC_TESTNET" as const,
+        status: "FAILED" as const,
+        failureCode: "AUTHORIZATION_UNAVAILABLE" as const,
+        failureMessage: "Preparation failed before submission.",
+      };
+      await abandonedProcess.recordResult(failed);
+      const staleToken = await abandonedProcess.claimPreSubmissionRetry(intent);
+      expect(staleToken).toEqual(expect.any(String));
+
+      await vi.advanceTimersByTimeAsync(30_001);
+      const replacementToken =
+        await restartedProcess.claimPreSubmissionRetry(intent);
+      expect(replacementToken).toEqual(expect.any(String));
+      expect(replacementToken).not.toBe(staleToken);
+
+      const prepared = {
+        proposalId: intent.proposalId,
+        idempotencyKey: intent.idempotencyKey,
+        mode: "ARC_TESTNET" as const,
+        status: "PREPARED" as const,
+      };
+      await expect(
+        abandonedProcess.completePreSubmissionRetryClaim(staleToken!, prepared),
+      ).rejects.toThrow("PRE_SUBMISSION_RETRY_CLAIM_LOST");
+      await expect(
+        restartedProcess.completePreSubmissionRetryClaim(replacementToken!, prepared),
+      ).resolves.toBeUndefined();
+      await restartedProcess.recordResult({
+        ...prepared,
+        status: "SUBMITTED",
+        providerOperationId: "11111111-1111-4111-8111-111111111111",
+      });
+      await restartedProcess.recordResult({
+        ...prepared,
+        status: "CONFIRMED",
+        providerOperationId: "11111111-1111-4111-8111-111111111111",
+      });
+
+      await expect(
+        restartedProcess.loadResultHistory(intent.idempotencyKey),
+      ).resolves.toMatchObject([
+        { status: "FAILED" },
+        { status: "PREPARED" },
+        { status: "SUBMITTED" },
+        { status: "CONFIRMED" },
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
 });
 
 function liveEnvironment(path: string) {

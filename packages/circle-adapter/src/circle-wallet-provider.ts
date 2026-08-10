@@ -331,7 +331,7 @@ export class CircleWalletProvider implements ArcTestnetTransferProvider {
       }
       const [destination, balance] = await Promise.all([
         this.client.getWallet({ id: this.destinationWalletId }),
-        recoveringConsumedSubmission ? Promise.resolve(null) : this.getBalance(),
+        this.getBalance(),
       ]);
       const destinationAddress = destination.data?.wallet?.address;
       if (
@@ -345,7 +345,7 @@ export class CircleWalletProvider implements ArcTestnetTransferProvider {
             "The destination address does not match the configured Arc Testnet destination wallet.",
         });
       }
-      if (balance !== null && BigInt(balance.amountAtomic) < BigInt(intent.amountAtomic)) {
+      if (BigInt(balance.amountAtomic) < BigInt(intent.amountAtomic)) {
         return failureResult(intent, "ARC_TESTNET", {
           ok: false,
           failureCode: "INSUFFICIENT_BALANCE",
