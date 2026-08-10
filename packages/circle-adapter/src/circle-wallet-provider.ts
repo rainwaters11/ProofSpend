@@ -299,6 +299,18 @@ export class CircleWalletProvider implements ArcTestnetTransferProvider {
     if (!revalidation.ok) {
       return failureResult(intent, "ARC_TESTNET", revalidation);
     }
+    if (
+      recoveringConsumedSubmission &&
+      initialAuthorization !== null &&
+      Date.parse(initialAuthorization.approval.expiresAt) <= Date.now()
+    ) {
+      return failureResult(intent, "ARC_TESTNET", {
+        ok: false,
+        failureCode: "APPROVAL_EXPIRED",
+        failureMessage:
+          "The approval expired before the unsubmitted Circle request could be retried.",
+      });
+    }
     try {
       const [source, destination, balance] = await Promise.all([
         this.client.getWallet({ id: this.sourceWalletId }),
