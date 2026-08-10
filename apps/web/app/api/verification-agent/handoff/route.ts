@@ -14,6 +14,7 @@ import {
   loadVerificationAgentRun,
   persistApprovedHandoff,
   recordRejectedHandoff,
+  recoverPersistedLiveCircleHandoff,
   releaseApprovedHandoffReservation,
   reserveApprovedHandoff,
 } from "@/lib/verification-agent";
@@ -32,7 +33,21 @@ export async function POST(request: Request) {
     const authorizedActorId = authorizeAgentApiRequest(request, environment);
     const parsedBody = HandoffRequestSchema.parse(await request.json());
     const stored = loadVerificationAgentRun(parsedBody.runId);
-    if (stored === null || stored.authorizedActorId !== authorizedActorId) {
+    if (stored === null) {
+      if (environment.PROOFSPEND_ADAPTER_MODE === "arc-testnet") {
+        const recovered = await recoverPersistedLiveCircleHandoff({
+          runId: parsedBody.runId,
+          approval: parsedBody.approval,
+          authenticatedActorId: authorizedActorId,
+          environment,
+        });
+        if (recovered !== null) {
+          return NextResponse.json(recovered);
+        }
+      }
+      return NextResponse.json({ error: "HANDOFF_RUN_NOT_FOUND" }, { status: 404 });
+    }
+    if (stored.authorizedActorId !== authorizedActorId) {
       return NextResponse.json({ error: "HANDOFF_RUN_NOT_FOUND" }, { status: 404 });
     }
     if (stored.handoffAttempts.length >= MAX_HANDOFF_ATTEMPTS_PER_RUN) {
