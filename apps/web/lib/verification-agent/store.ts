@@ -14,6 +14,7 @@ interface StoredVerificationRun {
   run: VerificationAgentResult;
   expiresAt: number;
   handoff: { approval: ApprovalDecision; result: HandoffResult } | null;
+  handoffReservation: ApprovalDecision | null;
   handoffAttempts: Array<{ approval: ApprovalDecision; result: HandoffResult }>;
 }
 
@@ -48,6 +49,7 @@ export function saveVerificationAgentRun(args: {
     run: VerificationAgentResultSchema.parse(structuredClone(args.run)),
     expiresAt: Date.now() + RUN_RETENTION_MS,
     handoff: null,
+    handoffReservation: null,
     handoffAttempts: [],
   });
 }
@@ -74,6 +76,57 @@ export function loadVerificationAgentRun(runId: string): StoredVerificationRun |
   return stored === undefined ? null : structuredClone(stored);
 }
 
+export function reserveApprovedHandoff(args: {
+  runId: string;
+  approval: ApprovalDecision;
+}): boolean {
+  discardExpiredRuns();
+  const stored = runs.get(args.runId);
+  if (
+    stored === undefined ||
+    stored.run.proposal === null ||
+    stored.handoffReservation !== null
+  ) {
+    return false;
+  }
+  const approval = ApprovalDecisionSchema.parse(structuredClone(args.approval));
+  if (stored.handoff !== null) {
+    const canRecover =
+      stored.handoff.result.status === "HANDOFF_SUBMITTED" &&
+      stored.handoff.result.adapterMode === "arc-testnet" &&
+      approvalsMatch(stored.handoff.approval, approval);
+    if (!canRecover) {
+      return false;
+    }
+  } else if (consumedProposalKeys.has(stored.run.proposal.idempotencyKey)) {
+    return false;
+  }
+  runs.set(args.runId, {
+    ...stored,
+    handoffReservation: approval,
+  });
+  return true;
+}
+
+export function releaseApprovedHandoffReservation(args: {
+  runId: string;
+  approval: ApprovalDecision;
+}): void {
+  discardExpiredRuns();
+  const stored = runs.get(args.runId);
+  if (
+    stored?.handoffReservation === null ||
+    stored?.handoffReservation === undefined ||
+    !approvalsMatch(stored.handoffReservation, args.approval)
+  ) {
+    return;
+  }
+  runs.set(args.runId, {
+    ...stored,
+    handoffReservation: null,
+  });
+}
+
 export function persistApprovedHandoff(args: {
   runId: string;
   approval: ApprovalDecision;
@@ -81,7 +134,12 @@ export function persistApprovedHandoff(args: {
 }): boolean {
   discardExpiredRuns();
   const stored = runs.get(args.runId);
-  if (stored === undefined || stored.run.proposal === null) {
+  if (
+    stored === undefined ||
+    stored.run.proposal === null ||
+    stored.handoffReservation === null ||
+    !approvalsMatch(stored.handoffReservation, args.approval)
+  ) {
     return false;
   }
   const handoff = parseHandoffAttempt(args);
@@ -100,6 +158,7 @@ export function persistApprovedHandoff(args: {
     runs.set(args.runId, {
       ...stored,
       handoff,
+      handoffReservation: null,
       handoffAttempts: appendHandoffAttempt(stored.handoffAttempts, handoff),
     });
     return true;
@@ -110,6 +169,7 @@ export function persistApprovedHandoff(args: {
   runs.set(args.runId, {
     ...stored,
     handoff,
+    handoffReservation: null,
     handoffAttempts: appendHandoffAttempt(stored.handoffAttempts, handoff),
   });
   consumedProposalKeys.add(stored.run.proposal.idempotencyKey);
