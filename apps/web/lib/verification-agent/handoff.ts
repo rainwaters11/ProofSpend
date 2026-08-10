@@ -25,10 +25,6 @@ export function handoffApprovedProposal(args: {
   const now = args.now ?? new Date().toISOString();
   const trace: ActivityEvent[] = [];
 
-  if (run.adapterMode !== "mock") {
-    throw new Error("HANDOFF_PERSISTENT_IDEMPOTENCY_REQUIRED");
-  }
-
   if (run.status !== "APPROVAL_REQUIRED" || run.proposal === null) {
     appendActivity(trace, {
       id: `${run.runId}:handoff:reject:state`,
@@ -41,7 +37,7 @@ export function handoffApprovedProposal(args: {
       status: "HANDOFF_REJECTED",
       adapterMode: run.adapterMode,
       execution: {
-        state: "SKIPPED_MOCK",
+        state: run.adapterMode === "mock" ? "SKIPPED_MOCK" : "NOT_SUBMITTED",
         transactionHash: null,
         confirmation: null,
         explorerUrl: null,
@@ -62,7 +58,7 @@ export function handoffApprovedProposal(args: {
       status: "HANDOFF_REJECTED",
       adapterMode: run.adapterMode,
       execution: {
-        state: "SKIPPED_MOCK",
+        state: run.adapterMode === "mock" ? "SKIPPED_MOCK" : "NOT_SUBMITTED",
         transactionHash: null,
         confirmation: null,
         explorerUrl: null,
@@ -86,7 +82,7 @@ export function handoffApprovedProposal(args: {
       status: "HANDOFF_REJECTED",
       adapterMode: run.adapterMode,
       execution: {
-        state: "SKIPPED_MOCK",
+        state: run.adapterMode === "mock" ? "SKIPPED_MOCK" : "NOT_SUBMITTED",
         transactionHash: null,
         confirmation: null,
         explorerUrl: null,
@@ -124,7 +120,7 @@ export function handoffApprovedProposal(args: {
       status: "HANDOFF_REJECTED",
       adapterMode: run.adapterMode,
       execution: {
-        state: "SKIPPED_MOCK",
+        state: run.adapterMode === "mock" ? "SKIPPED_MOCK" : "NOT_SUBMITTED",
         transactionHash: null,
         confirmation: null,
         explorerUrl: null,
@@ -145,7 +141,7 @@ export function handoffApprovedProposal(args: {
       status: "HANDOFF_REJECTED",
       adapterMode: run.adapterMode,
       execution: {
-        state: "SKIPPED_MOCK",
+        state: run.adapterMode === "mock" ? "SKIPPED_MOCK" : "NOT_SUBMITTED",
         transactionHash: null,
         confirmation: null,
         explorerUrl: null,
@@ -162,20 +158,22 @@ export function handoffApprovedProposal(args: {
     message: "Human approval accepted after deterministic server revalidation.",
   });
 
-  appendActivity(trace, {
-    id: `${run.runId}:handoff:mock`,
-    at: now,
-    layer: "MOCK",
-    code: "HANDOFF_EXECUTED",
-    message:
-      "Mock adapter acknowledged the approved proposal; no Arc transaction hash or confirmation is produced.",
-  });
+  if (run.adapterMode === "mock") {
+    appendActivity(trace, {
+      id: `${run.runId}:handoff:mock`,
+      at: now,
+      layer: "MOCK",
+      code: "HANDOFF_EXECUTED",
+      message:
+        "Mock adapter acknowledged the approved proposal; no Arc transaction hash or confirmation is produced.",
+    });
+  }
 
   return HandoffResultSchema.parse({
     status: "HANDOFF_READY",
     adapterMode: run.adapterMode,
     execution: {
-      state: "SKIPPED_MOCK",
+      state: run.adapterMode === "mock" ? "SKIPPED_MOCK" : "NOT_SUBMITTED",
       transactionHash: null,
       confirmation: null,
       explorerUrl: null,

@@ -8,6 +8,7 @@ import {
   MAX_HANDOFF_ATTEMPTS_PER_RUN,
   MAX_HANDOFF_IDENTIFIER_LENGTH,
   authorizeAgentApiRequest,
+  executeLiveCircleHandoff,
   handoffApprovedProposal,
   loadVerificationAgentRun,
   persistApprovedHandoff,
@@ -24,7 +25,8 @@ const HandoffRequestSchema = z
 
 export async function POST(request: Request) {
   try {
-    const authorizedActorId = authorizeAgentApiRequest(request, getEnvironment());
+    const environment = getEnvironment();
+    const authorizedActorId = authorizeAgentApiRequest(request, environment);
     const parsedBody = HandoffRequestSchema.parse(await request.json());
     const stored = loadVerificationAgentRun(parsedBody.runId);
     if (stored === null || stored.authorizedActorId !== authorizedActorId) {
@@ -36,21 +38,33 @@ export async function POST(request: Request) {
         { status: 429 },
       );
     }
-    const result = HandoffResultSchema.parse(
+    const approvalResult = HandoffResultSchema.parse(
       handoffApprovedProposal({
         run: stored.run,
         approval: parsedBody.approval,
         authenticatedActorId: authorizedActorId,
       }),
     );
-    if (result.status !== "HANDOFF_READY") {
+    if (approvalResult.status !== "HANDOFF_READY") {
       recordRejectedHandoff({
         runId: stored.run.runId,
         approval: parsedBody.approval,
-        result,
+        result: approvalResult,
       });
       return NextResponse.json({ error: "HANDOFF_REJECTED" }, { status: 422 });
     }
+    const result =
+      environment.PROOFSPEND_ADAPTER_MODE === "arc-testnet"
+        ? await executeLiveCircleHandoff({
+            run: stored.run,
+            approval: parsedBody.approval,
+            environment,
+            initialActivityTrace: [
+              ...stored.run.activityTrace,
+              ...approvalResult.activityTrace,
+            ],
+          })
+        : approvalResult;
     if (
       !persistApprovedHandoff({
         runId: stored.run.runId,
@@ -66,11 +80,11 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: error.message }, { status: error.status });
     }
     const code = error instanceof Error ? error.message : "HANDOFF_FAILED";
-    if (code === "HANDOFF_PERSISTENT_IDEMPOTENCY_REQUIRED") {
-      return NextResponse.json({ error: code }, { status: 503 });
-    }
     if (code === "HANDOFF_ATTEMPT_LIMIT_REACHED") {
       return NextResponse.json({ error: code }, { status: 429 });
+    }
+    if (code === "HANDOFF_DUPLICATE") {
+      return NextResponse.json({ error: code }, { status: 409 });
     }
     return NextResponse.json({ error: code }, { status: 400 });
   }

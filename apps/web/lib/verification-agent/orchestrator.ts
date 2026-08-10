@@ -80,6 +80,7 @@ function buildProposal(
   reason: string,
   now: string,
   amount: ReturnType<typeof createPawPovAiEvidenceScenario>["milestone"]["proposedAmount"],
+  destination: string,
 ) {
   const nowMs = Date.parse(now);
   if (!Number.isFinite(nowMs)) {
@@ -96,7 +97,7 @@ function buildProposal(
     amount,
     asset: "USDC",
     chain: "ARC_TESTNET",
-    destination: PROPOSAL_DESTINATION,
+    destination,
     authorizedRole: "FOUNDER",
     preparedAt: now,
     expiresAt: new Date(nowMs + RELEASE_TTL_MS).toISOString(),
@@ -233,6 +234,7 @@ export function resumeVerificationAgentAfterFounderCorrection(args: {
   acceptedMatch: EvidenceMatch;
   now?: string;
 }): VerificationAgentResult {
+  const environment = getEnvironment();
   const run = VerificationAgentResultSchema.parse(args.run);
   if (run.status !== "CORRECTION_REQUIRED" || run.proposal !== null) {
     throw new Error("AGENT_CORRECTION_NOT_REQUIRED");
@@ -282,6 +284,9 @@ export function resumeVerificationAgentAfterFounderCorrection(args: {
     "Seeded deterministic evaluation passed after one founder receipt correction.",
     now,
     scenario.milestone.proposedAmount,
+    environment.PROOFSPEND_ADAPTER_MODE === "arc-testnet"
+      ? environment.CIRCLE_DESTINATION_WALLET_ADDRESS
+      : PROPOSAL_DESTINATION,
   );
 
   appendEvent(trace, {

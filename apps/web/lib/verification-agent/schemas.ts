@@ -35,6 +35,10 @@ export const ActivityCodeSchema = z.enum([
   "HANDOFF_REJECTED",
   "HANDOFF_READY",
   "HANDOFF_EXECUTED",
+  "TRANSACTION_PREPARED",
+  "TRANSACTION_SUBMITTED",
+  "TRANSACTION_CONFIRMED",
+  "TRANSACTION_FAILED",
 ]);
 
 export const ActivityEventSchema = z
@@ -172,14 +176,23 @@ export type ApprovalDecision = z.infer<typeof ApprovalDecisionSchema>;
 
 export const HandoffResultSchema = z
   .object({
-    status: z.enum(["HANDOFF_REJECTED", "HANDOFF_READY"]),
+    status: z.enum([
+      "HANDOFF_REJECTED",
+      "HANDOFF_READY",
+      "HANDOFF_SUBMITTED",
+      "HANDOFF_CONFIRMED",
+      "HANDOFF_FAILED",
+    ]),
     adapterMode: AdapterModeSchema,
     execution: z
       .object({
-        state: z.enum(["SKIPPED_MOCK", "PENDING_ARC_TESTNET"]),
+        state: z.enum(["NOT_SUBMITTED", "SKIPPED_MOCK", "SUBMITTED", "CONFIRMED", "FAILED"]),
+        providerOperationId: z.string().nullable().optional(),
         transactionHash: z.string().nullable(),
         confirmation: z.string().nullable(),
         explorerUrl: z.string().nullable(),
+        failureCode: z.string().nullable().optional(),
+        failureMessage: z.string().nullable().optional(),
       })
       .strict(),
     activityTrace: z.array(ActivityEventSchema).min(1),

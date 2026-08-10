@@ -15,6 +15,7 @@
     "lint": "bun --filter '*' lint",
     "typecheck": "bun --filter '*' typecheck",
     "test": "bun --filter '*' test",
-    "build": "bun --filter '*' build"
+    "build": "bun --filter '*' build",
+    "demo:live": "bun scripts/rehearse-live-demo.ts"
   }
 }

@@ -114,4 +114,41 @@ describe("environment validation", () => {
       PROOFSPEND_AGENT_API_TOKEN: "test-agent-api-token-that-is-at-least-32-chars",
     });
   });
+
+  it("accepts a complete server-only OpenAI and Arc Testnet configuration", () => {
+    expect(
+      parseEnvironment({
+        OPENAI_API_KEY: "sk-test",
+        LLM_MODEL: "gpt-5.1",
+        PROOFSPEND_AGENT_API_TOKEN: "test-agent-api-token-that-is-at-least-32-chars",
+        PROOFSPEND_ADAPTER_MODE: "arc-testnet",
+        PROOFSPEND_AGENT_MODE: "openai",
+        CIRCLE_API_KEY: "TEST_API_KEY:test:key",
+        CIRCLE_ENTITY_SECRET: "a".repeat(64),
+        CIRCLE_SOURCE_WALLET_ID: "44444444-4444-4444-8444-444444444444",
+        CIRCLE_DESTINATION_WALLET_ID: "55555555-5555-4555-8555-555555555555",
+        CIRCLE_DESTINATION_WALLET_ADDRESS: "0x1111111111111111111111111111111111111111",
+        CIRCLE_CHAIN: "ARC-TESTNET",
+        CIRCLE_USDC_TOKEN_ADDRESS: "0x3600000000000000000000000000000000000000",
+        CIRCLE_POLL_INTERVAL_MS: "3000",
+        CIRCLE_MAX_POLLS: "100",
+        CIRCLE_ARGSCAN_BASE_URL: "https://testnet.arcscan.app",
+        PROOFSPEND_AUTH_STORE_PATH: ".proofspend/live-authorization.json",
+      }),
+    ).toMatchObject({
+      PROOFSPEND_ADAPTER_MODE: "arc-testnet",
+      PROOFSPEND_AGENT_MODE: "openai",
+      CIRCLE_POLL_INTERVAL_MS: 3000,
+      CIRCLE_MAX_POLLS: 100,
+    });
+  });
+
+  it("rejects live Arc mode without its durable store and credentials", () => {
+    expect(() =>
+      parseEnvironment({
+        PROOFSPEND_ADAPTER_MODE: "arc-testnet",
+        PROOFSPEND_AGENT_MODE: "openai",
+      }),
+    ).toThrow();
+  });
 });

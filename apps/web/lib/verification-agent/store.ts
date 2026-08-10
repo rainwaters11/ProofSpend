@@ -17,8 +17,8 @@ interface StoredVerificationRun {
   handoffAttempts: Array<{ approval: ApprovalDecision; result: HandoffResult }>;
 }
 
-// Process-local demo storage. Non-mock handoff remains blocked until Issue #7
-// provides durable, atomic persistence shared by all server instances.
+// Short-lived authenticated run data remains process-local for this bounded demo.
+// Live authorization consumption and replay protection use the durable store.
 const runs = new Map<string, StoredVerificationRun>();
 const consumedProposalKeys = new Set<string>();
 const RUN_RETENTION_MS = 30 * 60 * 1000;

@@ -1,8 +1,11 @@
 import { ModeBadge } from "@/components/mode-badge";
+import { LiveHandoffPanel } from "@/components/live-handoff-panel";
+import { getEnvironment } from "@/lib/env";
 import { formatMoney } from "@/lib/format-money";
 import {
   resumeVerificationAgentAfterFounderCorrection,
   runVerificationAgent,
+  loadLatestLiveHandoffResult,
 } from "@/lib/verification-agent";
 import type { VerificationAgentResult } from "@/lib/verification-agent";
 import { createPawPovAiEvidenceScenario } from "@proofspend/domain";
@@ -25,6 +28,61 @@ function formatCircleDecimal(atomicUnits: string): string {
 }
 
 export default async function ActivityPage() {
+  const environment = getEnvironment();
+  if (environment.PROOFSPEND_ADAPTER_MODE === "arc-testnet") {
+    const handoff = await loadLatestLiveHandoffResult(environment);
+    return (
+      <div className="flex max-w-5xl flex-col gap-6">
+        <div className="flex flex-col gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <h1 className="text-2xl font-semibold text-foreground">
+              Verification Agent Activity
+            </h1>
+            <ModeBadge mode="arc-testnet" />
+          </div>
+          <p className="text-sm text-muted-foreground">
+            Agent mode: <strong className="font-semibold text-foreground">OPENAI</strong>
+          </p>
+          <p className="text-sm text-muted-foreground">
+            Live mode fails closed. This page displays only the latest server-persisted,
+            privacy-safe handoff result.
+          </p>
+        </div>
+        {handoff === null ? (
+          <section className="rounded-lg border border-border bg-surface p-4 md:p-6">
+            <h2 className="text-lg font-semibold text-foreground">No live transfer recorded</h2>
+            <p className="mt-2 text-sm text-muted-foreground">
+              Run the authenticated Verification Agent flow. No mock transaction or explorer link
+              will be substituted.
+            </p>
+          </section>
+        ) : (
+          <>
+            <LiveHandoffPanel result={handoff} />
+            <section className="rounded-lg border border-border bg-surface p-4 md:p-6">
+              <h2 className="text-lg font-semibold text-foreground">Agent Activity Trace</h2>
+              <ol className="mt-4 space-y-3" aria-label="Agent activity trace">
+                {handoff.activityTrace.map((event) => (
+                  <li key={event.id} className="rounded-md border border-border bg-background p-3">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="rounded bg-muted px-2 py-1 text-xs font-semibold text-foreground">
+                        {event.layer}
+                      </span>
+                      <span className="text-xs uppercase tracking-wide text-muted-foreground">
+                        {event.code}
+                      </span>
+                    </div>
+                    <p className="mt-1 text-sm text-foreground">{event.message}</p>
+                  </li>
+                ))}
+              </ol>
+            </section>
+          </>
+        )}
+      </div>
+    );
+  }
+
   let run: VerificationAgentResult;
   try {
     const now = new Date();

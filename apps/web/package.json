@@ -13,6 +13,7 @@
     "start": "next start"
   },
   "dependencies": {
+    "@proofspend/circle-adapter": "workspace:*",
     "@proofspend/domain": "workspace:*",
     "@proofspend/shared": "workspace:*",
     "@radix-ui/react-dialog": "^1.1.23",
