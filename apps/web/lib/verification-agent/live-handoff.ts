@@ -312,7 +312,37 @@ export async function executeLiveCircleHandoff(args: {
   const trace = structuredClone(args.initialActivityTrace);
   let lastResult: TransferResult | null = null;
   const finish = async (transfer: TransferResult): Promise<HandoffResult> => {
-    const result = handoffResult(bindResultToIntent(intent, transfer), trace);
+    const boundTransfer = bindResultToIntent(intent, transfer);
+    if (boundTransfer.status === "CONFIRMED") {
+      if (
+        !boundTransfer.providerOperationId ||
+        !boundTransfer.transactionHash ||
+        !boundTransfer.blockNumber ||
+        !boundTransfer.blockHash ||
+        !boundTransfer.explorerUrl
+      ) {
+        throw new Error("CONFIRMED_TRANSFER_EVIDENCE_INCOMPLETE");
+      }
+      await store.recordReconciliation({
+        reconciliationId: `reconciliation:${intent.transactionRecordId}`,
+        proposalId: intent.proposalId,
+        idempotencyKey: intent.idempotencyKey,
+        transactionRecordId: intent.transactionRecordId,
+        mode: "ARC_TESTNET",
+        status: "RECONCILED",
+        network: intent.network,
+        chainId: intent.chainId,
+        asset: intent.asset,
+        amountAtomic: intent.amountAtomic,
+        providerOperationId: boundTransfer.providerOperationId,
+        transactionHash: boundTransfer.transactionHash,
+        blockNumber: boundTransfer.blockNumber,
+        blockHash: boundTransfer.blockHash,
+        explorerUrl: boundTransfer.explorerUrl,
+        reconciledAt: boundTransfer.polledAt ?? new Date().toISOString(),
+      });
+    }
+    const result = handoffResult(boundTransfer, trace);
     await store.recordHandoff(result);
     return result;
   };
