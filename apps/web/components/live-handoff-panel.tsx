@@ -60,6 +60,31 @@ export function LiveHandoffPanel({ result }: { result: HandoffResult }) {
             View the real transaction on Arcscan
           </a>
         )}
+        {execution.reconciliation?.state === "RECONCILED" && (
+          <div
+            role="status"
+            className="rounded-md border border-border bg-background p-3 text-sm"
+          >
+            <p className="font-medium text-foreground">Reconciled</p>
+            <p className="mt-1 text-muted-foreground">
+              The Arc confirmation is durably linked to this handoff record.
+            </p>
+            <dl className="mt-2 grid gap-2 sm:grid-cols-2">
+              <div>
+                <dt className="text-muted-foreground">Reconciliation record</dt>
+                <dd className="break-all font-mono text-xs text-foreground">
+                  {execution.reconciliation.reconciliationId}
+                </dd>
+              </div>
+              <div>
+                <dt className="text-muted-foreground">Reconciled at</dt>
+                <dd className="font-mono text-xs text-foreground">
+                  {execution.reconciliation.reconciledAt}
+                </dd>
+              </div>
+            </dl>
+          </div>
+        )}
         {execution.state === "SUBMITTED" && execution.failureMessage && (
           <p role="status" className="text-sm text-muted-foreground">
             {execution.failureMessage}
