@@ -1,7 +1,7 @@
 import "server-only";
 
 import { randomUUID } from "node:crypto";
-import { mkdir, open, readFile, rename, stat, unlink, utimes } from "node:fs/promises";
+import { link, mkdir, open, readFile, rename, stat, unlink, utimes } from "node:fs/promises";
 import { dirname } from "node:path";
 
 import {
@@ -212,6 +212,7 @@ function parseLockMetadata(raw: string): LockMetadata | null {
 export class FileTransferAuthorizationStore implements TransferAuthorizationStore {
   readonly path: string;
   private readonly lockPath: string;
+  private readonly reclaimPath: string;
 
   constructor(path: string) {
     if (!path.trim()) {
@@ -219,6 +220,7 @@ export class FileTransferAuthorizationStore implements TransferAuthorizationStor
     }
     this.path = path;
     this.lockPath = `${path}.lock`;
+    this.reclaimPath = `${path}.lock.reclaim`;
   }
 
   async persist(snapshot: PersistedTransferAuthorization): Promise<boolean> {
@@ -452,41 +454,115 @@ export class FileTransferAuthorizationStore implements TransferAuthorizationStor
     }
   }
 
+  private async acquireReclaimGuard(
+    ownerToken: string,
+  ): Promise<Awaited<ReturnType<typeof open>> | null> {
+    try {
+      const guard = await open(this.reclaimPath, "wx", 0o600);
+      try {
+        await guard.writeFile(
+          JSON.stringify(
+            LockMetadataSchema.parse({
+              ownerToken,
+              pid: process.pid,
+              createdAt: new Date().toISOString(),
+            }),
+          ),
+          "utf8",
+        );
+        await guard.sync();
+      } catch (error) {
+        await guard.close();
+        await unlink(this.reclaimPath).catch(() => undefined);
+        throw error;
+      }
+      return guard;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
+        throw error;
+      }
+      try {
+        const guardStat = await stat(this.reclaimPath);
+        if (Date.now() - guardStat.mtimeMs >= LOCK_STALE_MS) {
+          await unlink(this.reclaimPath);
+        }
+      } catch (guardError) {
+        if ((guardError as NodeJS.ErrnoException).code !== "ENOENT") {
+          throw guardError;
+        }
+      }
+      return null;
+    }
+  }
+
+  private async releaseReclaimGuard(ownerToken: string): Promise<void> {
+    try {
+      const metadata = parseLockMetadata(await readFile(this.reclaimPath, "utf8"));
+      if (metadata?.ownerToken === ownerToken) {
+        await unlink(this.reclaimPath);
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw error;
+      }
+    }
+  }
+
   private async reclaimStaleLock(): Promise<boolean> {
-    const snapshot = await this.inspectStaleLock();
-    if (snapshot === null) {
+    const reclaimOwnerToken = randomUUID();
+    const guard = await this.acquireReclaimGuard(reclaimOwnerToken);
+    if (guard === null) {
       return false;
     }
-    const quarantinePath = `${this.lockPath}.stale.${randomUUID()}`;
+    const quarantinePath = `${this.lockPath}.stale.${reclaimOwnerToken}`;
+    let quarantineCreated = false;
     try {
-      await rename(this.lockPath, quarantinePath);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      const snapshot = await this.inspectStaleLock();
+      if (snapshot === null) {
         return false;
       }
-      throw error;
-    }
-
-    const [quarantinedStat, quarantinedRaw] = await Promise.all([
-      stat(quarantinePath),
-      readFile(quarantinePath, "utf8"),
-    ]);
-    if (
-      quarantinedStat.dev !== snapshot.device ||
-      quarantinedStat.ino !== snapshot.inode ||
-      quarantinedStat.mtimeMs !== snapshot.mtimeMs ||
-      quarantinedRaw !== snapshot.raw ||
-      Date.now() - quarantinedStat.mtimeMs < LOCK_STALE_MS
-    ) {
       try {
-        await rename(quarantinePath, this.lockPath);
-      } catch {
-        throw new Error("AUTHORIZATION_STORE_LOCK_RECLAIM_RACE");
+        await link(this.lockPath, quarantinePath);
+        quarantineCreated = true;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+          return false;
+        }
+        throw error;
       }
-      return false;
+
+      const [quarantinedStat, quarantinedRaw] = await Promise.all([
+        stat(quarantinePath),
+        readFile(quarantinePath, "utf8"),
+      ]);
+      if (
+        quarantinedStat.dev !== snapshot.device ||
+        quarantinedStat.ino !== snapshot.inode ||
+        quarantinedStat.mtimeMs !== snapshot.mtimeMs ||
+        quarantinedRaw !== snapshot.raw ||
+        Date.now() - quarantinedStat.mtimeMs < LOCK_STALE_MS
+      ) {
+        return false;
+      }
+
+      const finalLease = await stat(quarantinePath);
+      if (
+        finalLease.dev !== snapshot.device ||
+        finalLease.ino !== snapshot.inode ||
+        finalLease.mtimeMs !== snapshot.mtimeMs ||
+        Date.now() - finalLease.mtimeMs < LOCK_STALE_MS
+      ) {
+        return false;
+      }
+      await unlink(this.lockPath);
+      return true;
+    } finally {
+      if (quarantineCreated) {
+        await unlink(quarantinePath).catch(() => undefined);
+      }
+      await guard.close();
+      await this.releaseReclaimGuard(reclaimOwnerToken);
     }
-    await unlink(quarantinePath);
-    return true;
   }
 
   private async renewOwnedLock(ownerToken: string): Promise<void> {
