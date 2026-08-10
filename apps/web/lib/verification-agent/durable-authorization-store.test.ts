@@ -55,6 +55,90 @@ describe("FileTransferAuthorizationStore", () => {
     expect(await readFile(path, "utf8")).not.toContain(environment.CIRCLE_API_KEY);
     expect(await readFile(path, "utf8")).not.toContain(environment.CIRCLE_ENTITY_SECRET);
   });
+  it("appends prepared, submitted, confirmed, and reconciliation evidence", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "proofspend-lifecycle-"));
+    directories.push(directory);
+    const path = join(directory, "authorization.json");
+    const environment = liveEnvironment(path);
+    const run = await approvalRun(environment);
+    const approval = approvalFor(run);
+    const { intent, authorization } = await buildLiveTransferAuthorization({
+      run,
+      approval,
+      environment,
+    });
+    const store = new FileTransferAuthorizationStore(path);
+    const providerOperationId = "11111111-1111-4111-8111-111111111111";
+    const transactionHash = `0x${"1a".repeat(32)}`;
+    const blockHash = `0x${"2b".repeat(32)}`;
+    const explorerUrl = `https://testnet.arcscan.app/tx/${transactionHash}`;
+
+    await store.persist(authorization);
+    await store.recordResult({
+      proposalId: intent.proposalId,
+      idempotencyKey: intent.idempotencyKey,
+      mode: "ARC_TESTNET",
+      status: "PREPARED",
+      polledAt: "2026-08-09T00:01:02.000Z",
+    });
+    await store.recordResult({
+      proposalId: intent.proposalId,
+      idempotencyKey: intent.idempotencyKey,
+      mode: "ARC_TESTNET",
+      status: "SUBMITTED",
+      providerOperationId,
+      polledAt: "2026-08-09T00:01:03.000Z",
+    });
+    await store.recordResult({
+      proposalId: intent.proposalId,
+      idempotencyKey: intent.idempotencyKey,
+      mode: "ARC_TESTNET",
+      status: "CONFIRMED",
+      providerOperationId,
+      transactionHash,
+      blockNumber: 42,
+      blockHash,
+      explorerUrl,
+      polledAt: "2026-08-09T00:01:04.000Z",
+    });
+
+    await expect(store.loadResultHistory(intent.idempotencyKey)).resolves.toMatchObject([
+      { status: "PREPARED" },
+      { status: "SUBMITTED" },
+      { status: "CONFIRMED" },
+    ]);
+    await store.recordReconciliation({
+      reconciliationId: `reconciliation:${intent.transactionRecordId}`,
+      proposalId: intent.proposalId,
+      idempotencyKey: intent.idempotencyKey,
+      transactionRecordId: intent.transactionRecordId,
+      mode: "ARC_TESTNET",
+      status: "RECONCILED",
+      network: intent.network,
+      chainId: intent.chainId,
+      asset: intent.asset,
+      amountAtomic: intent.amountAtomic,
+      providerOperationId,
+      transactionHash,
+      blockNumber: 42,
+      blockHash,
+      explorerUrl,
+      reconciledAt: "2026-08-09T00:01:04.000Z",
+    });
+    await expect(store.loadReconciliations(intent.idempotencyKey)).resolves.toMatchObject([
+      {
+        status: "RECONCILED",
+        amountAtomic: "1000000",
+        transactionHash,
+      },
+    ]);
+
+    const state = JSON.parse(await readFile(path, "utf8"));
+    expect(state.version).toBe(2);
+    expect(state.resultHistory[intent.idempotencyKey]).toHaveLength(3);
+    expect(state.reconciliations).toHaveLength(1);
+  });
+
 });
 
 function liveEnvironment(path: string) {
