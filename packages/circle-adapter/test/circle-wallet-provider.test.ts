@@ -517,6 +517,24 @@ describe("CircleWalletProvider", () => {
     );
   });
 
+  it("rejects an expired consumed approval before retrying an unsubmitted Circle request", async () => {
+    const authorization = createAuthorization();
+    authorization.approval = ApprovalRecordSchema.parse({
+      ...authorization.approval,
+      expiresAt: "2026-08-08T00:30:00.000Z",
+    });
+    const authorizationStore = new FakeAuthorizationStore(authorization);
+    authorizationStore.markConsumed();
+
+    const result = await makeProvider({ authorizationStore }).submitTransfer(validIntent());
+
+    expect(result.status).toBe("FAILED");
+    expect(result.failureCode).toBe("APPROVAL_EXPIRED");
+    expect(authorizationStore.consumeCalls).toBe(0);
+    expect(mockedClient.getWallet).not.toHaveBeenCalled();
+    expect(mockedClient.createTransaction).not.toHaveBeenCalled();
+  });
+
   it("rejects a duplicate submission without touching the network again", async () => {
     mockWallets();
     mockSufficientBalance();
