@@ -33,7 +33,9 @@ const TERMINAL_STATES: ReadonlySet<string> = new Set([
 const EVM_HASH_PATTERN = /^0x[a-fA-F0-9]{64}$/;
 
 const UUID_PATTERN =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const MAX_RECOVERY_PAGES = 100;
+const RECOVERY_PAGE_SIZE = 50;
 
 function isValidEvmHash(value: string | undefined): value is string {
   return typeof value === "string" && EVM_HASH_PATTERN.test(value);
@@ -61,8 +63,61 @@ type CircleTransactionLookupClient = {
     blockchain: string;
     walletIds: string[];
     destinationAddress: string;
-  }): Promise<{ data?: { transactions?: ReturnedTransaction[] } }>;
+    pageAfter?: string;
+    pageSize: number;
+  }): Promise<{
+    data?: {
+      transactions?: ReturnedTransaction[];
+    };
+  }>;
 };
+
+async function listAllRecoveryTransactions(
+  client: CircleTransactionLookupClient,
+  input: { blockchain: string; walletIds: string[]; destinationAddress: string },
+): Promise<ReturnedTransaction[]> {
+  const transactions: ReturnedTransaction[] = [];
+  const seenCursors = new Set<string>();
+  let pageAfter: string | undefined;
+
+  for (let page = 0; page < MAX_RECOVERY_PAGES; page += 1) {
+    const response = await client.listTransactions({
+      ...input,
+      pageAfter,
+      pageSize: RECOVERY_PAGE_SIZE,
+    });
+    if (!response.data || !Array.isArray(response.data.transactions)) {
+      throw new WalletProviderError(
+        "INVALID_REQUEST",
+        "Circle transaction recovery returned a malformed page.",
+      );
+    }
+    const pageTransactions = response.data.transactions;
+    if (pageTransactions.length > RECOVERY_PAGE_SIZE) {
+      throw new WalletProviderError(
+        "INVALID_REQUEST",
+        "Circle transaction recovery returned an oversized page.",
+      );
+    }
+    transactions.push(...pageTransactions);
+    if (pageTransactions.length < RECOVERY_PAGE_SIZE) {
+      return transactions;
+    }
+    const nextCursor = pageTransactions.at(-1)?.id;
+    if (!nextCursor || !isValidUuid(nextCursor) || seenCursors.has(nextCursor)) {
+      throw new WalletProviderError(
+        "INVALID_REQUEST",
+        "Circle transaction recovery returned an invalid pagination cursor.",
+      );
+    }
+    seenCursors.add(nextCursor);
+    pageAfter = nextCursor;
+  }
+  throw new WalletProviderError(
+    "INVALID_REQUEST",
+    "Circle transaction recovery exceeded its bounded page limit.",
+  );
+}
 
 function matchesRecoveredTransfer(
   intent: ApprovedTransferIntent,
@@ -368,12 +423,11 @@ export class CircleWalletProvider implements ArcTestnetTransferProvider {
       }
       if (recoveringConsumedSubmission) {
         const lookupClient = this.client as unknown as CircleTransactionLookupClient;
-        const lookup = await lookupClient.listTransactions({
+        const transactions = await listAllRecoveryTransactions(lookupClient, {
           blockchain: this.blockchain,
           walletIds: [this.sourceWalletId],
           destinationAddress: intent.destinationAddress,
         });
-        const transactions = lookup.data?.transactions ?? [];
         const sameReference = transactions.filter(
           (transaction) => transaction.refId === intent.proposalId,
         );

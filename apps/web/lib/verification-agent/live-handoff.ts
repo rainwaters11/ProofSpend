@@ -20,6 +20,7 @@ import {
 } from "@proofspend/domain";
 
 import type { ServerEnvironment } from "../env";
+import { exactIntentIdempotencyKey } from "./exact-intent-idempotency";
 import { ActivityEventSchema, HandoffResultSchema } from "./schemas";
 import type {
   ActivityEvent,
@@ -103,6 +104,9 @@ export async function buildLiveTransferAuthorization(args: {
   const exactIntentHash = await hashCanonicalExecutionIntent(executionIntent);
   if (exactIntentHash !== run.proposal.exactIntentHash) {
     throw new Error("LIVE_HANDOFF_INTENT_HASH_MISMATCH");
+  }
+  if (run.proposal.idempotencyKey !== exactIntentIdempotencyKey(exactIntentHash)) {
+    throw new Error("LIVE_HANDOFF_IDEMPOTENCY_KEY_MISMATCH");
   }
 
   const approvalRecord = ApprovalRecordSchema.parse({

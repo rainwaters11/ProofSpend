@@ -60,22 +60,13 @@ describe("POST /api/verification-agent/handoff", () => {
   });
 
   afterEach(() => {
-    process.env.PROOFSPEND_ADAPTER_MODE = original.PROOFSPEND_ADAPTER_MODE;
-    process.env.PROOFSPEND_AGENT_MODE = original.PROOFSPEND_AGENT_MODE;
-    process.env.OPENAI_API_KEY = original.OPENAI_API_KEY;
-    process.env.LLM_MODEL = original.LLM_MODEL;
-    process.env.PROOFSPEND_AGENT_API_TOKEN = original.PROOFSPEND_AGENT_API_TOKEN;
-    process.env.CIRCLE_API_KEY = original.CIRCLE_API_KEY;
-    process.env.CIRCLE_ENTITY_SECRET = original.CIRCLE_ENTITY_SECRET;
-    process.env.CIRCLE_SOURCE_WALLET_ID = original.CIRCLE_SOURCE_WALLET_ID;
-    process.env.CIRCLE_DESTINATION_WALLET_ID = original.CIRCLE_DESTINATION_WALLET_ID;
-    process.env.CIRCLE_DESTINATION_WALLET_ADDRESS = original.CIRCLE_DESTINATION_WALLET_ADDRESS;
-    process.env.CIRCLE_CHAIN = original.CIRCLE_CHAIN;
-    process.env.CIRCLE_USDC_TOKEN_ADDRESS = original.CIRCLE_USDC_TOKEN_ADDRESS;
-    process.env.CIRCLE_POLL_INTERVAL_MS = original.CIRCLE_POLL_INTERVAL_MS;
-    process.env.CIRCLE_MAX_POLLS = original.CIRCLE_MAX_POLLS;
-    process.env.CIRCLE_ARGSCAN_BASE_URL = original.CIRCLE_ARGSCAN_BASE_URL;
-    process.env.PROOFSPEND_AUTH_STORE_PATH = original.PROOFSPEND_AUTH_STORE_PATH;
+    for (const [name, value] of Object.entries(original)) {
+      if (value === undefined) {
+        delete process.env[name];
+      } else {
+        process.env[name] = value;
+      }
+    }
     vi.restoreAllMocks();
     vi.mocked(verificationAgent.executeLiveCircleHandoff).mockReset();
     vi.mocked(verificationAgent.recoverPersistedLiveCircleHandoff).mockReset();
@@ -138,7 +129,7 @@ describe("POST /api/verification-agent/handoff", () => {
       decision: "APPROVED" as const,
       decidedAt: "2026-08-09T00:01:01.000Z",
       expiresAt: "2099-01-01T00:00:00.000Z",
-      idempotencyKey: "release:restarted",
+      idempotencyKey: "33333333-3333-4333-8333-333333333333",
       exactIntentHash: `sha256:${"1a".repeat(32)}`,
     };
     const recovered = {

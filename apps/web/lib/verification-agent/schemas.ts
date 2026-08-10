@@ -111,7 +111,7 @@ export const ReleaseProposalSchema = z
     action: z.literal("PREPARE_RELEASE_PROPOSAL"),
     state: z.literal("APPROVAL_REQUIRED"),
     intentId: z.string().min(1),
-    idempotencyKey: z.string().min(1),
+    idempotencyKey: z.string().uuid(),
     amount: SettlementMoneyAmountSchema,
     asset: z.literal("USDC"),
     chain: z.literal("ARC_TESTNET"),
@@ -171,7 +171,7 @@ export const ApprovalDecisionSchema = z
     decision: z.literal("APPROVED"),
     decidedAt: BoundedHandoffTimestampSchema,
     expiresAt: BoundedHandoffTimestampSchema,
-    idempotencyKey: BoundedHandoffIdentifierSchema,
+    idempotencyKey: z.string().uuid(),
     exactIntentHash: z.string().regex(/^sha256:[a-f0-9]{64}$/),
   })
   .strict();
@@ -190,7 +190,7 @@ export const HandoffResultSchema = z
     execution: z
       .object({
         state: z.enum(["NOT_SUBMITTED", "SKIPPED_MOCK", "SUBMITTED", "CONFIRMED", "FAILED"]),
-        idempotencyKey: BoundedHandoffIdentifierSchema.optional(),
+        idempotencyKey: z.string().uuid().optional(),
         providerOperationId: z.string().nullable().optional(),
         transactionHash: z.string().nullable(),
         confirmation: z.string().nullable(),

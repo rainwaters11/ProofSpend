@@ -681,8 +681,11 @@ export class FileTransferAuthorizationStore implements TransferAuthorizationStor
       return false;
     }
     const observedIdentity = await readLinuxProcessIdentity(metadata.pid);
-    if (observedIdentity !== undefined) {
-      return observedIdentity !== null && observedIdentity === metadata.processIdentity;
+    if (observedIdentity !== undefined && observedIdentity !== null) {
+      return observedIdentity === metadata.processIdentity;
+    }
+    if (observedIdentity === null && metadata.pid !== process.pid) {
+      return false;
     }
     if (metadata.pid === process.pid) {
       return metadata.processIdentity === (await this.currentProcessIdentity());

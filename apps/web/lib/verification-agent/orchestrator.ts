@@ -18,6 +18,7 @@ import {
   createOpenAiAgentModelProvider,
   type AgentModelProvider,
 } from "./provider";
+import { exactIntentIdempotencyKey } from "./exact-intent-idempotency";
 import {
   ActivityEventSchema,
   MissingReceiptModelOutputSchema,
@@ -35,7 +36,6 @@ const MAX_ACTIVITY_EVENTS = 10;
 const RELEASE_TTL_MS = 15 * 60 * 1000;
 const PAWPOVAI_JUDGE_DEMO_AMOUNT = "1000000";
 const PROPOSAL_INTENT_ID = "intent:release:pawpovai:milestone-launch-ready";
-const PROPOSAL_IDEMPOTENCY_KEY = "release:pawpovai:milestone-launch-ready:1usdc";
 const PROPOSAL_DESTINATION = "mock:destination:pawpovai-operating-wallet";
 const MOCK_SOURCE_WALLET_ID = "mock:source:pawpovai-treasury-wallet";
 const ARC_TESTNET_CHAIN_ID = "5042002";
@@ -122,11 +122,12 @@ async function buildProposal(
     },
   });
   const exactIntentHash = await hashCanonicalExecutionIntent(executionIntent);
+  const idempotencyKey = exactIntentIdempotencyKey(exactIntentHash);
   return ReleaseProposalSchema.parse({
     action: "PREPARE_RELEASE_PROPOSAL",
     state: "APPROVAL_REQUIRED",
     intentId: PROPOSAL_INTENT_ID,
-    idempotencyKey: PROPOSAL_IDEMPOTENCY_KEY,
+    idempotencyKey,
     amount,
     asset: "USDC",
     chain: "ARC_TESTNET",

@@ -309,7 +309,7 @@ describe("handoffApprovedProposal", () => {
     expect(result.activityTrace.map((event) => event.code)).not.toContain("APPROVAL_ACCEPTED");
   });
 
-  it("keeps consumed proposal keys after the approved run expires", async () => {
+  it("assigns a fresh deterministic key to a new exact intent after expiry", async () => {
     vi.useFakeTimers();
     try {
       vi.setSystemTime(new Date("2026-01-21T00:00:00.000Z"));
@@ -353,8 +353,10 @@ describe("handoffApprovedProposal", () => {
       const laterApproval = {
         ...firstApproval,
         approvalId: "approval:after-expiry",
+        idempotencyKey: laterRun.proposal!.idempotencyKey,
         exactIntentHash: laterRun.proposal!.exactIntentHash,
       };
+      expect(laterApproval.idempotencyKey).not.toBe(firstApproval.idempotencyKey);
       saveVerificationAgentRun({
         authorizedActorId: "founder:fictional",
         run: laterRun,
@@ -369,14 +371,14 @@ describe("handoffApprovedProposal", () => {
       expect(laterResult.status).toBe("HANDOFF_READY");
       expect(
         reserveApprovedHandoff({ runId: laterRun.runId, approval: laterApproval }),
-      ).toBe(false);
+      ).toBe(true);
       expect(
         persistApprovedHandoff({
           runId: laterRun.runId,
           approval: laterApproval,
           result: laterResult,
         }),
-      ).toBe(false);
+      ).toBe(true);
     } finally {
       vi.useRealTimers();
     }

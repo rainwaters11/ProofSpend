@@ -57,7 +57,7 @@ const baseIntent: ApprovedTransferIntent = {
   authorizationBindingId: "binding-1",
   transactionRecordId: "transaction-record-1",
   intentId: "intent-1",
-  idempotencyKey: "demo-payment-1",
+  idempotencyKey: "aaaaaaaa-aaaa-5aaa-8aaa-aaaaaaaaaaaa",
   network: "ARC-TESTNET",
   chainId: "5042002",
   asset: "USDC",
@@ -293,6 +293,19 @@ function mockListedTransfer(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function recoveryTransactionId(index: number): string {
+  return `00000000-0000-4000-8000-${index.toString(16).padStart(12, "0")}`;
+}
+
+function mockUnrelatedTransactions(count: number, offset = 0) {
+  return Array.from({ length: count }, (_, index) =>
+    mockListedTransfer({
+      id: recoveryTransactionId(offset + index),
+      refId: `unrelated:${offset + index}`,
+    }),
+  );
+}
+
 describe("CircleWalletProvider", () => {
   beforeEach(() => {
     vi.stubEnv("CIRCLE_CHAIN", circleEnvironment.CIRCLE_CHAIN);
@@ -409,7 +422,7 @@ describe("CircleWalletProvider", () => {
 
     expect(result).toEqual({
       proposalId: "proposal-1",
-      idempotencyKey: "demo-payment-1",
+      idempotencyKey: baseIntent.idempotencyKey,
       mode: "ARC_TESTNET",
       status: "PREPARED",
       polledAt: expect.any(String),
@@ -500,12 +513,12 @@ describe("CircleWalletProvider", () => {
       amount: ["1"],
       destinationAddress: baseIntent.destinationAddress,
       fee: { type: "level", config: { feeLevel: "MEDIUM" } },
-      idempotencyKey: "demo-payment-1",
+      idempotencyKey: baseIntent.idempotencyKey,
       refId: "proposal-1",
     });
     expect(result).toEqual({
       proposalId: "proposal-1",
-      idempotencyKey: "demo-payment-1",
+      idempotencyKey: baseIntent.idempotencyKey,
       mode: "ARC_TESTNET",
       status: "SUBMITTED",
       providerOperationId: OPERATION_ID_1,
@@ -541,8 +554,107 @@ describe("CircleWalletProvider", () => {
       blockchain: "ARC-TESTNET",
       walletIds: [SOURCE_WALLET_ID],
       destinationAddress: baseIntent.destinationAddress,
+      pageAfter: undefined,
+      pageSize: 50,
     });
     expect(authorizationStore.consumeCalls).toBe(0);
+    expect(mockedClient.getWalletTokenBalance).not.toHaveBeenCalled();
+    expect(mockedClient.createTransaction).not.toHaveBeenCalled();
+  });
+
+  it("scans every transaction page before recovering an exact later-page operation", async () => {
+    const authorizationStore = new FakeAuthorizationStore();
+    authorizationStore.markConsumed();
+    mockWallets();
+    mockedClient.listTransactions
+      .mockResolvedValueOnce({
+        data: { transactions: mockUnrelatedTransactions(50) },
+      })
+      .mockResolvedValueOnce({
+        data: { transactions: [mockListedTransfer()] },
+      });
+
+    const result = await makeProvider({ authorizationStore }).submitTransfer(validIntent());
+
+    expect(result).toMatchObject({ status: "SUBMITTED", providerOperationId: OPERATION_ID_1 });
+    expect(mockedClient.listTransactions).toHaveBeenNthCalledWith(2, {
+      blockchain: "ARC-TESTNET",
+      walletIds: [SOURCE_WALLET_ID],
+      destinationAddress: baseIntent.destinationAddress,
+      pageAfter: recoveryTransactionId(49),
+      pageSize: 50,
+    });
+    expect(mockedClient.getWalletTokenBalance).not.toHaveBeenCalled();
+    expect(mockedClient.createTransaction).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when a later page has a same-reference mismatch", async () => {
+    const authorizationStore = new FakeAuthorizationStore();
+    authorizationStore.markConsumed();
+    mockWallets();
+    mockedClient.listTransactions
+      .mockResolvedValueOnce({ data: { transactions: mockUnrelatedTransactions(50) } })
+      .mockResolvedValueOnce({
+        data: {
+          transactions: [mockListedTransfer({ amounts: ["2"] })],
+        },
+      });
+
+    await expect(
+      makeProvider({ authorizationStore }).submitTransfer(validIntent()),
+    ).rejects.toMatchObject({ code: "INVALID_REQUEST" });
+    expect(mockedClient.getWalletTokenBalance).not.toHaveBeenCalled();
+    expect(mockedClient.createTransaction).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when exact candidates span transaction pages", async () => {
+    const authorizationStore = new FakeAuthorizationStore();
+    authorizationStore.markConsumed();
+    mockWallets();
+    mockedClient.listTransactions
+      .mockResolvedValueOnce({
+        data: {
+          transactions: [mockListedTransfer(), ...mockUnrelatedTransactions(49)],
+        },
+      })
+      .mockResolvedValueOnce({
+        data: { transactions: [mockListedTransfer({ id: OPERATION_ID_2 })] },
+      });
+
+    await expect(
+      makeProvider({ authorizationStore }).submitTransfer(validIntent()),
+    ).rejects.toMatchObject({ code: "INVALID_REQUEST" });
+    expect(mockedClient.getWalletTokenBalance).not.toHaveBeenCalled();
+    expect(mockedClient.createTransaction).not.toHaveBeenCalled();
+  });
+
+  it("fails closed for a cursor cycle during paginated recovery", async () => {
+    const authorizationStore = new FakeAuthorizationStore();
+    authorizationStore.markConsumed();
+    mockWallets();
+    const repeatedPage = mockUnrelatedTransactions(50);
+    mockedClient.listTransactions
+      .mockResolvedValueOnce({ data: { transactions: repeatedPage } })
+      .mockResolvedValueOnce({ data: { transactions: repeatedPage } });
+
+    await expect(
+      makeProvider({ authorizationStore }).submitTransfer(validIntent()),
+    ).rejects.toMatchObject({ code: "INVALID_REQUEST" });
+    expect(mockedClient.getWalletTokenBalance).not.toHaveBeenCalled();
+    expect(mockedClient.createTransaction).not.toHaveBeenCalled();
+  });
+
+  it("fails closed for a malformed page during paginated recovery", async () => {
+    const authorizationStore = new FakeAuthorizationStore();
+    authorizationStore.markConsumed();
+    mockWallets();
+    mockedClient.listTransactions
+      .mockResolvedValueOnce({ data: { transactions: mockUnrelatedTransactions(50) } })
+      .mockResolvedValueOnce({ data: {} });
+
+    await expect(
+      makeProvider({ authorizationStore }).submitTransfer(validIntent()),
+    ).rejects.toMatchObject({ code: "INVALID_REQUEST" });
     expect(mockedClient.getWalletTokenBalance).not.toHaveBeenCalled();
     expect(mockedClient.createTransaction).not.toHaveBeenCalled();
   });
