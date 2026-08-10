@@ -91,6 +91,7 @@ const LockMetadataSchema = z
   .object({
     ownerToken: z.string().uuid(),
     pid: z.number().int().positive(),
+    processIdentity: z.string().min(1).nullable().optional(),
     createdAt: z.string().datetime(),
   })
   .strict();
@@ -209,6 +210,54 @@ function parseLockMetadata(raw: string): LockMetadata | null {
   }
 }
 
+const PROCESS_INSTANCE_TOKEN = randomUUID();
+
+async function readLinuxProcessIdentity(
+  pid: number,
+): Promise<string | null | undefined> {
+  if (process.platform !== "linux") {
+    return undefined;
+  }
+  let processStat: string;
+  try {
+    processStat = await readFile(`/proc/${pid}/stat`, "utf8");
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") {
+      return null;
+    }
+    if (code === "EACCES" || code === "EPERM") {
+      return undefined;
+    }
+    throw error;
+  }
+
+  try {
+    const bootId = (await readFile("/proc/sys/kernel/random/boot_id", "utf8")).trim();
+    const commandEnd = processStat.lastIndexOf(")");
+    const fields = commandEnd === -1
+      ? []
+      : processStat.slice(commandEnd + 2).trim().split(/\s+/);
+    const startTicks = fields[19];
+    return startTicks === undefined ? undefined : `linux:${bootId}:${startTicks}`;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "EACCES" || code === "EPERM") {
+      return undefined;
+    }
+    throw error;
+  }
+}
+
+function processIsAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== "ESRCH";
+  }
+}
+
 export class FileTransferAuthorizationStore implements TransferAuthorizationStore {
   readonly path: string;
   private readonly lockPath: string;
@@ -225,7 +274,7 @@ export class FileTransferAuthorizationStore implements TransferAuthorizationStor
 
   async persist(snapshot: PersistedTransferAuthorization): Promise<boolean> {
     const parsed = DurableAuthorizationSchema.parse(structuredClone(snapshot));
-    return this.withLock(async () => {
+    return this.withLock(async (ownerToken) => {
       const state = await this.readState();
       const existing = Object.values(state.authorizations).find(
         (candidate) =>
@@ -236,7 +285,7 @@ export class FileTransferAuthorizationStore implements TransferAuthorizationStor
         return false;
       }
       state.authorizations[parsed.binding.id] = parsed;
-      await this.writeState(state);
+      await this.writeState(state, ownerToken);
       return true;
     });
   }
@@ -267,7 +316,7 @@ export class FileTransferAuthorizationStore implements TransferAuthorizationStor
   async consume(
     input: ConsumeTransferAuthorizationInput,
   ): Promise<PersistedTransferAuthorization | null> {
-    return this.withLock(async () => {
+    return this.withLock(async (ownerToken) => {
       const state = await this.readState();
       const snapshot = state.authorizations[input.authorizationBindingId];
       if (
@@ -293,7 +342,7 @@ export class FileTransferAuthorizationStore implements TransferAuthorizationStor
             consumedByTransactionId: input.transactionRecordId,
           },
         });
-      await this.writeState(state);
+      await this.writeState(state, ownerToken);
       return preConsumption;
     });
   }
@@ -304,13 +353,13 @@ export class FileTransferAuthorizationStore implements TransferAuthorizationStor
       throw new Error("TRANSFER_RESULT_IDEMPOTENCY_KEY_REQUIRED");
     }
     const idempotencyKey = parsed.idempotencyKey;
-    await this.withLock(async () => {
+    await this.withLock(async (ownerToken) => {
       const state = await this.readState();
       const history = state.resultHistory[idempotencyKey] ?? [];
       if (canAppendResult(history, parsed)) {
         state.resultHistory[idempotencyKey] = [...history, parsed];
         state.latestResultKey = idempotencyKey;
-        await this.writeState(state);
+        await this.writeState(state, ownerToken);
       }
     });
   }
@@ -337,7 +386,7 @@ export class FileTransferAuthorizationStore implements TransferAuthorizationStor
 
   async recordReconciliation(record: DurableReconciliationRecord): Promise<void> {
     const parsed = DurableReconciliationRecordSchema.parse(structuredClone(record));
-    await this.withLock(async () => {
+    await this.withLock(async (ownerToken) => {
       const state = await this.readState();
       const confirmed = state.resultHistory[parsed.idempotencyKey]?.at(-1);
       if (
@@ -365,7 +414,7 @@ export class FileTransferAuthorizationStore implements TransferAuthorizationStor
         throw new Error("RECONCILIATION_ALREADY_RECORDED");
       }
       state.reconciliations.push(parsed);
-      await this.writeState(state);
+      await this.writeState(state, ownerToken);
     });
   }
 
@@ -382,12 +431,12 @@ export class FileTransferAuthorizationStore implements TransferAuthorizationStor
 
   async recordHandoff(result: HandoffResult): Promise<void> {
     const parsed = HandoffResultSchema.parse(structuredClone(result));
-    await this.withLock(async () => {
+    await this.withLock(async (ownerToken) => {
       const state = await this.readState();
       const previous = state.handoffHistory.at(-1);
       if (!sameValue(previous, parsed)) {
         state.handoffHistory.push(parsed);
-        await this.writeState(state);
+        await this.writeState(state, ownerToken);
       }
     });
   }
@@ -418,17 +467,78 @@ export class FileTransferAuthorizationStore implements TransferAuthorizationStor
     }
   }
 
-  private async writeState(state: DurableState): Promise<void> {
+  private async writeState(
+    state: DurableState,
+    ownerToken: string,
+  ): Promise<void> {
     await mkdir(dirname(this.path), { recursive: true, mode: 0o700 });
     const temporaryPath = `${this.path}.${randomUUID()}.tmp`;
     const handle = await open(temporaryPath, "wx", 0o600);
     try {
-      await handle.writeFile(JSON.stringify(DurableStateSchema.parse(state), null, 2), "utf8");
+      await handle.writeFile(
+        JSON.stringify(DurableStateSchema.parse(state), null, 2),
+        "utf8",
+      );
       await handle.sync();
     } finally {
       await handle.close();
     }
-    await rename(temporaryPath, this.path);
+    if (!(await this.ownedLockIsCurrent(ownerToken))) {
+      await unlink(temporaryPath).catch(() => undefined);
+      throw new Error("AUTHORIZATION_STORE_LOCK_LOST");
+    }
+    try {
+      await rename(temporaryPath, this.path);
+    } catch (error) {
+      await unlink(temporaryPath).catch(() => undefined);
+      throw error;
+    }
+  }
+
+  private async ownedLockIsCurrent(ownerToken: string): Promise<boolean> {
+    try {
+      return (
+        parseLockMetadata(await readFile(this.lockPath, "utf8"))?.ownerToken ===
+        ownerToken
+      );
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        return false;
+      }
+      throw error;
+    }
+  }
+
+  private async currentProcessIdentity(): Promise<string> {
+    return (
+      (await readLinuxProcessIdentity(process.pid)) ??
+      `process:${process.pid}:${PROCESS_INSTANCE_TOKEN}`
+    );
+  }
+
+  private async metadataOwnerIsRunning(
+    metadata: LockMetadata | null,
+  ): Promise<boolean> {
+    if (metadata?.processIdentity === undefined || metadata.processIdentity === null) {
+      return false;
+    }
+    const observedIdentity = await readLinuxProcessIdentity(metadata.pid);
+    if (observedIdentity !== undefined) {
+      return observedIdentity !== null && observedIdentity === metadata.processIdentity;
+    }
+    if (metadata.pid === process.pid) {
+      return metadata.processIdentity === (await this.currentProcessIdentity());
+    }
+    return processIsAlive(metadata.pid);
+  }
+
+  private async createLockMetadata(ownerToken: string): Promise<LockMetadata> {
+    return LockMetadataSchema.parse({
+      ownerToken,
+      pid: process.pid,
+      processIdentity: await this.currentProcessIdentity(),
+      createdAt: new Date().toISOString(),
+    });
   }
 
   private async inspectStaleLock(): Promise<StaleLockSnapshot | null> {
@@ -437,7 +547,10 @@ export class FileTransferAuthorizationStore implements TransferAuthorizationStor
         stat(this.lockPath),
         readFile(this.lockPath, "utf8"),
       ]);
-      if (Date.now() - lockStat.mtimeMs < LOCK_STALE_MS) {
+      if (
+        Date.now() - lockStat.mtimeMs < LOCK_STALE_MS ||
+        (await this.metadataOwnerIsRunning(parseLockMetadata(raw)))
+      ) {
         return null;
       }
       return {
@@ -462,7 +575,10 @@ export class FileTransferAuthorizationStore implements TransferAuthorizationStor
         stat(this.reclaimPath),
         readFile(this.reclaimPath, "utf8"),
       ]);
-      if (Date.now() - guardStat.mtimeMs < LOCK_STALE_MS) {
+      if (
+        Date.now() - guardStat.mtimeMs < LOCK_STALE_MS ||
+        (await this.metadataOwnerIsRunning(parseLockMetadata(raw)))
+      ) {
         return null;
       }
       return {
@@ -512,11 +628,7 @@ export class FileTransferAuthorizationStore implements TransferAuthorizationStor
       try {
         await guard.writeFile(
           JSON.stringify(
-            LockMetadataSchema.parse({
-              ownerToken,
-              pid: process.pid,
-              createdAt: new Date().toISOString(),
-            }),
+            await this.createLockMetadata(ownerToken),
           ),
           "utf8",
         );
@@ -746,7 +858,9 @@ export class FileTransferAuthorizationStore implements TransferAuthorizationStor
     }
   }
 
-  private async withLock<T>(operation: () => Promise<T>): Promise<T> {
+  private async withLock<T>(
+    operation: (ownerToken: string) => Promise<T>,
+  ): Promise<T> {
     await mkdir(dirname(this.path), { recursive: true, mode: 0o700 });
     const ownerToken = randomUUID();
     for (let attempt = 0; attempt < LOCK_RETRIES; attempt += 1) {
@@ -784,11 +898,7 @@ export class FileTransferAuthorizationStore implements TransferAuthorizationStor
           try {
             await lock.writeFile(
               JSON.stringify(
-                LockMetadataSchema.parse({
-                  ownerToken,
-                  pid: process.pid,
-                  createdAt: new Date().toISOString(),
-                }),
+                await this.createLockMetadata(ownerToken),
               ),
               "utf8",
             );
@@ -823,7 +933,7 @@ export class FileTransferAuthorizationStore implements TransferAuthorizationStor
         void this.renewOwnedLock(ownerToken).catch(() => undefined);
       }, LOCK_HEARTBEAT_MS);
       try {
-        return await operation();
+        return await operation(ownerToken);
       } finally {
         clearInterval(heartbeat);
         await lock.close();
