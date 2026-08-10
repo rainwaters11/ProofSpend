@@ -28,6 +28,7 @@ import type {
 const mockedClient = vi.hoisted(() => ({
   getWallet: vi.fn(),
   getWalletTokenBalance: vi.fn(),
+  listTransactions: vi.fn(),
   createTransaction: vi.fn(),
   getTransaction: vi.fn(),
 }));
@@ -277,6 +278,21 @@ function mockConfirmedTransaction(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function mockListedTransfer(overrides: Record<string, unknown> = {}) {
+  return {
+    id: OPERATION_ID_1,
+    refId: baseIntent.proposalId,
+    transactionType: "OUTBOUND",
+    operation: "TRANSFER",
+    blockchain: "ARC-TESTNET",
+    walletId: SOURCE_WALLET_ID,
+    destinationAddress: baseIntent.destinationAddress,
+    amounts: ["1"],
+    contractAddress: circleEnvironment.CIRCLE_USDC_TOKEN_ADDRESS,
+    ...overrides,
+  };
+}
+
 describe("CircleWalletProvider", () => {
   beforeEach(() => {
     vi.stubEnv("CIRCLE_CHAIN", circleEnvironment.CIRCLE_CHAIN);
@@ -287,6 +303,8 @@ describe("CircleWalletProvider", () => {
     mockedClient.getWallet.mockReset();
     mockedClient.getWalletTokenBalance.mockReset();
     mockedClient.createTransaction.mockReset();
+    mockedClient.listTransactions.mockReset();
+    mockedClient.listTransactions.mockResolvedValue({ data: { transactions: [] } });
     mockedClient.getTransaction.mockReset();
   });
 
@@ -493,6 +511,40 @@ describe("CircleWalletProvider", () => {
       providerOperationId: OPERATION_ID_1,
       polledAt: expect.any(String),
     });
+    expect(mockedClient.listTransactions).not.toHaveBeenCalled();
+  });
+
+  it("recovers an exact accepted operation before the balance gate", async () => {
+    const authorizationStore = new FakeAuthorizationStore();
+    authorizationStore.markConsumed();
+    mockWallets();
+    mockedClient.listTransactions.mockResolvedValue({
+      data: { transactions: [mockListedTransfer()] },
+    });
+    mockedClient.getWalletTokenBalance.mockResolvedValue({
+      data: {
+        tokenBalances: [{
+          amount: "0.25",
+          token: { tokenAddress: circleEnvironment.CIRCLE_USDC_TOKEN_ADDRESS },
+        }],
+      },
+    });
+
+    const result = await makeProvider({ authorizationStore }).submitTransfer(validIntent());
+
+    expect(result).toMatchObject({
+      status: "SUBMITTED",
+      providerOperationId: OPERATION_ID_1,
+      idempotencyKey: baseIntent.idempotencyKey,
+    });
+    expect(mockedClient.listTransactions).toHaveBeenCalledWith({
+      blockchain: "ARC-TESTNET",
+      walletIds: [SOURCE_WALLET_ID],
+      destinationAddress: baseIntent.destinationAddress,
+    });
+    expect(authorizationStore.consumeCalls).toBe(0);
+    expect(mockedClient.getWalletTokenBalance).not.toHaveBeenCalled();
+    expect(mockedClient.createTransaction).not.toHaveBeenCalled();
   });
 
   it("revalidates current balance before retrying a consumed operation-less submission", async () => {
@@ -545,6 +597,50 @@ describe("CircleWalletProvider", () => {
     expect(mockedClient.createTransaction).not.toHaveBeenCalled();
   });
 
+  it.each([
+    {
+      name: "mismatched same-reference operation",
+      transactions: [mockListedTransfer({ destinationAddress: "0x0000000000000000000000000000000000000002" })],
+    },
+    {
+      name: "ambiguous exact operations",
+      transactions: [mockListedTransfer(), mockListedTransfer({ id: OPERATION_ID_2 })],
+    },
+  ])("fails closed for $name during consumed recovery", async ({ transactions }) => {
+    const authorizationStore = new FakeAuthorizationStore();
+    authorizationStore.markConsumed();
+    mockWallets();
+    mockedClient.listTransactions.mockResolvedValue({ data: { transactions } });
+
+    const error = await makeProvider({ authorizationStore })
+      .submitTransfer(validIntent())
+      .catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(WalletProviderError);
+    expect((error as WalletProviderError).code).toBe("INVALID_REQUEST");
+    expect(authorizationStore.consumeCalls).toBe(0);
+    expect(mockedClient.getWalletTokenBalance).not.toHaveBeenCalled();
+    expect(mockedClient.createTransaction).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when the accepted-operation lookup is unavailable", async () => {
+    const authorizationStore = new FakeAuthorizationStore();
+    authorizationStore.markConsumed();
+    mockWallets();
+    mockedClient.listTransactions.mockRejectedValue(new Error("sensitive lookup detail"));
+
+    const error = await makeProvider({ authorizationStore })
+      .submitTransfer(validIntent())
+      .catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(WalletProviderError);
+    expect((error as WalletProviderError).code).toBe("PROVIDER_UNAVAILABLE");
+    expect((error as WalletProviderError).message).toBe("Wallet provider request failed.");
+    expect(authorizationStore.consumeCalls).toBe(0);
+    expect(mockedClient.getWalletTokenBalance).not.toHaveBeenCalled();
+    expect(mockedClient.createTransaction).not.toHaveBeenCalled();
+  });
+
   it("rejects an expired consumed approval before retrying an unsubmitted Circle request", async () => {
     const authorization = createAuthorization();
     authorization.approval = ApprovalRecordSchema.parse({
@@ -553,13 +649,15 @@ describe("CircleWalletProvider", () => {
     });
     const authorizationStore = new FakeAuthorizationStore(authorization);
     authorizationStore.markConsumed();
+    mockWallets();
 
     const result = await makeProvider({ authorizationStore }).submitTransfer(validIntent());
 
     expect(result.status).toBe("FAILED");
     expect(result.failureCode).toBe("APPROVAL_EXPIRED");
     expect(authorizationStore.consumeCalls).toBe(0);
-    expect(mockedClient.getWallet).not.toHaveBeenCalled();
+    expect(mockedClient.listTransactions).toHaveBeenCalledTimes(1);
+    expect(mockedClient.getWalletTokenBalance).not.toHaveBeenCalled();
     expect(mockedClient.createTransaction).not.toHaveBeenCalled();
   });
 

@@ -44,12 +44,48 @@ function isValidUuid(value: string): boolean {
 }
 
 type ReturnedTransaction = {
+  id?: string;
+  refId?: string;
+  transactionType?: string;
+  operation?: string;
   blockchain?: string;
   walletId?: string;
   destinationAddress?: string;
   amounts?: string[];
   contractAddress?: string;
+  tokenAddress?: string;
 };
+
+type CircleTransactionLookupClient = {
+  listTransactions(input: {
+    blockchain: string;
+    walletIds: string[];
+    destinationAddress: string;
+  }): Promise<{ data?: { transactions?: ReturnedTransaction[] } }>;
+};
+
+function matchesRecoveredTransfer(
+  intent: ApprovedTransferIntent,
+  transaction: ReturnedTransaction,
+  expected: { blockchain: string; sourceWalletId: string; usdcTokenAddress: string },
+): boolean {
+  return (
+    transaction.refId === intent.proposalId &&
+    transaction.transactionType === "OUTBOUND" &&
+    transaction.operation === "TRANSFER" &&
+    transaction.walletId === expected.sourceWalletId &&
+    transaction.destinationAddress?.toLowerCase() === intent.destinationAddress.toLowerCase() &&
+    transaction.amounts?.length === 1 &&
+    transaction.amounts[0] === atomicToDecimal(intent.amountAtomic) &&
+    (transaction.blockchain === undefined || transaction.blockchain === expected.blockchain) &&
+    (transaction.contractAddress === undefined ||
+      transaction.contractAddress.toLowerCase() === expected.usdcTokenAddress.toLowerCase()) &&
+    (transaction.tokenAddress === undefined ||
+      transaction.tokenAddress.toLowerCase() === expected.usdcTokenAddress.toLowerCase()) &&
+    typeof transaction.id === "string" &&
+    isValidUuid(transaction.id)
+  );
+}
 
 function verifyReturnedTransaction(
   intent: ApprovedTransferIntent,
@@ -299,18 +335,6 @@ export class CircleWalletProvider implements ArcTestnetTransferProvider {
     if (!revalidation.ok) {
       return failureResult(intent, "ARC_TESTNET", revalidation);
     }
-    if (
-      recoveringConsumedSubmission &&
-      initialAuthorization !== null &&
-      Date.parse(initialAuthorization.approval.expiresAt) <= Date.now()
-    ) {
-      return failureResult(intent, "ARC_TESTNET", {
-        ok: false,
-        failureCode: "APPROVAL_EXPIRED",
-        failureMessage:
-          "The approval expired before the unsubmitted Circle request could be retried.",
-      });
-    }
     try {
       const source = await this.client.getWallet({ id: this.sourceWalletId });
       if (
@@ -329,10 +353,7 @@ export class CircleWalletProvider implements ArcTestnetTransferProvider {
               : "The configured source wallet does not match the exact approved transfer intent.",
         });
       }
-      const [destination, balance] = await Promise.all([
-        this.client.getWallet({ id: this.destinationWalletId }),
-        this.getBalance(),
-      ]);
+      const destination = await this.client.getWallet({ id: this.destinationWalletId });
       const destinationAddress = destination.data?.wallet?.address;
       if (
         !destinationAddress ||
@@ -345,6 +366,62 @@ export class CircleWalletProvider implements ArcTestnetTransferProvider {
             "The destination address does not match the configured Arc Testnet destination wallet.",
         });
       }
+      if (recoveringConsumedSubmission) {
+        const lookupClient = this.client as unknown as CircleTransactionLookupClient;
+        const lookup = await lookupClient.listTransactions({
+          blockchain: this.blockchain,
+          walletIds: [this.sourceWalletId],
+          destinationAddress: intent.destinationAddress,
+        });
+        const transactions = lookup.data?.transactions ?? [];
+        const sameReference = transactions.filter(
+          (transaction) => transaction.refId === intent.proposalId,
+        );
+        const exactMatches = sameReference.filter((transaction) =>
+          matchesRecoveredTransfer(intent, transaction, {
+            blockchain: this.blockchain,
+            sourceWalletId: this.sourceWalletId,
+            usdcTokenAddress: this.usdcTokenAddress,
+          }),
+        );
+        if (sameReference.length !== exactMatches.length || exactMatches.length > 1) {
+          throw new WalletProviderError(
+            "INVALID_REQUEST",
+            "Circle transaction recovery was ambiguous or did not match the exact approved intent.",
+          );
+        }
+        if (exactMatches.length === 1) {
+          const providerOperationId = exactMatches[0]?.id;
+          if (!providerOperationId) {
+            throw new WalletProviderError(
+              "INVALID_REQUEST",
+              "Circle transaction recovery did not return a valid provider operation id.",
+            );
+          }
+          this.submittedKeys.add(intent.proposalId);
+          this.submittedKeys.add(intent.idempotencyKey);
+          return {
+            proposalId: intent.proposalId,
+            idempotencyKey: intent.idempotencyKey,
+            mode: "ARC_TESTNET",
+            status: "SUBMITTED",
+            providerOperationId,
+            polledAt: new Date().toISOString(),
+          };
+        }
+        if (
+          initialAuthorization !== null &&
+          Date.parse(initialAuthorization.approval.expiresAt) <= Date.now()
+        ) {
+          return failureResult(intent, "ARC_TESTNET", {
+            ok: false,
+            failureCode: "APPROVAL_EXPIRED",
+            failureMessage:
+              "The approval expired before the unsubmitted Circle request could be retried.",
+          });
+        }
+      }
+      const balance = await this.getBalance();
       if (BigInt(balance.amountAtomic) < BigInt(intent.amountAtomic)) {
         return failureResult(intent, "ARC_TESTNET", {
           ok: false,
