@@ -76,7 +76,7 @@ describe("FileTransferAuthorizationStore", () => {
     await expect(readFile(lockPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it("does not reclaim a lease renewed after stale inspection", async () => {
+  it("keeps the lock path occupied while two contenders validate a renewed lease", async () => {
     const directory = await mkdtemp(join(tmpdir(), "proofspend-renewed-lock-"));
     directories.push(directory);
     const path = join(directory, "authorization.json");
@@ -94,21 +94,48 @@ describe("FileTransferAuthorizationStore", () => {
     const staleAt = new Date(Date.now() - 60_000);
     await utimes(lockPath, staleAt, staleAt);
 
-    const store = new FileTransferAuthorizationStore(path);
-    const internals = store as unknown as {
-      inspectStaleLock: () => Promise<unknown>;
+    type StoreInternals = {
+      quarantinedLockStillStale: (
+        snapshot: unknown,
+        quarantinePath: string,
+      ) => Promise<boolean>;
       reclaimStaleLock: () => Promise<boolean>;
     };
-    const inspectStaleLock = internals.inspectStaleLock.bind(store);
-    internals.inspectStaleLock = async () => {
-      const snapshot = await inspectStaleLock();
-      const renewedAt = new Date();
-      await utimes(lockPath, renewedAt, renewedAt);
-      return snapshot;
+    const firstStore = new FileTransferAuthorizationStore(path);
+    const secondStore = new FileTransferAuthorizationStore(path);
+    const first = firstStore as unknown as StoreInternals;
+    const second = secondStore as unknown as StoreInternals;
+    const validateQuarantine = first.quarantinedLockStillStale.bind(firstStore);
+    let signalQuarantineReady!: () => void;
+    let releaseValidation!: () => void;
+    const quarantineReady = new Promise<void>((resolve) => {
+      signalQuarantineReady = resolve;
+    });
+    const validationRelease = new Promise<void>((resolve) => {
+      releaseValidation = resolve;
+    });
+    first.quarantinedLockStillStale = async (snapshot, quarantinePath) => {
+      signalQuarantineReady();
+      await validationRelease;
+      return validateQuarantine(snapshot, quarantinePath);
     };
 
-    await expect(internals.reclaimStaleLock()).resolves.toBe(false);
+    const firstReclaim = first.reclaimStaleLock();
+    await quarantineReady;
+    await expect(
+      writeFile(lockPath, "second-owner", { flag: "wx" }),
+    ).rejects.toMatchObject({ code: "EEXIST" });
+    await expect(second.reclaimStaleLock()).resolves.toBe(false);
+
+    const renewedAt = new Date();
+    await utimes(lockPath, renewedAt, renewedAt);
+    releaseValidation();
+
+    await expect(firstReclaim).resolves.toBe(false);
     await expect(readFile(lockPath, "utf8")).resolves.toContain(ownerToken);
+    await expect(readFile(`${lockPath}.reclaim`, "utf8")).rejects.toMatchObject({
+      code: "ENOENT",
+    });
   });
 
   it("reclaims an expired lease even when a restarted process reuses the owner PID", async () => {
