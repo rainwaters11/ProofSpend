@@ -8,6 +8,9 @@ vi.mock("@/lib/verification-agent", async (importOriginal) => {
   return {
     ...actual,
     executeLiveCircleHandoff: vi.fn(actual.executeLiveCircleHandoff),
+    recoverPersistedLiveCircleHandoff: vi.fn(
+      actual.recoverPersistedLiveCircleHandoff,
+    ),
   };
 });
 
@@ -75,6 +78,7 @@ describe("POST /api/verification-agent/handoff", () => {
     process.env.PROOFSPEND_AUTH_STORE_PATH = original.PROOFSPEND_AUTH_STORE_PATH;
     vi.restoreAllMocks();
     vi.mocked(verificationAgent.executeLiveCircleHandoff).mockReset();
+    vi.mocked(verificationAgent.recoverPersistedLiveCircleHandoff).mockReset();
   });
 
   it("accepts valid approval handoff and keeps mock execution truthful", async () => {
@@ -121,6 +125,66 @@ describe("POST /api/verification-agent/handoff", () => {
       approval: { approvalId: "approval:test" },
       result: { status: "HANDOFF_READY" },
     });
+  });
+
+  it("routes a restart through durable recovery when the transient run map is empty", async () => {
+    configureLiveEnvironment();
+    const runId = "run:restarted";
+    const approval = {
+      approvalId: "approval:restarted",
+      intentId: "intent:release:pawpovai:milestone-launch-ready",
+      authorizedActorRole: "FOUNDER" as const,
+      authorizedActorId: "founder:fictional",
+      decision: "APPROVED" as const,
+      decidedAt: "2026-08-09T00:01:01.000Z",
+      expiresAt: "2099-01-01T00:00:00.000Z",
+      idempotencyKey: "release:restarted",
+      exactIntentHash: `sha256:${"1a".repeat(32)}`,
+    };
+    const recovered = {
+      status: "HANDOFF_CONFIRMED" as const,
+      adapterMode: "arc-testnet" as const,
+      execution: {
+        state: "CONFIRMED" as const,
+        idempotencyKey: approval.idempotencyKey,
+        providerOperationId: "11111111-1111-4111-8111-111111111111",
+        transactionHash: `0x${"2b".repeat(32)}`,
+        confirmation: "ARC_TESTNET_CONFIRMED",
+        explorerUrl: `https://testnet.arcscan.app/tx/0x${"2b".repeat(32)}`,
+        reconciliation: {
+          state: "RECONCILED" as const,
+          reconciliationId: "reconciliation:transaction:run:restarted",
+          reconciledAt: "2026-08-09T00:02:00.000Z",
+        },
+        failureCode: null,
+        failureMessage: null,
+      },
+      activityTrace: [
+        {
+          id: "run:restarted:handoff:0:confirmed",
+          at: "2026-08-09T00:01:04.000Z",
+          layer: "ARC TESTNET" as const,
+          code: "TRANSACTION_CONFIRMED" as const,
+          message: "Arc Testnet confirmed the real 1 USDC transfer.",
+        },
+      ],
+    };
+    const recoverySpy = vi
+      .mocked(verificationAgent.recoverPersistedLiveCircleHandoff)
+      .mockResolvedValue(recovered);
+
+    const response = await POST(handoffRequest(runId, approval));
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual(recovered);
+    expect(recoverySpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId,
+        approval,
+        authenticatedActorId: "founder:fictional",
+      }),
+    );
+    expect(verificationAgent.executeLiveCircleHandoff).not.toHaveBeenCalled();
   });
 
   it("rejects an altered approval before starting uncertain live recovery", async () => {
