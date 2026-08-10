@@ -190,10 +190,20 @@ export const HandoffResultSchema = z
     execution: z
       .object({
         state: z.enum(["NOT_SUBMITTED", "SKIPPED_MOCK", "SUBMITTED", "CONFIRMED", "FAILED"]),
+        idempotencyKey: BoundedHandoffIdentifierSchema.optional(),
         providerOperationId: z.string().nullable().optional(),
         transactionHash: z.string().nullable(),
         confirmation: z.string().nullable(),
         explorerUrl: z.string().nullable(),
+        reconciliation: z
+          .object({
+            state: z.literal("RECONCILED"),
+            reconciliationId: BoundedHandoffIdentifierSchema,
+            reconciledAt: BoundedHandoffTimestampSchema,
+          })
+          .strict()
+          .nullable()
+          .optional(),
         failureCode: z.string().nullable().optional(),
         failureMessage: z.string().nullable().optional(),
       })
