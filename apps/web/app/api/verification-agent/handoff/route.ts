@@ -7,6 +7,7 @@ import {
   HandoffResultSchema,
   MAX_HANDOFF_ATTEMPTS_PER_RUN,
   MAX_HANDOFF_IDENTIFIER_LENGTH,
+  approvalsMatch,
   authorizeAgentApiRequest,
   executeLiveCircleHandoff,
   handoffApprovedProposal,
@@ -37,6 +38,12 @@ export async function POST(request: Request) {
         { error: "HANDOFF_ATTEMPT_LIMIT_REACHED" },
         { status: 429 },
       );
+    }
+    if (
+      stored.handoff !== null &&
+      !approvalsMatch(stored.handoff.approval, parsedBody.approval)
+    ) {
+      return NextResponse.json({ error: "HANDOFF_DUPLICATE" }, { status: 409 });
     }
     const approvalResult = HandoffResultSchema.parse(
       handoffApprovedProposal({
