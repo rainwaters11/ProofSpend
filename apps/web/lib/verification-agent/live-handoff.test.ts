@@ -105,6 +105,93 @@ describe("executeLiveCircleHandoff", () => {
     expect(providerFactory).not.toHaveBeenCalled();
   });
 
+  it("resumes missing reconciliation from a persisted confirmation without calling Circle", async () => {
+    const context = await liveContext();
+    const { intent, authorization } = await buildLiveTransferAuthorization({
+      run: context.run,
+      approval: context.approval,
+      environment: context.environment,
+    });
+    const providerOperationId = "11111111-1111-4111-8111-111111111111";
+    const transactionHash = `0x${"1a".repeat(32)}`;
+    const blockHash = `0x${"2b".repeat(32)}`;
+    const explorerUrl = `https://testnet.arcscan.app/tx/${transactionHash}`;
+
+    await context.store.persist(authorization);
+    await context.store.recordResult({
+      proposalId: intent.proposalId,
+      idempotencyKey: intent.idempotencyKey,
+      mode: "ARC_TESTNET",
+      status: "PREPARED",
+      polledAt: "2026-08-09T00:01:02.000Z",
+    });
+    await context.store.consume({
+      releaseRequestId: intent.releaseRequestId,
+      approvalId: intent.approvalId,
+      authorizationBindingId: intent.authorizationBindingId,
+      transactionRecordId: intent.transactionRecordId,
+      intentId: intent.intentId,
+      expectedExactIntentHash: authorization.binding.exactIntentHash,
+      idempotencyKey: intent.idempotencyKey,
+      asOf: "2026-08-09T00:01:03.000Z",
+    });
+    await context.store.recordResult({
+      proposalId: intent.proposalId,
+      idempotencyKey: intent.idempotencyKey,
+      mode: "ARC_TESTNET",
+      status: "SUBMITTED",
+      providerOperationId,
+      polledAt: "2026-08-09T00:01:03.000Z",
+    });
+    await context.store.recordResult({
+      proposalId: intent.proposalId,
+      idempotencyKey: intent.idempotencyKey,
+      mode: "ARC_TESTNET",
+      status: "CONFIRMED",
+      providerOperationId,
+      transactionHash,
+      blockNumber: 42,
+      blockHash,
+      explorerUrl,
+      polledAt: "2026-08-09T00:01:04.000Z",
+    });
+    const providerFactory = vi.fn(() => fakeProvider([]));
+
+    const recovered = await executeLiveCircleHandoff({
+      run: context.run,
+      approval: context.approval,
+      environment: context.environment,
+      initialActivityTrace: context.run.activityTrace,
+      dependencies: { store: context.store, providerFactory },
+    });
+
+    expect(providerFactory).not.toHaveBeenCalled();
+    expect(recovered).toMatchObject({
+      status: "HANDOFF_CONFIRMED",
+      execution: {
+        state: "CONFIRMED",
+        idempotencyKey: intent.idempotencyKey,
+        reconciliation: {
+          state: "RECONCILED",
+          reconciliationId: `reconciliation:${intent.transactionRecordId}`,
+          reconciledAt: "2026-08-09T00:01:04.000Z",
+        },
+      },
+    });
+    await expect(context.store.loadReconciliations(intent.idempotencyKey)).resolves.toHaveLength(1);
+
+    await expect(
+      executeLiveCircleHandoff({
+        run: context.run,
+        approval: context.approval,
+        environment: context.environment,
+        initialActivityTrace: context.run.activityTrace,
+        dependencies: { store: context.store, providerFactory },
+      }),
+    ).rejects.toThrow("HANDOFF_DUPLICATE");
+    expect(providerFactory).not.toHaveBeenCalled();
+  });
+
   it("recovers a consumed Circle submission with the same idempotency key", async () => {
     const context = await liveContext();
     const { intent, authorization } = await buildLiveTransferAuthorization({
