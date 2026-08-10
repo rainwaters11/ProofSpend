@@ -109,6 +109,60 @@ describe("executeLiveCircleHandoff", () => {
     expect(providerFactory).not.toHaveBeenCalled();
   });
 
+  it("rejects an older terminal replay after a newer exact intent records a handoff", async () => {
+    const first = await liveContext();
+    const later = await liveContext();
+    const sharedStorePath = first.environment.PROOFSPEND_AUTH_STORE_PATH;
+    const laterEnvironment = {
+      ...later.environment,
+      PROOFSPEND_AUTH_STORE_PATH: sharedStorePath,
+    };
+    const laterApproval = {
+      ...later.approval,
+      approvalId: "approval:live-test-later",
+    };
+    const laterStore = new FileTransferAuthorizationStore(sharedStorePath);
+
+    await executeLiveCircleHandoff({
+      run: first.run,
+      approval: first.approval,
+      environment: first.environment,
+      initialActivityTrace: first.run.activityTrace,
+      dependencies: { store: first.store, providerFactory: () => fakeProvider([]) },
+    });
+    await executeLiveCircleHandoff({
+      run: later.run,
+      approval: laterApproval,
+      environment: laterEnvironment,
+      initialActivityTrace: later.run.activityTrace,
+      dependencies: { store: laterStore, providerFactory: () => fakeProvider([]) },
+    });
+
+    await expect(first.store.loadLatestHandoff()).resolves.toMatchObject({
+      execution: { idempotencyKey: later.run.proposal!.idempotencyKey },
+    });
+    await expect(
+      first.store.loadHandoff(first.run.proposal!.idempotencyKey),
+    ).resolves.toMatchObject({
+      execution: { idempotencyKey: first.run.proposal!.idempotencyKey },
+    });
+
+    const providerFactory = vi.fn(() => fakeProvider([]));
+    await expect(
+      executeLiveCircleHandoff({
+        run: first.run,
+        approval: first.approval,
+        environment: first.environment,
+        initialActivityTrace: first.run.activityTrace,
+        dependencies: {
+          store: new FileTransferAuthorizationStore(sharedStorePath),
+          providerFactory,
+        },
+      }),
+    ).rejects.toThrow("HANDOFF_DUPLICATE");
+    expect(providerFactory).not.toHaveBeenCalled();
+  });
+
   it("recovers a persisted confirmation through the restart path without calling Circle", async () => {
     const context = await liveContext();
     const { intent, authorization } = await buildLiveTransferAuthorization({

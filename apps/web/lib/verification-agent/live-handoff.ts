@@ -419,7 +419,7 @@ async function executeBoundLiveCircleHandoff(
       handoffMatchesTerminal(
         intent,
         existingResult,
-        await store.loadLatestHandoff(),
+        await store.loadHandoff(intent.idempotencyKey),
         reconciliation,
       )
     ) {

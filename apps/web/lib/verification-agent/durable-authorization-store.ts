@@ -607,6 +607,16 @@ export class FileTransferAuthorizationStore implements TransferAuthorizationStor
       : HandoffResultSchema.parse(structuredClone(latest));
   }
 
+  async loadHandoff(idempotencyKey: string): Promise<HandoffResult | null> {
+    const state = await this.readState();
+    const matching = state.handoffHistory
+      .filter((result) => result.execution.idempotencyKey === idempotencyKey)
+      .at(-1);
+    return matching === undefined
+      ? null
+      : HandoffResultSchema.parse(structuredClone(matching));
+  }
+
   private lastResult(history: TransferResult[] | undefined): TransferResult | null {
     const result = history?.at(-1);
     return result === undefined
