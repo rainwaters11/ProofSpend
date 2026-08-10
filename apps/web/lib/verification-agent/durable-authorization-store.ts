@@ -508,6 +508,33 @@ export class FileTransferAuthorizationStore implements TransferAuthorizationStor
     }
   }
 
+  private async quarantinedLockStillStale(
+    snapshot: StaleLockSnapshot,
+    quarantinePath: string,
+  ): Promise<boolean> {
+    const [quarantinedStat, quarantinedRaw] = await Promise.all([
+      stat(quarantinePath),
+      readFile(quarantinePath, "utf8"),
+    ]);
+    if (
+      quarantinedStat.dev !== snapshot.device ||
+      quarantinedStat.ino !== snapshot.inode ||
+      quarantinedStat.mtimeMs !== snapshot.mtimeMs ||
+      quarantinedRaw !== snapshot.raw ||
+      Date.now() - quarantinedStat.mtimeMs < LOCK_STALE_MS
+    ) {
+      return false;
+    }
+
+    const finalLease = await stat(quarantinePath);
+    return (
+      finalLease.dev === snapshot.device &&
+      finalLease.ino === snapshot.inode &&
+      finalLease.mtimeMs === snapshot.mtimeMs &&
+      Date.now() - finalLease.mtimeMs >= LOCK_STALE_MS
+    );
+  }
+
   private async reclaimStaleLock(): Promise<boolean> {
     const reclaimOwnerToken = randomUUID();
     const guard = await this.acquireReclaimGuard(reclaimOwnerToken);
@@ -531,27 +558,7 @@ export class FileTransferAuthorizationStore implements TransferAuthorizationStor
         throw error;
       }
 
-      const [quarantinedStat, quarantinedRaw] = await Promise.all([
-        stat(quarantinePath),
-        readFile(quarantinePath, "utf8"),
-      ]);
-      if (
-        quarantinedStat.dev !== snapshot.device ||
-        quarantinedStat.ino !== snapshot.inode ||
-        quarantinedStat.mtimeMs !== snapshot.mtimeMs ||
-        quarantinedRaw !== snapshot.raw ||
-        Date.now() - quarantinedStat.mtimeMs < LOCK_STALE_MS
-      ) {
-        return false;
-      }
-
-      const finalLease = await stat(quarantinePath);
-      if (
-        finalLease.dev !== snapshot.device ||
-        finalLease.ino !== snapshot.inode ||
-        finalLease.mtimeMs !== snapshot.mtimeMs ||
-        Date.now() - finalLease.mtimeMs < LOCK_STALE_MS
-      ) {
+      if (!(await this.quarantinedLockStillStale(snapshot, quarantinePath))) {
         return false;
       }
       await unlink(this.lockPath);
