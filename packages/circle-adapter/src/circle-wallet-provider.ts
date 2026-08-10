@@ -125,7 +125,7 @@ function matchesRecoveredTransfer(
   expected: { blockchain: string; sourceWalletId: string; usdcTokenAddress: string },
 ): boolean {
   return (
-    transaction.refId === intent.proposalId &&
+    transaction.refId === intent.idempotencyKey &&
     transaction.transactionType === "OUTBOUND" &&
     transaction.operation === "TRANSFER" &&
     transaction.walletId === expected.sourceWalletId &&
@@ -428,17 +428,17 @@ export class CircleWalletProvider implements ArcTestnetTransferProvider {
           walletIds: [this.sourceWalletId],
           destinationAddress: intent.destinationAddress,
         });
-        const sameReference = transactions.filter(
-          (transaction) => transaction.refId === intent.proposalId,
+        const sameExactIntent = transactions.filter(
+          (transaction) => transaction.refId === intent.idempotencyKey,
         );
-        const exactMatches = sameReference.filter((transaction) =>
+        const exactMatches = sameExactIntent.filter((transaction) =>
           matchesRecoveredTransfer(intent, transaction, {
             blockchain: this.blockchain,
             sourceWalletId: this.sourceWalletId,
             usdcTokenAddress: this.usdcTokenAddress,
           }),
         );
-        if (sameReference.length !== exactMatches.length || exactMatches.length > 1) {
+        if (sameExactIntent.length !== exactMatches.length || exactMatches.length > 1) {
           throw new WalletProviderError(
             "INVALID_REQUEST",
             "Circle transaction recovery was ambiguous or did not match the exact approved intent.",
@@ -545,7 +545,7 @@ export class CircleWalletProvider implements ArcTestnetTransferProvider {
         destinationAddress: intent.destinationAddress,
         fee: { type: "level", config: { feeLevel: "MEDIUM" } },
         idempotencyKey: intent.idempotencyKey,
-        refId: intent.proposalId,
+        refId: intent.idempotencyKey,
       });
       const transactionId = response.data?.id;
       if (!transactionId) {

@@ -281,7 +281,7 @@ function mockConfirmedTransaction(overrides: Record<string, unknown> = {}) {
 function mockListedTransfer(overrides: Record<string, unknown> = {}) {
   return {
     id: OPERATION_ID_1,
-    refId: baseIntent.proposalId,
+    refId: baseIntent.idempotencyKey,
     transactionType: "OUTBOUND",
     operation: "TRANSFER",
     blockchain: "ARC-TESTNET",
@@ -514,7 +514,7 @@ describe("CircleWalletProvider", () => {
       destinationAddress: baseIntent.destinationAddress,
       fee: { type: "level", config: { feeLevel: "MEDIUM" } },
       idempotencyKey: baseIntent.idempotencyKey,
-      refId: "proposal-1",
+      refId: baseIntent.idempotencyKey,
     });
     expect(result).toEqual({
       proposalId: "proposal-1",
@@ -560,6 +560,34 @@ describe("CircleWalletProvider", () => {
     expect(authorizationStore.consumeCalls).toBe(0);
     expect(mockedClient.getWalletTokenBalance).not.toHaveBeenCalled();
     expect(mockedClient.createTransaction).not.toHaveBeenCalled();
+  });
+
+  it("does not recover a previous transaction with the legacy proposal reference", async () => {
+    const authorizationStore = new FakeAuthorizationStore();
+    authorizationStore.markConsumed();
+    mockWallets();
+    mockSufficientBalance();
+    mockedClient.listTransactions.mockResolvedValue({
+      data: {
+        transactions: [mockListedTransfer({ refId: baseIntent.proposalId })],
+      },
+    });
+    mockedClient.createTransaction.mockResolvedValue({
+      data: { id: OPERATION_ID_2, state: "SENT" },
+    });
+
+    const result = await makeProvider({ authorizationStore }).submitTransfer(validIntent());
+
+    expect(result).toMatchObject({
+      status: "SUBMITTED",
+      providerOperationId: OPERATION_ID_2,
+    });
+    expect(mockedClient.createTransaction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        idempotencyKey: baseIntent.idempotencyKey,
+        refId: baseIntent.idempotencyKey,
+      }),
+    );
   });
 
   it("scans every transaction page before recovering an exact later-page operation", async () => {
