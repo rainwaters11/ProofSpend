@@ -374,6 +374,11 @@ async function executeBoundLiveCircleHandoff(
           reconciledAt: new Date().toISOString(),
         };
         await store.recordReconciliation(reconciliation);
+        reconciliation =
+          (await store.loadReconciliations(intent.idempotencyKey)).at(-1) ??
+          (() => {
+            throw new Error("RECONCILIATION_RECORD_MISSING");
+          })();
       }
     }
     const result = handoffResult(intent, boundTransfer, trace, reconciliation);
