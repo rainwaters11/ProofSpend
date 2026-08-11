@@ -59,6 +59,28 @@ const ProviderRequestIdSchema = z
   .string()
   .max(128)
   .regex(/^req_[A-Za-z0-9]+$/);
+const OpenAiResponseEnvelopeSchema = z
+  .object({
+    output_text: z.string().optional(),
+    output: z
+      .array(
+        z
+          .object({
+            content: z
+              .array(
+                z
+                  .object({
+                    text: z.string().optional(),
+                  })
+                  .passthrough(),
+              )
+              .optional(),
+          })
+          .passthrough(),
+      )
+      .optional(),
+  })
+  .passthrough();
 
 function sanitizedString(schema: z.ZodString, value: unknown): string | null {
   const parsed = schema.safeParse(value);
@@ -198,12 +220,9 @@ export function createOpenAiAgentModelProvider(config: {
           throw await upstreamFailure(response, controller.signal);
         }
 
-        let json: {
-          output_text?: string;
-          output?: Array<{ content?: Array<{ text?: string }> }>;
-        };
+        let responseBody: unknown;
         try {
-          json = (await response.json()) as typeof json;
+          responseBody = await response.json();
         } catch (error) {
           if (controller.signal.aborted) throw error;
           throw new AgentProviderError(
@@ -212,9 +231,17 @@ export function createOpenAiAgentModelProvider(config: {
           );
         }
 
+        const parsedEnvelope = OpenAiResponseEnvelopeSchema.safeParse(responseBody);
+        if (!parsedEnvelope.success) {
+          throw new AgentProviderError(
+            "AGENT_INVALID_MODEL_OUTPUT",
+            EMPTY_PROVIDER_DIAGNOSTIC,
+          );
+        }
+
         const outputText =
-          json.output_text ??
-          json.output
+          parsedEnvelope.data.output_text ??
+          parsedEnvelope.data.output
             ?.flatMap((entry) => entry.content ?? [])
             .find((content) => typeof content.text === "string")?.text;
 
