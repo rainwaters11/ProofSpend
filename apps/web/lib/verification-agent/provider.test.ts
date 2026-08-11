@@ -4,7 +4,10 @@ import {
 } from "@proofspend/domain";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { createOpenAiAgentModelProvider } from "./provider";
+import {
+  AgentProviderError,
+  createOpenAiAgentModelProvider,
+} from "./provider";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -104,5 +107,221 @@ describe("createOpenAiAgentModelProvider", () => {
     await expect(provider.analyzeMissingReceipt(createProviderInput())).rejects.toThrow(
       "AGENT_INVALID_MODEL_OUTPUT",
     );
+  });
+
+  it("classifies a malformed successful response body as invalid output", async () => {
+    const fetchMock = vi.fn(async () => new Response("{", { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const provider = createOpenAiAgentModelProvider({
+      apiKey: "test-key",
+      model: "test-model",
+    });
+
+    await expect(provider.analyzeMissingReceipt(createProviderInput())).rejects.toThrow(
+      "AGENT_INVALID_MODEL_OUTPUT",
+    );
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it("preserves a transport failure while reading a successful response body", async () => {
+    const fetchMock = vi.fn(async () => {
+      const response = new Response(null, { status: 200 });
+      Object.defineProperty(response, "json", {
+        value: async () => {
+          throw new TypeError("response stream terminated");
+        },
+      });
+      return response;
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const provider = createOpenAiAgentModelProvider({
+      apiKey: "test-key",
+      model: "test-model",
+    });
+
+    await expect(provider.analyzeMissingReceipt(createProviderInput())).rejects.toThrow(
+      "AGENT_PROVIDER_NETWORK_FAILURE",
+    );
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    null,
+    { output: "bad" },
+    { output: [{ content: "bad" }] },
+  ])("classifies a malformed successful response envelope as invalid output", async (body) => {
+    const fetchMock = vi.fn(
+      async () => new Response(JSON.stringify(body), { status: 200 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const provider = createOpenAiAgentModelProvider({
+      apiKey: "test-key",
+      model: "test-model",
+    });
+
+    await expect(provider.analyzeMissingReceipt(createProviderInput())).rejects.toThrow(
+      "AGENT_INVALID_MODEL_OUTPUT",
+    );
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it("classifies a provider timeout without retrying", async () => {
+    const fetchMock = vi.fn(
+      async (_url: string | URL | Request, init?: RequestInit) =>
+        await new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () =>
+            reject(new DOMException("aborted", "AbortError")),
+          );
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const provider = createOpenAiAgentModelProvider({
+      apiKey: "test-key",
+      model: "test-model",
+      timeoutMs: 1,
+    });
+
+    await expect(provider.analyzeMissingReceipt(createProviderInput())).rejects.toThrow(
+      "AGENT_PROVIDER_TIMEOUT",
+    );
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it("preserves a timeout while reading an upstream error body", async () => {
+    const fetchMock = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      const response = new Response(null, {
+        status: 500,
+        headers: { "x-request-id": "req_timeout123" },
+      });
+      Object.defineProperty(response, "json", {
+        value: async () =>
+          await new Promise<never>((_resolve, reject) => {
+            init?.signal?.addEventListener("abort", () =>
+              reject(new DOMException("aborted", "AbortError")),
+            );
+          }),
+      });
+      return response;
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const provider = createOpenAiAgentModelProvider({
+      apiKey: "test-key",
+      model: "test-model",
+      timeoutMs: 1,
+    });
+
+    await expect(provider.analyzeMissingReceipt(createProviderInput())).rejects.toThrow(
+      "AGENT_PROVIDER_TIMEOUT",
+    );
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it.each([400, 401, 429])(
+    "classifies upstream HTTP %i and retains only sanitized diagnostics",
+    async (status) => {
+      const fetchMock = vi.fn(async () =>
+        new Response(
+          JSON.stringify({
+            error: {
+              type: "provider_error_type",
+              code: "provider_error_code",
+              param: "provider_error_param",
+              message: "sensitive upstream detail",
+            },
+            requestBody: "must not be retained",
+          }),
+          {
+            status,
+            headers: { "x-request-id": "req_123abc" },
+          },
+        ),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+
+      const provider = createOpenAiAgentModelProvider({
+        apiKey: "test-key",
+        model: "test-model",
+      });
+
+      const error = await provider
+        .analyzeMissingReceipt(createProviderInput())
+        .catch((caught: unknown) => caught);
+
+      expect(error).toBeInstanceOf(AgentProviderError);
+      expect(error).toMatchObject({
+        message: `AGENT_PROVIDER_UPSTREAM_${status}`,
+        diagnostic: {
+          upstreamHttpStatus: status,
+          xRequestId: "req_123abc",
+          errorType: "provider_error_type",
+          errorCode: "provider_error_code",
+          errorParam: "provider_error_param",
+        },
+      });
+      expect(error).not.toHaveProperty("diagnostic.message");
+      expect(error).not.toHaveProperty("diagnostic.requestBody");
+      expect(fetchMock).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("drops diagnostic values outside the strict external-input allowlist", async () => {
+    const fetchMock = vi.fn(async () =>
+      new Response(
+        JSON.stringify({
+          error: {
+            type: "invalid request error with secret detail",
+            code: "sk-secret-value",
+            param: "input[0].api-key",
+          },
+        }),
+        {
+          status: 400,
+          headers: { "x-request-id": "not a valid request id" },
+        },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const provider = createOpenAiAgentModelProvider({
+      apiKey: "test-key",
+      model: "test-model",
+    });
+    const error = await provider
+      .analyzeMissingReceipt(createProviderInput())
+      .catch((caught: unknown) => caught);
+
+    expect(error).toMatchObject({
+      message: "AGENT_PROVIDER_UPSTREAM_400",
+      diagnostic: {
+        upstreamHttpStatus: 400,
+        xRequestId: null,
+        errorType: null,
+        errorCode: null,
+        errorParam: null,
+      },
+    });
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it("classifies a network failure without retrying", async () => {
+    const fetchMock = vi.fn(async () => {
+      throw new TypeError("network unavailable");
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const provider = createOpenAiAgentModelProvider({
+      apiKey: "test-key",
+      model: "test-model",
+    });
+
+    await expect(provider.analyzeMissingReceipt(createProviderInput())).rejects.toThrow(
+      "AGENT_PROVIDER_NETWORK_FAILURE",
+    );
+    expect(fetchMock).toHaveBeenCalledOnce();
   });
 });

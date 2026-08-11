@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { getEnvironment } from "@/lib/env";
 import {
   AgentApiAccessError,
+  AgentProviderError,
   authorizeAgentInvocation,
   runVerificationAgent,
   saveVerificationAgentRun,
@@ -18,6 +19,15 @@ export async function POST(request: Request) {
   } catch (error) {
     if (error instanceof AgentApiAccessError) {
       return NextResponse.json({ error: error.message }, { status: error.status });
+    }
+    if (error instanceof AgentProviderError) {
+      return NextResponse.json(
+        {
+          error: error.message,
+          diagnostic: error.diagnostic,
+        },
+        { status: 400 },
+      );
     }
     const code = error instanceof Error ? error.message : "AGENT_RUN_FAILED";
     return NextResponse.json({ error: code }, { status: 400 });
