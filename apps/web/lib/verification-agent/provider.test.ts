@@ -124,6 +124,27 @@ describe("createOpenAiAgentModelProvider", () => {
     expect(fetchMock).toHaveBeenCalledOnce();
   });
 
+  it.each([
+    null,
+    { output: "bad" },
+    { output: [{ content: "bad" }] },
+  ])("classifies a malformed successful response envelope as invalid output", async (body) => {
+    const fetchMock = vi.fn(
+      async () => new Response(JSON.stringify(body), { status: 200 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const provider = createOpenAiAgentModelProvider({
+      apiKey: "test-key",
+      model: "test-model",
+    });
+
+    await expect(provider.analyzeMissingReceipt(createProviderInput())).rejects.toThrow(
+      "AGENT_INVALID_MODEL_OUTPUT",
+    );
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
   it("classifies a provider timeout without retrying", async () => {
     const fetchMock = vi.fn(
       async (_url: string | URL | Request, init?: RequestInit) =>
