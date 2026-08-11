@@ -124,6 +124,29 @@ describe("createOpenAiAgentModelProvider", () => {
     expect(fetchMock).toHaveBeenCalledOnce();
   });
 
+  it("preserves a transport failure while reading a successful response body", async () => {
+    const fetchMock = vi.fn(async () => {
+      const response = new Response(null, { status: 200 });
+      Object.defineProperty(response, "json", {
+        value: async () => {
+          throw new TypeError("response stream terminated");
+        },
+      });
+      return response;
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const provider = createOpenAiAgentModelProvider({
+      apiKey: "test-key",
+      model: "test-model",
+    });
+
+    await expect(provider.analyzeMissingReceipt(createProviderInput())).rejects.toThrow(
+      "AGENT_PROVIDER_NETWORK_FAILURE",
+    );
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
   it.each([
     null,
     { output: "bad" },
