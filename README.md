@@ -10,7 +10,7 @@
 
 ProofSpend LaunchVault is an evidence-aware programmable capital platform for founders, solopreneurs, and the people who fund their work. It connects business capital, milestone requirements, receipts, deliverables, LLM-assisted evidence analysis, deterministic policy, human approval, and Arc Testnet settlement into one accountable workflow.
 
-> **Current status:** The technical foundation and Arc-native architecture are complete, and Issue #32 ships a bounded server-side Verification Agent orchestrator for the seeded PawPOVAI flow. The app defaults to explicit mock adapter mode, no real funds are being moved, and human approval plus typed adapter execution remain outside the model loop.
+> **Current status:** The technical foundation, bounded Verification Agent, durable authorization handoff, and Circle-backed Arc Testnet adapter are implemented. ProofSpend supports explicit mock mode and an explicit live OpenAI plus Arc Testnet mode. The live path remains server-controlled, requires exact human approval, and moves test USDC only.
 
 ## Why ProofSpend
 
@@ -170,6 +170,40 @@ bun run demo:live
 ```
 
 The command pauses and requires the administrator to type `APPROVE 1 USDC` before the value-moving request. It fails unless Circle confirms, the Arcscan URL matches the real transaction hash, replay returns `HANDOFF_DUPLICATE`, the activity page shows the truthful result, and the full path completes within three minutes.
+
+
+### Render live-demo deployment
+
+ProofSpend's live judge-demo deployment requires one paid Render web-service instance with one persistent disk. Keep the repository root as the service root because the web app imports shared workspace packages.
+
+The repository includes `render.yaml` with the approved service, build, start, health-check, single-instance, and disk settings. During initial Blueprint creation, Render prompts for every credential marked `sync: false`. Never commit those values.
+
+Required deployment properties:
+
+- Node native runtime with Bun `1.2.14`;
+- Node `22.23.2`;
+- `bun install --frozen-lockfile && bun run build`;
+- `cd apps/web && bun run start --hostname 0.0.0.0 --port $PORT`;
+- health check at `/api/health`;
+- one instance only;
+- persistent disk mounted at `/var/data`;
+- authorization state at `/var/data/proofspend/live-authorization.json`;
+- auto-deploy only after linked GitHub checks pass.
+
+Create a new deployment-only agent API token with at least 32 characters. Store the same value securely for the administrator rehearsal command. Do not reuse or expose a token from another environment.
+
+A healthy live deployment returns safe mode metadata from `/api/health`:
+
+```json
+{
+  "status": "ok",
+  "adapterMode": "arc-testnet",
+  "agentMode": "openai",
+  "version": "0.1.0"
+}
+```
+
+A successful health check confirms configuration and process readiness only. It does not authorize or submit a Circle transfer.
 
 The safe health endpoint is available at:
 
