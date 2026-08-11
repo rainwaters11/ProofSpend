@@ -18,6 +18,56 @@ export interface AgentModelProvider {
   }): Promise<MissingReceiptModelOutput>;
 }
 
+export interface AgentProviderDiagnostic {
+  upstreamHttpStatus: number | null;
+  xRequestId: string | null;
+  errorType: string | null;
+  errorCode: string | null;
+  errorParam: string | null;
+}
+
+export class AgentProviderError extends Error {
+  readonly diagnostic: AgentProviderDiagnostic;
+
+  constructor(code: string, diagnostic: AgentProviderDiagnostic) {
+    super(code);
+    this.name = "AgentProviderError";
+    this.diagnostic = diagnostic;
+  }
+}
+
+const EMPTY_PROVIDER_DIAGNOSTIC: AgentProviderDiagnostic = {
+  upstreamHttpStatus: null,
+  xRequestId: null,
+  errorType: null,
+  errorCode: null,
+  errorParam: null,
+};
+
+function sanitizedString(value: unknown): string | null {
+  return typeof value === "string" ? value : null;
+}
+
+async function upstreamFailure(response: Response): Promise<AgentProviderError> {
+  let errorFields: Record<string, unknown> = {};
+  try {
+    const body = (await response.json()) as { error?: unknown };
+    if (typeof body.error === "object" && body.error !== null && !Array.isArray(body.error)) {
+      errorFields = body.error as Record<string, unknown>;
+    }
+  } catch {
+    // An unreadable upstream error body has no safe diagnostic fields to retain.
+  }
+
+  return new AgentProviderError(`AGENT_PROVIDER_UPSTREAM_${response.status}`, {
+    upstreamHttpStatus: response.status,
+    xRequestId: response.headers.get("x-request-id"),
+    errorType: sanitizedString(errorFields.type),
+    errorCode: sanitizedString(errorFields.code),
+    errorParam: sanitizedString(errorFields.param),
+  });
+}
+
 const MOCK_OUTPUT = MissingReceiptModelOutputSchema.parse({
   missingGapId: "proof-gap:milestone:launch-ready:missing-receipt",
   question: "Please add the missing receipt required for this milestone.",
@@ -39,7 +89,7 @@ export function createOpenAiAgentModelProvider(config: {
   model: string;
   timeoutMs?: number;
 }): AgentModelProvider {
-  const timeoutMs = config.timeoutMs ?? 15_000;
+  const timeoutMs = config.timeoutMs ?? 60_000;
 
   return {
     async analyzeMissingReceipt({ evidenceSummary, policyResult, proofGaps }) {
@@ -120,9 +170,7 @@ export function createOpenAiAgentModelProvider(config: {
           signal: controller.signal,
         });
 
-        if (!response.ok) {
-          throw new Error("AGENT_PROVIDER_FAILURE");
-        }
+        if (!response.ok) throw await upstreamFailure(response);
 
         const json = (await response.json()) as {
           output_text?: string;
@@ -136,30 +184,42 @@ export function createOpenAiAgentModelProvider(config: {
             .find((content) => typeof content.text === "string")?.text;
 
         if (typeof outputText !== "string") {
-          throw new Error("AGENT_INVALID_MODEL_OUTPUT");
+          throw new AgentProviderError(
+            "AGENT_INVALID_MODEL_OUTPUT",
+            EMPTY_PROVIDER_DIAGNOSTIC,
+          );
         }
 
         let parsedOutput: unknown;
         try {
           parsedOutput = JSON.parse(outputText);
         } catch {
-          throw new Error("AGENT_INVALID_MODEL_OUTPUT");
+          throw new AgentProviderError(
+            "AGENT_INVALID_MODEL_OUTPUT",
+            EMPTY_PROVIDER_DIAGNOSTIC,
+          );
         }
 
         const validatedOutput = MissingReceiptModelOutputSchema.safeParse(parsedOutput);
         if (!validatedOutput.success) {
-          throw new Error("AGENT_INVALID_MODEL_OUTPUT");
+          throw new AgentProviderError(
+            "AGENT_INVALID_MODEL_OUTPUT",
+            EMPTY_PROVIDER_DIAGNOSTIC,
+          );
         }
         return validatedOutput.data;
       } catch (error) {
-        if (
-          error instanceof Error &&
-          (error.message === "AGENT_INVALID_MODEL_OUTPUT" ||
-            error.message === "AGENT_PROVIDER_FAILURE")
-        ) {
-          throw error;
+        if (error instanceof AgentProviderError) throw error;
+        if (controller.signal.aborted) {
+          throw new AgentProviderError(
+            "AGENT_PROVIDER_TIMEOUT",
+            EMPTY_PROVIDER_DIAGNOSTIC,
+          );
         }
-        throw new Error("AGENT_PROVIDER_FAILURE");
+        throw new AgentProviderError(
+          "AGENT_PROVIDER_NETWORK_FAILURE",
+          EMPTY_PROVIDER_DIAGNOSTIC,
+        );
       } finally {
         clearTimeout(timeout);
       }
