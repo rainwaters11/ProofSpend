@@ -86,7 +86,7 @@ describe("POST /api/verification-agent/run", () => {
         }),
         {
           status: 400,
-          headers: { "x-request-id": "request-id-123" },
+          headers: { "x-request-id": "req_route123" },
         },
       ),
     );
@@ -108,7 +108,7 @@ describe("POST /api/verification-agent/run", () => {
       error: "AGENT_PROVIDER_UPSTREAM_400",
       diagnostic: {
         upstreamHttpStatus: 400,
-        xRequestId: "request-id-123",
+        xRequestId: "req_route123",
         errorType: "invalid_request_error",
         errorCode: "invalid_request",
         errorParam: "text.format.schema",
