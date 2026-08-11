@@ -224,7 +224,9 @@ export function createOpenAiAgentModelProvider(config: {
         try {
           responseBody = await response.json();
         } catch (error) {
-          if (controller.signal.aborted) throw error;
+          if (controller.signal.aborted || !(error instanceof SyntaxError)) {
+            throw error;
+          }
           throw new AgentProviderError(
             "AGENT_INVALID_MODEL_OUTPUT",
             EMPTY_PROVIDER_DIAGNOSTIC,
