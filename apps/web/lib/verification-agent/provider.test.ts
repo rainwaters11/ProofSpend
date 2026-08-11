@@ -109,6 +109,21 @@ describe("createOpenAiAgentModelProvider", () => {
     );
   });
 
+  it("classifies a malformed successful response body as invalid output", async () => {
+    const fetchMock = vi.fn(async () => new Response("{", { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const provider = createOpenAiAgentModelProvider({
+      apiKey: "test-key",
+      model: "test-model",
+    });
+
+    await expect(provider.analyzeMissingReceipt(createProviderInput())).rejects.toThrow(
+      "AGENT_INVALID_MODEL_OUTPUT",
+    );
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
   it("classifies a provider timeout without retrying", async () => {
     const fetchMock = vi.fn(
       async (_url: string | URL | Request, init?: RequestInit) =>
@@ -118,6 +133,36 @@ describe("createOpenAiAgentModelProvider", () => {
           );
         }),
     );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const provider = createOpenAiAgentModelProvider({
+      apiKey: "test-key",
+      model: "test-model",
+      timeoutMs: 1,
+    });
+
+    await expect(provider.analyzeMissingReceipt(createProviderInput())).rejects.toThrow(
+      "AGENT_PROVIDER_TIMEOUT",
+    );
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it("preserves a timeout while reading an upstream error body", async () => {
+    const fetchMock = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      const response = new Response(null, {
+        status: 500,
+        headers: { "x-request-id": "req_timeout123" },
+      });
+      Object.defineProperty(response, "json", {
+        value: async () =>
+          await new Promise<never>((_resolve, reject) => {
+            init?.signal?.addEventListener("abort", () =>
+              reject(new DOMException("aborted", "AbortError")),
+            );
+          }),
+      });
+      return response;
+    });
     vi.stubGlobal("fetch", fetchMock);
 
     const provider = createOpenAiAgentModelProvider({
@@ -148,7 +193,7 @@ describe("createOpenAiAgentModelProvider", () => {
           }),
           {
             status,
-            headers: { "x-request-id": "request-id-123" },
+            headers: { "x-request-id": "req_123abc" },
           },
         ),
       );
@@ -168,7 +213,7 @@ describe("createOpenAiAgentModelProvider", () => {
         message: `AGENT_PROVIDER_UPSTREAM_${status}`,
         diagnostic: {
           upstreamHttpStatus: status,
-          xRequestId: "request-id-123",
+          xRequestId: "req_123abc",
           errorType: "provider_error_type",
           errorCode: "provider_error_code",
           errorParam: "provider_error_param",
@@ -179,6 +224,45 @@ describe("createOpenAiAgentModelProvider", () => {
       expect(fetchMock).toHaveBeenCalledOnce();
     },
   );
+
+  it("drops diagnostic values outside the strict external-input allowlist", async () => {
+    const fetchMock = vi.fn(async () =>
+      new Response(
+        JSON.stringify({
+          error: {
+            type: "invalid request error with secret detail",
+            code: "sk-secret-value",
+            param: "input[0].api-key",
+          },
+        }),
+        {
+          status: 400,
+          headers: { "x-request-id": "not a valid request id" },
+        },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const provider = createOpenAiAgentModelProvider({
+      apiKey: "test-key",
+      model: "test-model",
+    });
+    const error = await provider
+      .analyzeMissingReceipt(createProviderInput())
+      .catch((caught: unknown) => caught);
+
+    expect(error).toMatchObject({
+      message: "AGENT_PROVIDER_UPSTREAM_400",
+      diagnostic: {
+        upstreamHttpStatus: 400,
+        xRequestId: null,
+        errorType: null,
+        errorCode: null,
+        errorParam: null,
+      },
+    });
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
 
   it("classifies a network failure without retrying", async () => {
     const fetchMock = vi.fn(async () => {
