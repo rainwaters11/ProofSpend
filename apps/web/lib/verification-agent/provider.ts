@@ -1,6 +1,7 @@
 import "server-only";
 
 import { type MilestoneEvaluationResult, type ProofGap } from "@proofspend/domain";
+import { z } from "zod";
 
 import {
   MissingReceiptModelOutputSchema,
@@ -44,27 +45,50 @@ const EMPTY_PROVIDER_DIAGNOSTIC: AgentProviderDiagnostic = {
   errorParam: null,
 };
 
-function sanitizedString(value: unknown): string | null {
-  return typeof value === "string" ? value : null;
+const ProviderDiagnosticIdentifierSchema = z
+  .string()
+  .max(64)
+  .regex(/^[a-z][a-z0-9_]*$/);
+const ProviderDiagnosticParamSchema = z
+  .string()
+  .max(128)
+  .regex(
+    /^[A-Za-z_][A-Za-z0-9_]*(?:(?:\[\d+\])|(?:\.[A-Za-z_][A-Za-z0-9_]*))*$/,
+  );
+const ProviderRequestIdSchema = z
+  .string()
+  .max(128)
+  .regex(/^req_[A-Za-z0-9]+$/);
+
+function sanitizedString(schema: z.ZodString, value: unknown): string | null {
+  const parsed = schema.safeParse(value);
+  return parsed.success ? parsed.data : null;
 }
 
-async function upstreamFailure(response: Response): Promise<AgentProviderError> {
+async function upstreamFailure(
+  response: Response,
+  signal: AbortSignal,
+): Promise<AgentProviderError> {
   let errorFields: Record<string, unknown> = {};
   try {
     const body = (await response.json()) as { error?: unknown };
     if (typeof body.error === "object" && body.error !== null && !Array.isArray(body.error)) {
       errorFields = body.error as Record<string, unknown>;
     }
-  } catch {
+  } catch (error) {
+    if (signal.aborted) throw error;
     // An unreadable upstream error body has no safe diagnostic fields to retain.
   }
 
   return new AgentProviderError(`AGENT_PROVIDER_UPSTREAM_${response.status}`, {
     upstreamHttpStatus: response.status,
-    xRequestId: response.headers.get("x-request-id"),
-    errorType: sanitizedString(errorFields.type),
-    errorCode: sanitizedString(errorFields.code),
-    errorParam: sanitizedString(errorFields.param),
+    xRequestId: sanitizedString(
+      ProviderRequestIdSchema,
+      response.headers.get("x-request-id"),
+    ),
+    errorType: sanitizedString(ProviderDiagnosticIdentifierSchema, errorFields.type),
+    errorCode: sanitizedString(ProviderDiagnosticIdentifierSchema, errorFields.code),
+    errorParam: sanitizedString(ProviderDiagnosticParamSchema, errorFields.param),
   });
 }
 
@@ -170,12 +194,23 @@ export function createOpenAiAgentModelProvider(config: {
           signal: controller.signal,
         });
 
-        if (!response.ok) throw await upstreamFailure(response);
+        if (!response.ok) {
+          throw await upstreamFailure(response, controller.signal);
+        }
 
-        const json = (await response.json()) as {
+        let json: {
           output_text?: string;
           output?: Array<{ content?: Array<{ text?: string }> }>;
         };
+        try {
+          json = (await response.json()) as typeof json;
+        } catch (error) {
+          if (controller.signal.aborted) throw error;
+          throw new AgentProviderError(
+            "AGENT_INVALID_MODEL_OUTPUT",
+            EMPTY_PROVIDER_DIAGNOSTIC,
+          );
+        }
 
         const outputText =
           json.output_text ??
