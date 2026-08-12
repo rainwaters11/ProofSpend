@@ -36,6 +36,53 @@ describe("Home", () => {
     expect(markup).toContain("Adapter: mock");
   });
 
+
+  it("labels explicit Arc Testnet mode truthfully", () => {
+    const liveEnvironment = {
+      PROOFSPEND_ADAPTER_MODE: "arc-testnet",
+      PROOFSPEND_AGENT_MODE: "openai",
+      OPENAI_API_KEY: "test-openai-key",
+      LLM_MODEL: "gpt-5-mini",
+      PROOFSPEND_AGENT_API_TOKEN: "a".repeat(32),
+      CIRCLE_API_KEY: "TEST_API_KEY:test:test",
+      CIRCLE_ENTITY_SECRET: "a".repeat(64),
+      CIRCLE_SOURCE_WALLET_ID: "11111111-1111-4111-8111-111111111111",
+      CIRCLE_DESTINATION_WALLET_ID: "22222222-2222-4222-8222-222222222222",
+      CIRCLE_DESTINATION_WALLET_ADDRESS:
+        "0x1111111111111111111111111111111111111111",
+      CIRCLE_CHAIN: "ARC-TESTNET",
+      CIRCLE_USDC_TOKEN_ADDRESS: "0x3600000000000000000000000000000000000000",
+      CIRCLE_POLL_INTERVAL_MS: "3000",
+      CIRCLE_MAX_POLLS: "100",
+      CIRCLE_ARGSCAN_BASE_URL: "https://testnet.arcscan.app",
+      PROOFSPEND_AUTH_STORE_PATH: "/var/data/proofspend/live-authorization.json",
+    } as const;
+    const originals = Object.fromEntries(
+      Object.keys(liveEnvironment).map((key) => [key, process.env[key]]),
+    );
+
+    try {
+      Object.assign(process.env, liveEnvironment);
+      const markup = renderToStaticMarkup(Home());
+
+      expect(markup).toContain("ARC TESTNET");
+      expect(markup).toContain(
+        "Test USDC can move only after explicit human approval.",
+      );
+      expect(markup).not.toContain("No real funds are being moved.");
+      expect(markup).toContain("Agent: openai");
+      expect(markup).toContain("Adapter: arc-testnet");
+    } finally {
+      for (const [key, value] of Object.entries(originals)) {
+        if (value === undefined) {
+          delete process.env[key];
+        } else {
+          process.env[key] = value;
+        }
+      }
+    }
+  });
+
   it("links directly to the guided demo overview", () => {
     const markup = renderToStaticMarkup(Home());
 

@@ -4,6 +4,7 @@ import { getEnvironment } from "../lib/env";
 
 export default function Home() {
   const environment = getEnvironment();
+  const isArcTestnet = environment.PROOFSPEND_ADAPTER_MODE === "arc-testnet";
 
   return (
     <main className="landing-page">
@@ -15,8 +16,12 @@ export default function Home() {
         </p>
 
         <aside className="mode-notice" aria-label="Application mode">
-          <strong>DEMO MODE</strong>
-          <span>No real funds are being moved.</span>
+          <strong>{isArcTestnet ? "ARC TESTNET" : "DEMO MODE"}</strong>
+          <span>
+            {isArcTestnet
+              ? "Test USDC can move only after explicit human approval."
+              : "No real funds are being moved."}
+          </span>
           <small>Agent: {environment.PROOFSPEND_AGENT_MODE}</small>
           <small>Adapter: {environment.PROOFSPEND_ADAPTER_MODE}</small>
         </aside>

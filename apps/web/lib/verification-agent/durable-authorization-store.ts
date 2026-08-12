@@ -670,6 +670,13 @@ export class FileTransferAuthorizationStore implements TransferAuthorizationStor
       await unlink(temporaryPath).catch(() => undefined);
       throw error;
     }
+
+    const directoryHandle = await open(dirname(this.path), "r");
+    try {
+      await directoryHandle.sync();
+    } finally {
+      await directoryHandle.close();
+    }
   }
 
   private async ownedLockIsCurrent(ownerToken: string): Promise<boolean> {

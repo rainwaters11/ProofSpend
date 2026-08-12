@@ -1,0 +1,54 @@
+services:
+  - type: web
+    name: proofspend-live-demo
+    runtime: node
+    plan: starter
+    region: ohio
+    branch: main
+    buildCommand: bun install --frozen-lockfile && bun run build
+    startCommand: cd apps/web && bun run start --hostname 0.0.0.0 --port $PORT
+    healthCheckPath: /api/health
+    autoDeployTrigger: checksPass
+    numInstances: 1
+    maxShutdownDelaySeconds: 300
+    disk:
+      name: proofspend-data
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: NODE_VERSION
+        value: 22.23.2
+      - key: BUN_VERSION
+        value: 1.2.14
+      - key: LLM_MODEL
+        value: gpt-5-mini
+      - key: PROOFSPEND_AGENT_MODE
+        value: openai
+      - key: PROOFSPEND_ADAPTER_MODE
+        value: arc-testnet
+      - key: CIRCLE_CHAIN
+        value: ARC-TESTNET
+      - key: CIRCLE_USDC_TOKEN_ADDRESS
+        value: "0x3600000000000000000000000000000000000000"
+      - key: CIRCLE_POLL_INTERVAL_MS
+        value: "3000"
+      - key: CIRCLE_MAX_POLLS
+        value: "100"
+      - key: CIRCLE_ARGSCAN_BASE_URL
+        value: https://testnet.arcscan.app
+      - key: PROOFSPEND_AUTH_STORE_PATH
+        value: /var/data/proofspend/live-authorization.json
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: PROOFSPEND_AGENT_API_TOKEN
+        sync: false
+      - key: CIRCLE_API_KEY
+        sync: false
+      - key: CIRCLE_ENTITY_SECRET
+        sync: false
+      - key: CIRCLE_SOURCE_WALLET_ID
+        sync: false
+      - key: CIRCLE_DESTINATION_WALLET_ID
+        sync: false
+      - key: CIRCLE_DESTINATION_WALLET_ADDRESS
+        sync: false
