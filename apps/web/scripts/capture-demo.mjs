@@ -107,7 +107,7 @@ async function captureApprovalAndSettlement(page) {
     await deliberateClick(page, page.getByRole("link", { name: state, exact: true }));
   }
 
-  await page.getByRole("heading", { name: "Reconciled" }).scrollIntoViewIfNeeded();
+  await page.getByRole("status").filter({ hasText: "Reconciled" }).scrollIntoViewIfNeeded();
   await deliberateMove(page, 760, 520);
   await pause(page, PAUSE.scene);
 }
@@ -116,7 +116,7 @@ async function captureBackerViewAndReplay(page, arcscanUrl) {
   await show(page, "/proof/demo", "PawPOVAI InvestFest Soft Launch");
   await deliberateMove(page, 680, 400);
   await pause(page, PAUSE.scene);
-  await page.getByRole("heading", { name: "Proof-of-Progress" }).scrollIntoViewIfNeeded();
+  await page.getByRole("heading", { name: "Proof-of-Progress", exact: true }).scrollIntoViewIfNeeded();
   await pause(page, PAUSE.scene);
 
   await show(page, "/app/activity", "Verification Agent Activity");
