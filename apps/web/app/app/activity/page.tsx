@@ -1,3 +1,5 @@
+import Link from "next/link";
+
 import { ModeBadge } from "@/components/mode-badge";
 import { formatMoney } from "@/lib/format-money";
 import {
@@ -24,7 +26,13 @@ function formatCircleDecimal(atomicUnits: string): string {
   }
 }
 
-export default async function ActivityPage() {
+export default async function ActivityPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ stage?: string }>;
+}) {
+  const { stage } = await searchParams;
+  const showEvidenceGap = stage === "gap";
   let run: VerificationAgentResult;
   try {
     const now = new Date();
@@ -33,13 +41,15 @@ export default async function ActivityPage() {
       now: now.toISOString(),
     });
     const scenario = createPawPovAiEvidenceScenario();
-    run = resumeVerificationAgentAfterFounderCorrection({
-      run: initialRun,
-      authenticatedActorId: scenario.authorizedFounder.actorId,
-      receipt: scenario.recoveryReceipt,
-      acceptedMatch: scenario.recoveryMatch,
-      now: new Date(now.getTime() + 1_000).toISOString(),
-    });
+    run = showEvidenceGap
+      ? initialRun
+      : resumeVerificationAgentAfterFounderCorrection({
+          run: initialRun,
+          authenticatedActorId: scenario.authorizedFounder.actorId,
+          receipt: scenario.recoveryReceipt,
+          acceptedMatch: scenario.recoveryMatch,
+          now: new Date(now.getTime() + 1_000).toISOString(),
+        });
   } catch {
     return (
       <div className="flex max-w-5xl flex-col gap-6">
@@ -62,9 +72,26 @@ export default async function ActivityPage() {
           Agent mode: <strong className="font-semibold text-foreground">{run.agentMode.toUpperCase()}</strong>
         </p>
         <p className="text-sm text-muted-foreground">
-          This public activity preview is deterministic mock data, including a seeded founder correction.
-          Live runs require the authenticated API boundary.
+          This public activity preview is deterministic mock data
+          {showEvidenceGap ? " before founder correction." : ", including a seeded founder correction."}
+          {" "}Live runs require the authenticated API boundary.
         </p>
+        <nav aria-label="Preview verification stage" className="flex flex-wrap gap-2 pt-1">
+          <Link
+            href="/app/activity?stage=gap"
+            aria-current={showEvidenceGap ? "page" : undefined}
+            className="rounded-full border border-border px-3 py-2 text-xs font-medium text-foreground"
+          >
+            Evidence gap
+          </Link>
+          <Link
+            href="/app/activity?stage=recovered"
+            aria-current={!showEvidenceGap ? "page" : undefined}
+            className="rounded-full border border-border px-3 py-2 text-xs font-medium text-foreground"
+          >
+            Recovered proposal
+          </Link>
+        </nav>
       </div>
 
       <section className="rounded-lg border border-border bg-surface p-4 md:p-6">
