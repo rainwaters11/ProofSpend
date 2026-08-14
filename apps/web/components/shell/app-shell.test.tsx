@@ -62,6 +62,18 @@ describe("AppShell", () => {
     expect(markup).toContain("Evaluator");
   });
 
+  it("shows a configured wallet without rendering wallet configuration values", () => {
+    const markup = renderToStaticMarkup(
+      <AppShell mode="arc-testnet" role="founder" walletConfigured>
+        <p>Page content</p>
+      </AppShell>,
+    );
+
+    expect(markup).toContain("ARC TESTNET");
+    expect(markup).toContain("Wallet configuration status: configured");
+    expect(markup).toContain("Configured");
+  });
+
   it("provides a skip-to-content link", () => {
     const markup = renderToStaticMarkup(
       <AppShell mode="mock" role="founder">

@@ -12,7 +12,9 @@ const optionalAgentApiToken = z.preprocess(
   z.string().trim().min(32).optional(),
 );
 
-const circleLiveEnvironmentSchema = z.object({
+const adapterModeSchema = z.enum(["mock", "arc-testnet"]);
+
+const circleWalletEnvironmentSchema = z.object({
   CIRCLE_API_KEY: z.string().trim().min(1),
   CIRCLE_ENTITY_SECRET: z.string().trim().regex(/^[a-fA-F0-9]{64}$/),
   CIRCLE_SOURCE_WALLET_ID: z.string().uuid(),
@@ -23,6 +25,9 @@ const circleLiveEnvironmentSchema = z.object({
   CIRCLE_POLL_INTERVAL_MS: z.coerce.number().int().positive(),
   CIRCLE_MAX_POLLS: z.coerce.number().int().positive(),
   CIRCLE_ARGSCAN_BASE_URL: z.literal("https://testnet.arcscan.app"),
+});
+
+const circleLiveEnvironmentSchema = circleWalletEnvironmentSchema.extend({
   PROOFSPEND_AUTH_STORE_PATH: z.string().trim().min(1),
 });
 
@@ -65,6 +70,30 @@ const environmentSchema = z.union([
 ]);
 
 export type ServerEnvironment = z.infer<typeof environmentSchema>;
+
+export interface AppShellStatus {
+  mode: z.infer<typeof adapterModeSchema>;
+  walletConfigured: boolean;
+}
+
+/**
+ * Returns the small, non-sensitive environment projection used by the app
+ * shell. Live credentials are checked server-side but never returned. Using
+ * safeParse for the wallet check also lets static builds render the selected
+ * mode without requiring deployment-only Circle credentials at build time.
+ */
+export function getAppShellStatus(
+  environment: Record<string, string | undefined>,
+): AppShellStatus {
+  const mode = adapterModeSchema.parse(environment.PROOFSPEND_ADAPTER_MODE);
+
+  return {
+    mode,
+    walletConfigured:
+      mode === "arc-testnet" &&
+      circleWalletEnvironmentSchema.safeParse(environment).success,
+  };
+}
 
 export function parseEnvironment(
   environment: Record<string, string | undefined>,

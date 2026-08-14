@@ -10,18 +10,26 @@ interface TopHeaderProps {
   mode: AdapterMode;
   role: UserRole;
   projectName?: string;
+  walletConfigured?: boolean;
 }
 
 /**
- * Placeholder values only — project selection, wallet status, and the
- * proof-gap count are wired to real domain data in a later Issue #14 phase
- * once Issue #2/#3 land. No balances or counts are fabricated here.
+ * Project selection and the proof-gap count remain placeholders until they
+ * are wired to domain data. Wallet status is a boolean server projection; no
+ * configuration values are passed to this component.
  *
  * Below md, the header wraps to two rows so the menu toggle, ModeBadge, and
  * RoleBadge — which must always stay visible — never compete for width with
  * the project selector at narrow phone widths (verified at 320px/375px).
  */
-export function TopHeader({ mode, role, projectName = "No project selected" }: TopHeaderProps) {
+export function TopHeader({
+  mode,
+  role,
+  projectName = "No project selected",
+  walletConfigured = false,
+}: TopHeaderProps) {
+  const walletStatus = walletConfigured ? "configured" : "not configured";
+
   return (
     <header className="sticky top-0 z-30 flex flex-col gap-2 border-b border-border bg-surface px-3 py-2 md:h-16 md:flex-row md:items-center md:gap-3 md:px-4 md:py-0">
       <div className="flex items-center gap-2 md:gap-3">
@@ -48,10 +56,10 @@ export function TopHeader({ mode, role, projectName = "No project selected" }: T
 
         <span
           className="hidden items-center gap-1.5 rounded-full border border-border px-2.5 py-1 text-xs font-medium text-muted-foreground lg:inline-flex"
-          aria-label="Wallet configuration status: not configured"
+          aria-label={`Wallet configuration status: ${walletStatus}`}
         >
           <Wallet aria-hidden="true" className="size-3.5" />
-          Not configured
+          {walletConfigured ? "Configured" : "Not configured"}
         </span>
 
         <button
