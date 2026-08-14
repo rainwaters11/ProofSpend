@@ -9,9 +9,10 @@ interface AppShellProps {
   children: ReactNode;
   mode: AdapterMode;
   role: UserRole;
+  walletConfigured?: boolean;
 }
 
-export function AppShell({ children, mode, role }: AppShellProps) {
+export function AppShell({ children, mode, role, walletConfigured = false }: AppShellProps) {
   return (
     <div className="flex min-h-screen bg-background text-foreground">
       <a
@@ -24,7 +25,7 @@ export function AppShell({ children, mode, role }: AppShellProps) {
       <DesktopSidebar />
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <TopHeader mode={mode} role={role} />
+        <TopHeader mode={mode} role={role} walletConfigured={walletConfigured} />
 
         <main id="main-content" tabIndex={-1} className="flex-1 px-4 pb-24 pt-6 md:pb-6 focus:outline-none">
           {children}

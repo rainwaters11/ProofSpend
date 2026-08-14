@@ -1,6 +1,20 @@
 import { describe, expect, it } from "vitest";
 
-import { parseEnvironment } from "./env";
+import { getAppShellStatus, parseEnvironment } from "./env";
+
+const completeCircleEnvironment = {
+  CIRCLE_API_KEY: "TEST_API_KEY:test:key",
+  CIRCLE_ENTITY_SECRET: "a".repeat(64),
+  CIRCLE_SOURCE_WALLET_ID: "44444444-4444-4444-8444-444444444444",
+  CIRCLE_DESTINATION_WALLET_ID: "55555555-5555-4555-8555-555555555555",
+  CIRCLE_DESTINATION_WALLET_ADDRESS: "0x1111111111111111111111111111111111111111",
+  CIRCLE_CHAIN: "ARC-TESTNET",
+  CIRCLE_USDC_TOKEN_ADDRESS: "0x3600000000000000000000000000000000000000",
+  CIRCLE_POLL_INTERVAL_MS: "3000",
+  CIRCLE_MAX_POLLS: "100",
+  CIRCLE_ARGSCAN_BASE_URL: "https://testnet.arcscan.app",
+  PROOFSPEND_AUTH_STORE_PATH: ".proofspend/live-authorization.json",
+} as const;
 
 describe("environment validation", () => {
   it("rejects a missing adapter mode", () => {
@@ -150,5 +164,34 @@ describe("environment validation", () => {
         PROOFSPEND_AGENT_MODE: "openai",
       }),
     ).toThrow();
+  });
+});
+
+describe("app shell environment projection", () => {
+  it("preserves mock mode without requiring or exposing Circle configuration", () => {
+    expect(
+      getAppShellStatus({
+        PROOFSPEND_ADAPTER_MODE: "mock",
+        CIRCLE_API_KEY: "must-not-be-returned",
+      }),
+    ).toEqual({ mode: "mock", walletConfigured: false });
+  });
+
+  it("reports Arc Testnet and a configured wallet for complete Circle configuration", () => {
+    const status = getAppShellStatus({
+      PROOFSPEND_ADAPTER_MODE: "arc-testnet",
+      ...completeCircleEnvironment,
+    });
+
+    expect(status).toEqual({ mode: "arc-testnet", walletConfigured: true });
+    expect(JSON.stringify(status)).not.toContain(completeCircleEnvironment.CIRCLE_API_KEY);
+    expect(JSON.stringify(status)).not.toContain(completeCircleEnvironment.CIRCLE_ENTITY_SECRET);
+    expect(JSON.stringify(status)).not.toContain(completeCircleEnvironment.CIRCLE_SOURCE_WALLET_ID);
+  });
+
+  it("keeps Arc Testnet visible but reports the wallet unconfigured during credential-free builds", () => {
+    expect(
+      getAppShellStatus({ PROOFSPEND_ADAPTER_MODE: "arc-testnet" }),
+    ).toEqual({ mode: "arc-testnet", walletConfigured: false });
   });
 });
