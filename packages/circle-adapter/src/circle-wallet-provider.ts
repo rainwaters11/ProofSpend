@@ -60,7 +60,6 @@ type ReturnedTransaction = {
 
 type CircleTransactionLookupClient = {
   listTransactions(input: {
-    blockchain: string;
     walletIds: string[];
     destinationAddress: string;
     pageAfter?: string;
@@ -74,7 +73,7 @@ type CircleTransactionLookupClient = {
 
 async function listAllRecoveryTransactions(
   client: CircleTransactionLookupClient,
-  input: { blockchain: string; walletIds: string[]; destinationAddress: string },
+  input: { walletIds: string[]; destinationAddress: string },
 ): Promise<ReturnedTransaction[]> {
   const transactions: ReturnedTransaction[] = [];
   const seenCursors = new Set<string>();
@@ -132,7 +131,7 @@ function matchesRecoveredTransfer(
     transaction.destinationAddress?.toLowerCase() === intent.destinationAddress.toLowerCase() &&
     transaction.amounts?.length === 1 &&
     transaction.amounts[0] === atomicToDecimal(intent.amountAtomic) &&
-    (transaction.blockchain === undefined || transaction.blockchain === expected.blockchain) &&
+    transaction.blockchain === expected.blockchain &&
     (transaction.contractAddress === undefined ||
       transaction.contractAddress.toLowerCase() === expected.usdcTokenAddress.toLowerCase()) &&
     (transaction.tokenAddress === undefined ||
@@ -424,7 +423,6 @@ export class CircleWalletProvider implements ArcTestnetTransferProvider {
       if (recoveringConsumedSubmission) {
         const lookupClient = this.client as unknown as CircleTransactionLookupClient;
         const transactions = await listAllRecoveryTransactions(lookupClient, {
-          blockchain: this.blockchain,
           walletIds: [this.sourceWalletId],
           destinationAddress: intent.destinationAddress,
         });
