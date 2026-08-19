@@ -508,7 +508,8 @@ describe("CircleWalletProvider", () => {
     const result = await makeProvider().submitTransfer(validIntent());
 
     expect(mockedClient.createTransaction).toHaveBeenCalledWith({
-      walletId: SOURCE_WALLET_ID,
+      walletAddress: "0x0000000000000000000000000000000000000003",
+      blockchain: "ARC-TESTNET",
       tokenAddress: usdcTokenAddress,
       amount: ["1"],
       destinationAddress: baseIntent.destinationAddress,
@@ -516,6 +517,7 @@ describe("CircleWalletProvider", () => {
       idempotencyKey: baseIntent.idempotencyKey,
       refId: baseIntent.idempotencyKey,
     });
+    expect(mockedClient.createTransaction.mock.calls[0]?.[0]).not.toHaveProperty("walletId");
     expect(result).toEqual({
       proposalId: "proposal-1",
       idempotencyKey: baseIntent.idempotencyKey,
@@ -891,6 +893,33 @@ describe("CircleWalletProvider", () => {
     expect(mockedClient.getWalletTokenBalance).not.toHaveBeenCalled();
     expect(mockedClient.createTransaction).not.toHaveBeenCalled();
   });
+
+  it.each([
+    { name: "missing", address: undefined },
+    { name: "malformed", address: "not-an-evm-address" },
+  ])(
+    "rejects a $name source wallet address before balance lookup, authorization consumption, or submission",
+    async ({ address }) => {
+      const authorizationStore = new FakeAuthorizationStore();
+      mockedClient.getWallet.mockResolvedValueOnce({
+        data: {
+          wallet: {
+            id: SOURCE_WALLET_ID,
+            blockchain: "ARC-TESTNET",
+            address,
+          },
+        },
+      });
+
+      const result = await makeProvider({ authorizationStore }).submitTransfer(validIntent());
+
+      expect(result).toMatchObject({ status: "FAILED", failureCode: "WALLET_MISMATCH" });
+      expect(authorizationStore.consumeCalls).toBe(0);
+      expect(mockedClient.getWallet).toHaveBeenCalledTimes(1);
+      expect(mockedClient.getWalletTokenBalance).not.toHaveBeenCalled();
+      expect(mockedClient.createTransaction).not.toHaveBeenCalled();
+    },
+  );
 
   it("rejects submission without consuming approval when the source USDC balance is insufficient", async () => {
     const authorizationStore = new FakeAuthorizationStore();

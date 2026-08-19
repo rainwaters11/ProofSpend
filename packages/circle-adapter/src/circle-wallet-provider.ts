@@ -31,6 +31,7 @@ const TERMINAL_STATES: ReadonlySet<string> = new Set([
 ]);
 
 const EVM_HASH_PATTERN = /^0x[a-fA-F0-9]{64}$/;
+const EVM_ADDRESS_PATTERN = /^0x[a-fA-F0-9]{40}$/;
 
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -39,6 +40,10 @@ const RECOVERY_PAGE_SIZE = 50;
 
 function isValidEvmHash(value: string | undefined): value is string {
   return typeof value === "string" && EVM_HASH_PATTERN.test(value);
+}
+
+function isValidEvmAddress(value: string | undefined): value is string {
+  return typeof value === "string" && EVM_ADDRESS_PATTERN.test(value);
 }
 
 function isValidUuid(value: string): boolean {
@@ -391,9 +396,10 @@ export class CircleWalletProvider implements ArcTestnetTransferProvider {
     }
     try {
       const source = await this.client.getWallet({ id: this.sourceWalletId });
+      const sourceWallet = source.data?.wallet;
       if (
-        source.data?.wallet?.id !== this.sourceWalletId ||
-        source.data.wallet.blockchain !== this.blockchain
+        sourceWallet?.id !== this.sourceWalletId ||
+        sourceWallet.blockchain !== this.blockchain
       ) {
         return failureResult(intent, "ARC_TESTNET", {
           ok: false,
@@ -405,6 +411,13 @@ export class CircleWalletProvider implements ArcTestnetTransferProvider {
             source.data?.wallet?.id === this.sourceWalletId
               ? "The configured source wallet is not on Arc Testnet."
               : "The configured source wallet does not match the exact approved transfer intent.",
+        });
+      }
+      if (!isValidEvmAddress(sourceWallet.address)) {
+        return failureResult(intent, "ARC_TESTNET", {
+          ok: false,
+          failureCode: "WALLET_MISMATCH",
+          failureMessage: "The configured source wallet does not have a valid EVM address.",
         });
       }
       const destination = await this.client.getWallet({ id: this.destinationWalletId });
@@ -537,7 +550,8 @@ export class CircleWalletProvider implements ArcTestnetTransferProvider {
         return failureResult(intent, "ARC_TESTNET", submissionRevalidation);
       }
       const response = await this.client.createTransaction({
-        walletId: this.sourceWalletId,
+        walletAddress: sourceWallet.address,
+        blockchain: "ARC-TESTNET",
         tokenAddress: this.usdcTokenAddress,
         amount: [atomicToDecimal(intent.amountAtomic)],
         destinationAddress: intent.destinationAddress,
