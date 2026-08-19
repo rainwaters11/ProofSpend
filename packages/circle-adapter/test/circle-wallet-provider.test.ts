@@ -509,6 +509,7 @@ describe("CircleWalletProvider", () => {
 
     expect(mockedClient.createTransaction).toHaveBeenCalledWith({
       walletId: SOURCE_WALLET_ID,
+      blockchain: "ARC-TESTNET",
       tokenAddress: usdcTokenAddress,
       amount: ["1"],
       destinationAddress: baseIntent.destinationAddress,

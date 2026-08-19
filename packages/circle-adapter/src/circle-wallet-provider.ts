@@ -536,15 +536,18 @@ export class CircleWalletProvider implements ArcTestnetTransferProvider {
       if (!submissionRevalidation.ok) {
         return failureResult(intent, "ARC_TESTNET", submissionRevalidation);
       }
+      // Circle requires the explicit blockchain when tokenAddress identifies the asset,
+      // although SDK 10.8.0's walletId overload does not yet expose that field.
       const response = await this.client.createTransaction({
         walletId: this.sourceWalletId,
+        blockchain: "ARC-TESTNET",
         tokenAddress: this.usdcTokenAddress,
         amount: [atomicToDecimal(intent.amountAtomic)],
         destinationAddress: intent.destinationAddress,
         fee: { type: "level", config: { feeLevel: "MEDIUM" } },
         idempotencyKey: intent.idempotencyKey,
         refId: intent.idempotencyKey,
-      });
+      } as unknown as Parameters<typeof this.client.createTransaction>[0]);
       const transactionId = response.data?.id;
       if (!transactionId) {
         throw new WalletProviderError("INVALID_REQUEST", "Circle did not return a transaction id.");
