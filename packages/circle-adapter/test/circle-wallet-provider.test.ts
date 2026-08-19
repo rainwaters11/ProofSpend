@@ -551,12 +551,30 @@ describe("CircleWalletProvider", () => {
       idempotencyKey: baseIntent.idempotencyKey,
     });
     expect(mockedClient.listTransactions).toHaveBeenCalledWith({
-      blockchain: "ARC-TESTNET",
       walletIds: [SOURCE_WALLET_ID],
       destinationAddress: baseIntent.destinationAddress,
       pageAfter: undefined,
       pageSize: 50,
     });
+    expect(authorizationStore.consumeCalls).toBe(0);
+    expect(mockedClient.getWalletTokenBalance).not.toHaveBeenCalled();
+    expect(mockedClient.createTransaction).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { name: "wrong-network", blockchain: "ETH-SEPOLIA" },
+    { name: "missing-network", blockchain: undefined },
+  ])("fails closed for a $name recovery record", async ({ blockchain }) => {
+    const authorizationStore = new FakeAuthorizationStore();
+    authorizationStore.markConsumed();
+    mockWallets();
+    mockedClient.listTransactions.mockResolvedValue({
+      data: { transactions: [mockListedTransfer({ blockchain })] },
+    });
+
+    await expect(
+      makeProvider({ authorizationStore }).submitTransfer(validIntent()),
+    ).rejects.toMatchObject({ code: "INVALID_REQUEST" });
     expect(authorizationStore.consumeCalls).toBe(0);
     expect(mockedClient.getWalletTokenBalance).not.toHaveBeenCalled();
     expect(mockedClient.createTransaction).not.toHaveBeenCalled();
@@ -606,7 +624,6 @@ describe("CircleWalletProvider", () => {
 
     expect(result).toMatchObject({ status: "SUBMITTED", providerOperationId: OPERATION_ID_1 });
     expect(mockedClient.listTransactions).toHaveBeenNthCalledWith(2, {
-      blockchain: "ARC-TESTNET",
       walletIds: [SOURCE_WALLET_ID],
       destinationAddress: baseIntent.destinationAddress,
       pageAfter: recoveryTransactionId(49),
